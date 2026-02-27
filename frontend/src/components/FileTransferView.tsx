@@ -3,6 +3,7 @@ import * as api from '../api/client';
 import type { FileEntry, SliceData } from '../types/fabric';
 import FileEditor, { isTextFile } from './FileEditor';
 import LogView from './LogView';
+import '../styles/file-browser.css';
 import '../styles/file-transfer.css';
 
 /** Recursively walk FileSystemEntry trees from drag-and-drop, collecting all files with relative paths. */

@@ -4,7 +4,6 @@ import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
 import '../styles/bottom-panel.css';
 import type { ValidationIssue } from '../types/fabric';
-import FileBrowser from './FileBrowser';
 import LogView from './LogView';
 
 export interface TerminalTab {
@@ -15,18 +14,9 @@ export interface TerminalTab {
   managementIp: string;
 }
 
-export interface FileBrowserTab {
-  id: string;
-  label: string;
-  sliceName: string;
-  nodeName: string;
-}
-
 interface BottomPanelProps {
   terminals: TerminalTab[];
   onCloseTerminal: (id: string) => void;
-  fileBrowsers: FileBrowserTab[];
-  onCloseFileBrowser: (id: string) => void;
   validationIssues: ValidationIssue[];
   validationValid: boolean;
   sliceState: string;
@@ -56,7 +46,7 @@ const TERM_THEME = {
   brightWhite: '#ffffff',
 };
 
-export default function BottomPanel({ terminals, onCloseTerminal, fileBrowsers, onCloseFileBrowser, validationIssues, validationValid, sliceState, dirty }: BottomPanelProps) {
+export default function BottomPanel({ terminals, onCloseTerminal, validationIssues, validationValid, sliceState, dirty }: BottomPanelProps) {
   const [expanded, setExpanded] = useState(false);
   const [activeTab, setActiveTab] = useState('validation');
 
@@ -71,31 +61,18 @@ export default function BottomPanel({ terminals, onCloseTerminal, fileBrowsers, 
     prevTermCount.current = terminals.length;
   }, [terminals.length]);
 
-  // Auto-expand and switch to new file browser tab when one is added
-  const prevFbCount = useRef(fileBrowsers.length);
-  useEffect(() => {
-    if (fileBrowsers.length > prevFbCount.current) {
-      const newest = fileBrowsers[fileBrowsers.length - 1];
-      setActiveTab(newest.id);
-      setExpanded(true);
-    }
-    prevFbCount.current = fileBrowsers.length;
-  }, [fileBrowsers.length]);
-
   // If active tab was closed, switch to validation
   useEffect(() => {
     if (
       activeTab !== 'log' &&
       activeTab !== 'validation' &&
-      !terminals.find((t) => t.id === activeTab) &&
-      !fileBrowsers.find((f) => f.id === activeTab)
+      !terminals.find((t) => t.id === activeTab)
     ) {
       setActiveTab('validation');
     }
-  }, [terminals, fileBrowsers, activeTab]);
+  }, [terminals, activeTab]);
 
   const termCount = terminals.length;
-  const fbCount = fileBrowsers.length;
   const errorCount = validationIssues.filter((i) => i.severity === 'error').length;
   const warnCount = validationIssues.filter((i) => i.severity === 'warning').length;
 
@@ -107,7 +84,6 @@ export default function BottomPanel({ terminals, onCloseTerminal, fileBrowsers, 
           <span className={`bottom-panel-badge ${errorCount > 0 ? 'warn' : 'ok'}`}>{errorCount} error{errorCount !== 1 ? 's' : ''}</span>
           {warnCount > 0 && <span className="bottom-panel-badge warn">{warnCount} warning{warnCount !== 1 ? 's' : ''}</span>}
           {termCount > 0 && <span className="bottom-panel-badge">{termCount} terminal{termCount !== 1 ? 's' : ''}</span>}
-          {fbCount > 0 && <span className="bottom-panel-badge">{fbCount} file browser{fbCount !== 1 ? 's' : ''}</span>}
         </span>
       </div>
     );
@@ -146,21 +122,6 @@ export default function BottomPanel({ terminals, onCloseTerminal, fileBrowsers, 
             </span>
           </button>
         ))}
-        {fileBrowsers.map((fb) => (
-          <button
-            key={fb.id}
-            className={`bp-tab ${activeTab === fb.id ? 'active' : ''}`}
-            onClick={() => setActiveTab(fb.id)}
-          >
-            📁 {fb.label}
-            <span
-              className="bp-tab-close"
-              onClick={(e) => { e.stopPropagation(); onCloseFileBrowser(fb.id); }}
-            >
-              ✕
-            </span>
-          </button>
-        ))}
         <div className="bp-tab-spacer" />
         <button className="bp-collapse-btn" onClick={() => setExpanded(false)} title="Collapse panel">▼</button>
       </div>
@@ -174,11 +135,6 @@ export default function BottomPanel({ terminals, onCloseTerminal, fileBrowsers, 
         {terminals.map((t) => (
           <div key={t.id} style={{ display: activeTab === t.id ? 'flex' : 'none', flex: 1, overflow: 'hidden' }}>
             <TerminalView sliceName={t.sliceName} nodeName={t.nodeName} managementIp={t.managementIp} />
-          </div>
-        ))}
-        {fileBrowsers.map((fb) => (
-          <div key={fb.id} style={{ display: activeTab === fb.id ? 'flex' : 'none', flex: 1, overflow: 'hidden' }}>
-            <FileBrowser mode="vm" sliceName={fb.sliceName} nodeName={fb.nodeName} />
           </div>
         ))}
       </div>

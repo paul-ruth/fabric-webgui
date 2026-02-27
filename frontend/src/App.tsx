@@ -7,7 +7,7 @@ import EditorPanel from './components/EditorPanel';
 import DetailPanel from './components/DetailPanel';
 import GeoView from './components/GeoView';
 import BottomPanel from './components/BottomPanel';
-import type { TerminalTab, FileBrowserTab } from './components/BottomPanel';
+import type { TerminalTab } from './components/BottomPanel';
 import ConfigureView from './components/ConfigureView';
 import FileTransferView from './components/FileTransferView';
 import * as api from './api/client';
@@ -29,8 +29,6 @@ export default function App() {
   const [showDetailPanel, setShowDetailPanel] = useState(true);
   const [terminalTabs, setTerminalTabs] = useState<TerminalTab[]>([]);
   const [terminalIdCounter, setTerminalIdCounter] = useState(0);
-  const [fileBrowserTabs, setFileBrowserTabs] = useState<FileBrowserTab[]>([]);
-  const [fbIdCounter, setFbIdCounter] = useState(0);
   const [validationIssues, setValidationIssues] = useState<ValidationIssue[]>([]);
   const [validationValid, setValidationValid] = useState(false);
   const [projectName, setProjectName] = useState('');
@@ -346,43 +344,16 @@ export default function App() {
     }
   }, [selectedSliceName, terminalIdCounter]);
 
-  const handleOpenFileBrowsers = useCallback((elements: Record<string, string>[]) => {
-    let counter = fbIdCounter;
-    const newTabs: FileBrowserTab[] = [];
-    for (const el of elements) {
-      if (el.element_type === 'node' && el.management_ip) {
-        const id = `fb-${counter}`;
-        counter++;
-        newTabs.push({
-          id,
-          label: el.name,
-          sliceName: selectedSliceName,
-          nodeName: el.name,
-        });
-      }
-    }
-    if (newTabs.length > 0) {
-      setFbIdCounter(counter);
-      setFileBrowserTabs((prev) => [...prev, ...newTabs]);
-    }
-  }, [selectedSliceName, fbIdCounter]);
-
   const handleContextAction = useCallback((action: ContextMenuAction) => {
     if (action.type === 'terminal') {
       handleOpenTerminals(action.elements);
-    } else if (action.type === 'browse-files') {
-      handleOpenFileBrowsers(action.elements);
     } else if (action.type === 'delete') {
       handleDeleteElements(action.elements);
     }
-  }, [handleOpenTerminals, handleOpenFileBrowsers, handleDeleteElements]);
+  }, [handleOpenTerminals, handleDeleteElements]);
 
   const handleCloseTerminal = useCallback((id: string) => {
     setTerminalTabs((prev) => prev.filter((t) => t.id !== id));
-  }, []);
-
-  const handleCloseFileBrowser = useCallback((id: string) => {
-    setFileBrowserTabs((prev) => prev.filter((f) => f.id !== id));
   }, []);
 
   const handleSliceUpdated = useCallback((data: SliceData) => {
@@ -508,8 +479,6 @@ export default function App() {
               <BottomPanel
                 terminals={terminalTabs}
                 onCloseTerminal={handleCloseTerminal}
-                fileBrowsers={fileBrowserTabs}
-                onCloseFileBrowser={handleCloseFileBrowser}
                 validationIssues={validationIssues}
                 validationValid={validationValid}
                 sliceState={sliceData?.state ?? ''}

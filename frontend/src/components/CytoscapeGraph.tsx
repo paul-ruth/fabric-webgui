@@ -85,7 +85,7 @@ const LAYOUTS: Record<string, any> = {
 };
 
 export interface ContextMenuAction {
-  type: 'terminal' | 'delete' | 'browse-files';
+  type: 'terminal' | 'delete';
   elements: Record<string, string>[];
 }
 
@@ -315,13 +315,6 @@ export default function CytoscapeGraph({
     setMenu(null);
   };
 
-  const handleBrowseFiles = () => {
-    if (vmsWithIp.length > 0) {
-      onContextAction({ type: 'browse-files', elements: vmsWithIp });
-    }
-    setMenu(null);
-  };
-
   const handleDelete = () => {
     if (deletable.length > 0) {
       onContextAction({ type: 'delete', elements: deletable });
@@ -358,11 +351,6 @@ export default function CytoscapeGraph({
           {vmsWithIp.length > 0 && (
             <button className="graph-context-menu-item" onClick={handleTerminal}>
               ▸ Open Terminal{vmsWithIp.length > 1 ? ` (${vmsWithIp.length})` : ''}
-            </button>
-          )}
-          {vmsWithIp.length > 0 && (
-            <button className="graph-context-menu-item" onClick={handleBrowseFiles}>
-              ▸ Browse Files{vmsWithIp.length > 1 ? ` (${vmsWithIp.length})` : ''}
             </button>
           )}
           {vmsWithIp.length > 0 && deletable.length > 0 && (

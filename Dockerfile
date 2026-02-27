@@ -38,7 +38,7 @@ server {
     root /usr/share/nginx/html;
     index index.html;
 
-    client_max_body_size 10m;
+    client_max_body_size 500m;
 
     location / {
         try_files $uri $uri/ /index.html;
@@ -93,9 +93,11 @@ stderr_logfile=/dev/stderr
 stderr_logfile_maxbytes=0
 CONF
 
-# Create fabric config directory
+# Create fabric config and storage directories
 RUN mkdir -p /fabric_config && chmod 700 /fabric_config
+RUN mkdir -p /fabric_storage && chmod 755 /fabric_storage
 ENV FABRIC_CONFIG_DIR=/fabric_config
+ENV FABRIC_STORAGE_DIR=/fabric_storage
 
 # Frontend on 3000, backend on 8000
 EXPOSE 3000 8000
