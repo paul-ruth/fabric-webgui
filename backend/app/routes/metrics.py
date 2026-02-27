@@ -57,10 +57,10 @@ async def link_metrics(site_a: str, site_b: str) -> dict[str, Any]:
     rack_b = site_b.lower()
     try:
         in_a_to_b, out_a_to_b, in_b_to_a, out_b_to_a = await _gather_queries(
-            f'dataplaneInBits{{rack="{rack_a}",destination="{rack_b}"}}',
-            f'dataplaneOutBits{{rack="{rack_a}",destination="{rack_b}"}}',
-            f'dataplaneInBits{{rack="{rack_b}",destination="{rack_a}"}}',
-            f'dataplaneOutBits{{rack="{rack_b}",destination="{rack_a}"}}',
+            f'dataplaneInBits{{src_rack="{rack_a}",dst_rack="{rack_b}"}}',
+            f'dataplaneOutBits{{src_rack="{rack_a}",dst_rack="{rack_b}"}}',
+            f'dataplaneInBits{{src_rack="{rack_b}",dst_rack="{rack_a}"}}',
+            f'dataplaneOutBits{{src_rack="{rack_b}",dst_rack="{rack_a}"}}',
         )
         return {
             "site_a": site_a,

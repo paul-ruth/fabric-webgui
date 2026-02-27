@@ -53,6 +53,18 @@
   font-weight: 500;
 }
 
+.geo-loading-indicator {
+  color: var(--fabric-text-muted);
+  font-style: italic;
+  font-size: 11px;
+  animation: geo-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes geo-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
 /* Site popup */
 .site-popup h3 {
   font-size: 14px;

@@ -1,6 +1,7 @@
 """Resource and site information API routes."""
 
 from __future__ import annotations
+import time
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
@@ -8,6 +9,10 @@ from fastapi import APIRouter, HTTPException
 from app.fablib_manager import get_fablib
 
 router = APIRouter(tags=["resources"])
+
+# Simple cache for expensive topology queries
+_cache: dict[str, tuple[float, Any]] = {}
+CACHE_TTL = 300  # 5 minutes
 
 # FABRIC site GPS coordinates (from FABRIC API)
 SITE_LOCATIONS: dict[str, dict[str, float]] = {
@@ -107,6 +112,11 @@ def list_links() -> list[dict[str, Any]]:
     """List unique FABRIC backbone links between sites."""
     import re
 
+    # Return cached result if fresh
+    cached = _cache.get("links")
+    if cached and time.time() - cached[0] < CACHE_TTL:
+        return cached[1]
+
     fablib = get_fablib()
     try:
         resources = fablib.get_resources()
@@ -133,6 +143,7 @@ def list_links() -> list[dict[str, Any]]:
                 })
             except Exception:
                 continue
+        _cache["links"] = (time.time(), links)
         return links
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

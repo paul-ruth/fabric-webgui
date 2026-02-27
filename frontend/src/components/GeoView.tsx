@@ -54,9 +54,10 @@ interface GeoViewProps {
   onNodeClick: (data: Record<string, string>) => void;
   sites: SiteInfo[];
   links: LinkInfo[];
+  linksLoading?: boolean;
 }
 
-export default function GeoView({ sliceData, selectedElement, onNodeClick, sites, links }: GeoViewProps) {
+export default function GeoView({ sliceData, selectedElement, onNodeClick, sites, links, linksLoading }: GeoViewProps) {
   const [showInfraSites, setShowInfraSites] = useState(true);
   const [showInfraLinks, setShowInfraLinks] = useState(true);
   const [showSliceNodes, setShowSliceNodes] = useState(true);
@@ -115,6 +116,7 @@ export default function GeoView({ sliceData, selectedElement, onNodeClick, sites
             <label>
               <input type="checkbox" checked={showInfraLinks} onChange={(e) => setShowInfraLinks(e.target.checked)} />
               Links
+              {linksLoading && <span className="geo-loading-indicator"> (loading...)</span>}
             </label>
           </div>
           {sliceData && (

@@ -32,6 +32,7 @@ export default function App() {
   const [validationValid, setValidationValid] = useState(false);
   const [infraSites, setInfraSites] = useState<SiteInfo[]>([]);
   const [infraLinks, setInfraLinks] = useState<LinkInfo[]>([]);
+  const [linksLoading, setLinksLoading] = useState(true);
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
@@ -44,7 +45,11 @@ export default function App() {
     api.listSites()
       .then((all) => setInfraSites(all.filter((s) => !IGNORED.has(s.name) && s.lat !== 0 && s.lon !== 0)))
       .catch(() => {});
-    api.listLinks().then(setInfraLinks).catch(() => {});
+    setLinksLoading(true);
+    api.listLinks()
+      .then((data) => { setInfraLinks(data); console.log(`Loaded ${data.length} infrastructure links`); })
+      .catch((err) => { console.error('Failed to load links:', err); })
+      .finally(() => setLinksLoading(false));
   }, []);
 
   // Check config status on mount
@@ -375,6 +380,7 @@ export default function App() {
             onNodeClick={handleNodeClick}
             sites={infraSites}
             links={infraLinks}
+            linksLoading={linksLoading}
           />
         )}
       </div>

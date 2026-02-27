@@ -324,12 +324,12 @@ function SiteMetricsTab({ siteName }: { siteName: string }) {
   const traffic: { destination: string; inBits: string; outBits: string }[] = [];
   const destMap = new Map<string, { inBits?: string; outBits?: string }>();
   for (const r of metrics.dataplaneInBits) {
-    const dest = r.metric.destination || 'unknown';
+    const dest = r.metric.dst_rack || r.metric.destination || 'unknown';
     if (!destMap.has(dest)) destMap.set(dest, {});
     destMap.get(dest)!.inBits = formatBits(r.value[1]);
   }
   for (const r of metrics.dataplaneOutBits) {
-    const dest = r.metric.destination || 'unknown';
+    const dest = r.metric.dst_rack || r.metric.destination || 'unknown';
     if (!destMap.has(dest)) destMap.set(dest, {});
     destMap.get(dest)!.outBits = formatBits(r.value[1]);
   }
