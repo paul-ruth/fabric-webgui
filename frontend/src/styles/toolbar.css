@@ -1,0 +1,85 @@
+/* Toolbar — matches fabvis bottom_bar styling */
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  background: var(--fabric-light);
+  border-bottom: 1px solid var(--fabric-border);
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+
+.toolbar .separator {
+  width: 1px;
+  height: 20px;
+  background: var(--fabric-separator);
+  margin: 0 4px;
+}
+
+.toolbar select {
+  min-width: 200px;
+}
+
+.toolbar .view-toggle {
+  margin-left: auto;
+  display: flex;
+  gap: 4px;
+}
+
+.toolbar .view-toggle button {
+  padding: 5px 14px;
+  border-radius: 6px;
+  font-size: 12px;
+}
+.toolbar .view-toggle button.active {
+  background: var(--fabric-primary);
+  color: white;
+  border-color: var(--fabric-primary);
+}
+
+.toolbar .status-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+.toolbar .status-badge.Active,
+.toolbar .status-badge.StableOK { background: var(--state-active-bg); color: var(--state-active); }
+.toolbar .status-badge.Configuring,
+.toolbar .status-badge.Ticketed,
+.toolbar .status-badge.ModifyOK { background: var(--state-configuring-bg); color: var(--state-configuring); }
+.toolbar .status-badge.Nascent { background: var(--state-nascent-bg); color: var(--state-nascent); }
+.toolbar .status-badge.StableError,
+.toolbar .status-badge.ModifyError { background: var(--state-error-bg); color: var(--state-error); }
+.toolbar .status-badge.Closing,
+.toolbar .status-badge.Dead { background: var(--state-dead-bg); color: var(--state-dead); }
+.toolbar .status-badge.Draft { background: rgba(87, 152, 188, 0.15); color: #5798bc; }
+.toolbar .status-badge.Draft.Modified { background: rgba(255, 133, 66, 0.15); color: #ff8542; }
+
+.toolbar .confirm-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--fabric-danger);
+  font-weight: 600;
+}
+
+.toolbar .create-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.toolbar .create-group input {
+  min-width: 180px;
+}
+
+.toolbar .view-toggle .toggle-sep {
+  width: 1px;
+  height: 16px;
+  background: var(--fabric-separator);
+  margin: 0 2px;
+}

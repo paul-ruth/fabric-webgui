@@ -1,0 +1,67 @@
+/* Graph context menu */
+.graph-context-menu {
+  position: fixed;
+  z-index: 1000;
+  background: var(--fabric-white);
+  border: 1px solid var(--fabric-border);
+  border-radius: 6px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+  min-width: 160px;
+  padding: 4px 0;
+  font-size: 13px;
+  font-family: 'Montserrat', sans-serif;
+}
+
+[data-theme="dark"] .graph-context-menu {
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+}
+
+.graph-context-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 14px;
+  cursor: pointer;
+  color: var(--fabric-text);
+  border: none;
+  background: none;
+  width: 100%;
+  text-align: left;
+  font-size: 13px;
+  font-family: inherit;
+  box-shadow: none;
+  border-radius: 0;
+}
+.graph-context-menu-item:hover {
+  background: var(--fabric-bg-tint);
+  box-shadow: none;
+}
+.graph-context-menu-item.danger {
+  color: var(--fabric-white);
+  background: var(--fabric-danger);
+}
+.graph-context-menu-item.danger:hover {
+  background: #c9392a;
+}
+.graph-context-menu-item:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.graph-context-menu-item:disabled:hover {
+  background: none;
+}
+
+.graph-context-menu-sep {
+  height: 1px;
+  background: var(--fabric-border);
+  margin: 4px 0;
+}
+
+.graph-context-menu-label {
+  padding: 4px 14px 2px;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: var(--fabric-text-muted);
+  pointer-events: none;
+}

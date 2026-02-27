@@ -1,0 +1,236 @@
+.configure-view {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  justify-content: center;
+  padding: 32px 16px;
+  background: var(--fabric-bg-secondary);
+}
+
+.configure-card {
+  width: 100%;
+  max-width: 640px;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.configure-section {
+  background: var(--fabric-bg-primary);
+  border: 1px solid var(--fabric-border);
+  border-radius: 8px;
+  padding: 20px;
+}
+
+.configure-section h3 {
+  margin: 0 0 12px 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--fabric-text-primary);
+}
+
+.configure-section p {
+  margin: 0 0 12px 0;
+  font-size: 13px;
+  color: var(--fabric-text-secondary);
+}
+
+.status-banner {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  background: var(--fabric-bg-primary);
+  border: 1px solid var(--fabric-border);
+  border-radius: 8px;
+  padding: 16px 20px;
+}
+
+.status-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--fabric-text-secondary);
+}
+
+.status-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.status-dot.ok { background: #008e7a; }
+.status-dot.missing { background: #ff8542; }
+
+.configure-section .btn-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.configure-section select,
+.configure-section input[type="text"] {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--fabric-border);
+  border-radius: 4px;
+  background: var(--fabric-bg-secondary);
+  color: var(--fabric-text-primary);
+  font-size: 13px;
+  margin-bottom: 8px;
+}
+
+.configure-section .btn {
+  padding: 8px 16px;
+  border: 1px solid var(--fabric-border);
+  border-radius: 4px;
+  background: var(--fabric-bg-secondary);
+  color: var(--fabric-text-primary);
+  font-size: 13px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.configure-section .btn:hover {
+  background: var(--fabric-border);
+}
+
+.configure-section .btn.primary {
+  background: #5798bc;
+  color: #fff;
+  border-color: #5798bc;
+}
+
+.configure-section .btn.primary:hover {
+  background: #1f6a8c;
+}
+
+.configure-section .btn.success {
+  background: #008e7a;
+  color: #fff;
+  border-color: #008e7a;
+}
+
+.configure-section .btn.success:hover {
+  background: #006d5e;
+}
+
+.configure-section .btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.key-display {
+  background: var(--fabric-bg-secondary);
+  border: 1px solid var(--fabric-border);
+  border-radius: 4px;
+  padding: 10px;
+  font-family: monospace;
+  font-size: 12px;
+  word-break: break-all;
+  color: var(--fabric-text-primary);
+  margin-top: 8px;
+  position: relative;
+}
+
+.key-display .copy-btn {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  padding: 2px 8px;
+  font-size: 11px;
+  border: 1px solid var(--fabric-border);
+  border-radius: 3px;
+  background: var(--fabric-bg-primary);
+  color: var(--fabric-text-secondary);
+  cursor: pointer;
+}
+
+.token-info {
+  font-size: 12px;
+  color: var(--fabric-text-secondary);
+  margin-top: 8px;
+}
+
+.token-info span {
+  display: block;
+  margin-bottom: 2px;
+}
+
+.advanced-toggle {
+  background: none;
+  border: none;
+  color: var(--fabric-text-secondary);
+  font-size: 13px;
+  cursor: pointer;
+  padding: 0;
+  text-decoration: underline;
+}
+
+.save-section {
+  text-align: center;
+}
+
+.configure-section .message {
+  font-size: 13px;
+  padding: 8px 12px;
+  border-radius: 4px;
+  margin-bottom: 8px;
+}
+
+.configure-section .message.success {
+  background: rgba(0, 142, 122, 0.1);
+  color: #008e7a;
+}
+
+.configure-section .message.error {
+  background: rgba(226, 82, 65, 0.1);
+  color: #e25241;
+}
+
+.file-input-hidden {
+  display: none;
+}
+
+.site-toggle-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.site-toggle {
+  padding: 4px 10px;
+  border: 1px solid var(--fabric-border);
+  border-radius: 4px;
+  background: var(--fabric-bg-secondary);
+  color: var(--fabric-text-primary);
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.site-toggle:hover {
+  border-color: var(--fabric-text-secondary);
+}
+
+.site-toggle.avoided {
+  background: rgba(226, 82, 65, 0.15);
+  border-color: #e25241;
+  color: #e25241;
+}
+
+.token-paste-area {
+  width: 100%;
+  padding: 10px;
+  border: 1px solid var(--fabric-border);
+  border-radius: 4px;
+  background: var(--fabric-bg-secondary);
+  color: var(--fabric-text-primary);
+  font-family: monospace;
+  font-size: 12px;
+  resize: vertical;
+  box-sizing: border-box;
+}
