@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import TitleBar from './components/TitleBar';
 import Toolbar from './components/Toolbar';
 import CytoscapeGraph from './components/CytoscapeGraph';
@@ -10,7 +10,7 @@ import BottomPanel from './components/BottomPanel';
 import type { TerminalTab } from './components/BottomPanel';
 import ConfigureView from './components/ConfigureView';
 import * as api from './api/client';
-import type { SliceSummary, SliceData, SiteInfo, LinkInfo, ValidationIssue } from './types/fabric';
+import type { SliceSummary, SliceData, SiteInfo, LinkInfo, ComponentModel, SiteMetrics, LinkMetrics, ValidationIssue } from './types/fabric';
 
 export default function App() {
   const [slices, setSlices] = useState<SliceSummary[]>([]);
@@ -30,26 +30,31 @@ export default function App() {
   const [terminalIdCounter, setTerminalIdCounter] = useState(0);
   const [validationIssues, setValidationIssues] = useState<ValidationIssue[]>([]);
   const [validationValid, setValidationValid] = useState(false);
+
+  // --- Global cache: infrastructure ---
   const [infraSites, setInfraSites] = useState<SiteInfo[]>([]);
   const [infraLinks, setInfraLinks] = useState<LinkInfo[]>([]);
-  const [linksLoading, setLinksLoading] = useState(true);
+  const [infraLoading, setInfraLoading] = useState(false);
+
+  // --- Global cache: static data (fetched once on mount) ---
+  const [images, setImages] = useState<string[]>([]);
+  const [componentModels, setComponentModels] = useState<ComponentModel[]>([]);
+
+  // --- Global cache: metrics ---
+  const [siteMetricsCache, setSiteMetricsCache] = useState<Record<string, SiteMetrics>>({});
+  const [linkMetricsCache, setLinkMetricsCache] = useState<Record<string, LinkMetrics>>({});
+  const [metricsRefreshRate, setMetricsRefreshRate] = useState(0); // 0 = manual
+  const [metricsLoading, setMetricsLoading] = useState(false);
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
     localStorage.setItem('theme', dark ? 'dark' : 'light');
   }, [dark]);
 
-  // Fetch infrastructure sites and links (fire-and-forget on mount)
+  // Fetch static data once on mount (images + component models)
   useEffect(() => {
-    const IGNORED = new Set(['AWS', 'AZURE', 'GCP', 'OCI', 'AL2S']);
-    api.listSites()
-      .then((all) => setInfraSites(all.filter((s) => !IGNORED.has(s.name) && s.lat !== 0 && s.lon !== 0)))
-      .catch(() => {});
-    setLinksLoading(true);
-    api.listLinks()
-      .then((data) => { setInfraLinks(data); console.log(`Loaded ${data.length} infrastructure links`); })
-      .catch((err) => { console.error('Failed to load links:', err); })
-      .finally(() => setLinksLoading(false));
+    api.listImages().then(setImages).catch(() => {});
+    api.listComponentModels().then(setComponentModels).catch(() => {});
   }, []);
 
   // Check config status on mount
@@ -71,6 +76,68 @@ export default function App() {
       window.history.replaceState({}, '', '/');
     }
   }, []);
+
+  // --- Refresh infrastructure (sites + links) ---
+  const refreshInfrastructure = useCallback(async () => {
+    setInfraLoading(true);
+    const IGNORED = new Set(['AWS', 'AZURE', 'GCP', 'OCI', 'AL2S']);
+    try {
+      const [allSites, links] = await Promise.all([api.listSites(), api.listLinks()]);
+      setInfraSites(allSites.filter((s) => !IGNORED.has(s.name) && s.lat !== 0 && s.lon !== 0));
+      setInfraLinks(links);
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setInfraLoading(false);
+    }
+  }, []);
+
+  // --- Refresh metrics for currently selected element ---
+  const refreshMetrics = useCallback(async () => {
+    if (!selectedElement) return;
+    const type = selectedElement.element_type;
+    if (type === 'site') {
+      const siteName = selectedElement.name;
+      setMetricsLoading(true);
+      try {
+        const m = await api.getSiteMetrics(siteName);
+        setSiteMetricsCache((prev) => ({ ...prev, [siteName]: m }));
+      } catch (e: any) {
+        setError(e.message);
+      } finally {
+        setMetricsLoading(false);
+      }
+    } else if (type === 'infra_link') {
+      const key = `${selectedElement.site_a}-${selectedElement.site_b}`;
+      setMetricsLoading(true);
+      try {
+        const m = await api.getLinkMetrics(selectedElement.site_a, selectedElement.site_b);
+        setLinkMetricsCache((prev) => ({ ...prev, [key]: m }));
+      } catch (e: any) {
+        setError(e.message);
+      } finally {
+        setMetricsLoading(false);
+      }
+    }
+  }, [selectedElement]);
+
+  // --- Auto-refresh interval for metrics ---
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  useEffect(() => {
+    if (intervalRef.current) {
+      clearInterval(intervalRef.current);
+      intervalRef.current = null;
+    }
+    if (metricsRefreshRate > 0 && selectedElement) {
+      const type = selectedElement.element_type;
+      if (type === 'site' || type === 'infra_link') {
+        intervalRef.current = setInterval(refreshMetrics, metricsRefreshRate * 1000);
+      }
+    }
+    return () => {
+      if (intervalRef.current) clearInterval(intervalRef.current);
+    };
+  }, [metricsRefreshRate, selectedElement, refreshMetrics]);
 
   // Validate slice whenever sliceData changes
   const runValidation = useCallback(async (name: string) => {
@@ -306,6 +373,8 @@ export default function App() {
         onRefreshSlice={handleRefreshSlice}
         onDeleteSlice={handleDeleteSlice}
         onViewChange={setCurrentView}
+        onRefreshResources={refreshInfrastructure}
+        infraLoading={infraLoading}
       />
 
       <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
@@ -325,6 +394,9 @@ export default function App() {
                 sliceName={selectedSliceName}
                 onSliceUpdated={handleSliceUpdated}
                 onCollapse={() => setShowEditorPanel(false)}
+                sites={infraSites}
+                images={images}
+                componentModels={componentModels}
               />
             )}
             <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, overflow: 'hidden', position: 'relative' }}>
@@ -370,6 +442,12 @@ export default function App() {
                 sliceData={sliceData}
                 selectedElement={selectedElement}
                 onCollapse={() => setShowDetailPanel(false)}
+                siteMetricsCache={siteMetricsCache}
+                linkMetricsCache={linkMetricsCache}
+                metricsRefreshRate={metricsRefreshRate}
+                onMetricsRefreshRateChange={setMetricsRefreshRate}
+                onRefreshMetrics={refreshMetrics}
+                metricsLoading={metricsLoading}
               />
             )}
           </>
@@ -380,7 +458,13 @@ export default function App() {
             onNodeClick={handleNodeClick}
             sites={infraSites}
             links={infraLinks}
-            linksLoading={linksLoading}
+            linksLoading={infraLoading}
+            siteMetricsCache={siteMetricsCache}
+            linkMetricsCache={linkMetricsCache}
+            metricsRefreshRate={metricsRefreshRate}
+            onMetricsRefreshRateChange={setMetricsRefreshRate}
+            onRefreshMetrics={refreshMetrics}
+            metricsLoading={metricsLoading}
           />
         )}
       </div>

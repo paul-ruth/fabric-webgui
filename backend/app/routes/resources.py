@@ -1,6 +1,7 @@
 """Resource and site information API routes."""
 
 from __future__ import annotations
+import asyncio
 import time
 from typing import Any
 
@@ -80,10 +81,10 @@ DEFAULT_IMAGES = [
 
 
 @router.get("/sites")
-def list_sites() -> list[dict[str, Any]]:
+async def list_sites() -> list[dict[str, Any]]:
     """List all FABRIC sites with location and availability."""
-    fablib = get_fablib()
-    try:
+    def _do():
+        fablib = get_fablib()
         resources = fablib.get_resources()
         sites = []
         for site_name in resources.get_site_names():
@@ -103,12 +104,14 @@ def list_sites() -> list[dict[str, Any]]:
                 "disk_capacity": _safe_attr(site, "get_disk_capacity", 0),
             })
         return sites
+    try:
+        return await asyncio.to_thread(_do)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/links")
-def list_links() -> list[dict[str, Any]]:
+async def list_links() -> list[dict[str, Any]]:
     """List unique FABRIC backbone links between sites."""
     import re
 
@@ -117,8 +120,8 @@ def list_links() -> list[dict[str, Any]]:
     if cached and time.time() - cached[0] < CACHE_TTL:
         return cached[1]
 
-    fablib = get_fablib()
-    try:
+    def _do():
+        fablib = get_fablib()
         resources = fablib.get_resources()
         topo = resources.get_topology()
         seen: set[tuple[str, str]] = set()
@@ -145,6 +148,8 @@ def list_links() -> list[dict[str, Any]]:
                 continue
         _cache["links"] = (time.time(), links)
         return links
+    try:
+        return await asyncio.to_thread(_do)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -164,10 +169,10 @@ COMPONENT_QUERY_MODELS = [
 
 
 @router.get("/sites/{site_name}")
-def get_site_detail(site_name: str) -> dict[str, Any]:
+async def get_site_detail(site_name: str) -> dict[str, Any]:
     """Get detailed site info including per-component resource allocation."""
-    fablib = get_fablib()
-    try:
+    def _do():
+        fablib = get_fablib()
         resources = fablib.get_resources()
         site = resources.get_site(site_name)
         location = SITE_LOCATIONS.get(site_name, {"lat": 0, "lon": 0})
@@ -204,15 +209,17 @@ def get_site_detail(site_name: str) -> dict[str, Any]:
             "disk_allocated": _safe_attr(site, "get_disk_allocated", 0),
             "components": components,
         }
+    try:
+        return await asyncio.to_thread(_do)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/resources")
-def get_resources() -> dict[str, Any]:
+async def get_resources() -> dict[str, Any]:
     """Get resource availability across all sites."""
-    fablib = get_fablib()
-    try:
+    def _do():
+        fablib = get_fablib()
         resources = fablib.get_resources()
         result = {}
         for site_name in resources.get_site_names():
@@ -229,18 +236,20 @@ def get_resources() -> dict[str, Any]:
             except Exception:
                 result[site_name] = {"error": "unavailable"}
         return result
+    try:
+        return await asyncio.to_thread(_do)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/images")
-def list_images() -> list[str]:
+async def list_images() -> list[str]:
     """List available VM images."""
     return DEFAULT_IMAGES
 
 
 @router.get("/component-models")
-def list_component_models() -> list[dict[str, str]]:
+async def list_component_models() -> list[dict[str, str]]:
     """List available component models."""
     return COMPONENT_MODELS
 

@@ -1,15 +1,25 @@
-import { useState, useEffect, useRef } from 'react';
-import type { SliceData, SliceNode, SliceNetwork, SiteDetail, SiteMetrics, LinkMetrics, PrometheusResult } from '../types/fabric';
-import { getSiteDetail, getSiteMetrics, getLinkMetrics } from '../api/client';
+import { useState, useEffect } from 'react';
+import type { SliceData, SliceNode, SliceNetwork, SiteDetail, SiteMetrics, LinkMetrics } from '../types/fabric';
+import { getSiteDetail } from '../api/client';
 import '../styles/editor.css';
 
 interface DetailPanelProps {
   sliceData: SliceData | null;
   selectedElement: Record<string, string> | null;
   onCollapse?: () => void;
+  siteMetricsCache: Record<string, SiteMetrics>;
+  linkMetricsCache: Record<string, LinkMetrics>;
+  metricsRefreshRate: number;
+  onMetricsRefreshRateChange: (rate: number) => void;
+  onRefreshMetrics: () => void;
+  metricsLoading: boolean;
 }
 
-export default function DetailPanel({ sliceData, selectedElement, onCollapse }: DetailPanelProps) {
+export default function DetailPanel({
+  sliceData, selectedElement, onCollapse,
+  siteMetricsCache, linkMetricsCache,
+  metricsRefreshRate, onMetricsRefreshRateChange, onRefreshMetrics, metricsLoading,
+}: DetailPanelProps) {
   if (!selectedElement) {
     return (
       <div className="detail-panel">
@@ -52,8 +62,26 @@ export default function DetailPanel({ sliceData, selectedElement, onCollapse }: 
         {elementType === 'network' && sliceData && <NetworkDetail network={findNetwork(sliceData, selectedElement.name)} data={selectedElement} />}
         {elementType === 'interface' && <InterfaceDetail data={selectedElement} />}
         {elementType === 'slice' && sliceData && <SliceDetailView data={selectedElement} sliceData={sliceData} />}
-        {elementType === 'site' && <SiteTabbedDetail data={selectedElement} />}
-        {elementType === 'infra_link' && <LinkTabbedDetail data={selectedElement} />}
+        {elementType === 'site' && (
+          <SiteTabbedDetail
+            data={selectedElement}
+            metrics={siteMetricsCache[selectedElement.name] ?? null}
+            metricsRefreshRate={metricsRefreshRate}
+            onMetricsRefreshRateChange={onMetricsRefreshRateChange}
+            onRefreshMetrics={onRefreshMetrics}
+            metricsLoading={metricsLoading}
+          />
+        )}
+        {elementType === 'infra_link' && (
+          <LinkTabbedDetail
+            data={selectedElement}
+            metrics={linkMetricsCache[`${selectedElement.site_a}-${selectedElement.site_b}`] ?? null}
+            metricsRefreshRate={metricsRefreshRate}
+            onMetricsRefreshRateChange={onMetricsRefreshRateChange}
+            onRefreshMetrics={onRefreshMetrics}
+            metricsLoading={metricsLoading}
+          />
+        )}
       </div>
     </div>
   );
@@ -195,9 +223,49 @@ function SliceDetailView({ data, sliceData }: { data: Record<string, string>; sl
   );
 }
 
+/* ============ Metrics Refresh Controls ============ */
+
+function MetricsControls({
+  metricsRefreshRate, onMetricsRefreshRateChange, onRefreshMetrics, metricsLoading,
+}: {
+  metricsRefreshRate: number;
+  onMetricsRefreshRateChange: (rate: number) => void;
+  onRefreshMetrics: () => void;
+  metricsLoading: boolean;
+}) {
+  return (
+    <div className="metrics-controls">
+      <button onClick={onRefreshMetrics} disabled={metricsLoading} title="Refresh metrics now">
+        {metricsLoading ? '↻...' : '↻'}
+      </button>
+      <select
+        value={metricsRefreshRate}
+        onChange={(e) => onMetricsRefreshRateChange(Number(e.target.value))}
+      >
+        <option value={0}>Manual</option>
+        <option value={5}>5s</option>
+        <option value={10}>10s</option>
+        <option value={30}>30s</option>
+        <option value={60}>1 min</option>
+        <option value={300}>5 min</option>
+        <option value={600}>10 min</option>
+      </select>
+    </div>
+  );
+}
+
 /* ============ Site Tabbed Detail ============ */
 
-function SiteTabbedDetail({ data }: { data: Record<string, string> }) {
+function SiteTabbedDetail({
+  data, metrics, metricsRefreshRate, onMetricsRefreshRateChange, onRefreshMetrics, metricsLoading,
+}: {
+  data: Record<string, string>;
+  metrics: SiteMetrics | null;
+  metricsRefreshRate: number;
+  onMetricsRefreshRateChange: (rate: number) => void;
+  onRefreshMetrics: () => void;
+  metricsLoading: boolean;
+}) {
   const [tab, setTab] = useState<'resources' | 'metrics'>('resources');
   const elementKey = data.name;
 
@@ -211,7 +279,15 @@ function SiteTabbedDetail({ data }: { data: Record<string, string> }) {
         <button className={tab === 'metrics' ? 'active' : ''} onClick={() => setTab('metrics')}>Metrics</button>
       </div>
       {tab === 'resources' && <SiteResourcesTab data={data} />}
-      {tab === 'metrics' && <SiteMetricsTab siteName={data.name} />}
+      {tab === 'metrics' && (
+        <SiteMetricsTab
+          metrics={metrics}
+          metricsRefreshRate={metricsRefreshRate}
+          onMetricsRefreshRateChange={onMetricsRefreshRateChange}
+          onRefreshMetrics={onRefreshMetrics}
+          metricsLoading={metricsLoading}
+        />
+      )}
     </>
   );
 }
@@ -276,31 +352,28 @@ function SiteResourcesTab({ data }: { data: Record<string, string> }) {
   );
 }
 
-function SiteMetricsTab({ siteName }: { siteName: string }) {
-  const [metrics, setMetrics] = useState<SiteMetrics | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  const fetchMetrics = () => {
-    getSiteMetrics(siteName)
-      .then((m) => { setMetrics(m); setError(null); setLastUpdated(new Date()); })
-      .catch((e) => setError(String(e)))
-      .finally(() => setLoading(false));
-  };
-
-  useEffect(() => {
-    setLoading(true);
-    setMetrics(null);
-    fetchMetrics();
-    intervalRef.current = setInterval(fetchMetrics, 30000);
-    return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
-  }, [siteName]);
-
-  if (loading && !metrics) return <div className="detail-loading">Loading metrics...</div>;
-  if (error && !metrics) return <div className="metrics-error">Failed to load metrics: {error}</div>;
-  if (!metrics) return null;
+function SiteMetricsTab({
+  metrics, metricsRefreshRate, onMetricsRefreshRateChange, onRefreshMetrics, metricsLoading,
+}: {
+  metrics: SiteMetrics | null;
+  metricsRefreshRate: number;
+  onMetricsRefreshRateChange: (rate: number) => void;
+  onRefreshMetrics: () => void;
+  metricsLoading: boolean;
+}) {
+  if (!metrics) {
+    return (
+      <>
+        <MetricsControls
+          metricsRefreshRate={metricsRefreshRate}
+          onMetricsRefreshRateChange={onMetricsRefreshRateChange}
+          onRefreshMetrics={onRefreshMetrics}
+          metricsLoading={metricsLoading}
+        />
+        <div className="detail-loading">Click ↻ to load metrics</div>
+      </>
+    );
+  }
 
   // Build CPU load table: group by worker instance
   const workers = new Map<string, { load1?: string; load5?: string; load15?: string }>();
@@ -321,7 +394,6 @@ function SiteMetricsTab({ siteName }: { siteName: string }) {
   }
 
   // Build network traffic table
-  const traffic: { destination: string; inBits: string; outBits: string }[] = [];
   const destMap = new Map<string, { inBits?: string; outBits?: string }>();
   for (const r of metrics.dataplaneInBits) {
     const dest = r.metric.dst_rack || r.metric.destination || 'unknown';
@@ -333,12 +405,20 @@ function SiteMetricsTab({ siteName }: { siteName: string }) {
     if (!destMap.has(dest)) destMap.set(dest, {});
     destMap.get(dest)!.outBits = formatBits(r.value[1]);
   }
+  const traffic: { destination: string; inBits: string; outBits: string }[] = [];
   for (const [dest, vals] of destMap) {
     traffic.push({ destination: dest.toUpperCase(), inBits: vals.inBits || '—', outBits: vals.outBits || '—' });
   }
 
   return (
     <>
+      <MetricsControls
+        metricsRefreshRate={metricsRefreshRate}
+        onMetricsRefreshRateChange={onMetricsRefreshRateChange}
+        onRefreshMetrics={onRefreshMetrics}
+        metricsLoading={metricsLoading}
+      />
+
       {workers.size > 0 && (
         <>
           <div className="section-title">CPU Load</div>
@@ -383,19 +463,22 @@ function SiteMetricsTab({ siteName }: { siteName: string }) {
       {workers.size === 0 && traffic.length === 0 && (
         <div className="detail-loading">No metrics available for this site</div>
       )}
-
-      {lastUpdated && (
-        <div className="metrics-timestamp">
-          Updated: {lastUpdated.toLocaleTimeString()}
-        </div>
-      )}
     </>
   );
 }
 
 /* ============ Link Tabbed Detail ============ */
 
-function LinkTabbedDetail({ data }: { data: Record<string, string> }) {
+function LinkTabbedDetail({
+  data, metrics, metricsRefreshRate, onMetricsRefreshRateChange, onRefreshMetrics, metricsLoading,
+}: {
+  data: Record<string, string>;
+  metrics: LinkMetrics | null;
+  metricsRefreshRate: number;
+  onMetricsRefreshRateChange: (rate: number) => void;
+  onRefreshMetrics: () => void;
+  metricsLoading: boolean;
+}) {
   const [tab, setTab] = useState<'resources' | 'metrics'>('resources');
   const elementKey = `${data.site_a}-${data.site_b}`;
 
@@ -408,7 +491,17 @@ function LinkTabbedDetail({ data }: { data: Record<string, string> }) {
         <button className={tab === 'metrics' ? 'active' : ''} onClick={() => setTab('metrics')}>Metrics</button>
       </div>
       {tab === 'resources' && <LinkResourcesTab data={data} />}
-      {tab === 'metrics' && <LinkMetricsTab siteA={data.site_a} siteB={data.site_b} />}
+      {tab === 'metrics' && (
+        <LinkMetricsTab
+          siteA={data.site_a}
+          siteB={data.site_b}
+          metrics={metrics}
+          metricsRefreshRate={metricsRefreshRate}
+          onMetricsRefreshRateChange={onMetricsRefreshRateChange}
+          onRefreshMetrics={onRefreshMetrics}
+          metricsLoading={metricsLoading}
+        />
+      )}
     </>
   );
 }
@@ -423,57 +516,59 @@ function LinkResourcesTab({ data }: { data: Record<string, string> }) {
   );
 }
 
-function LinkMetricsTab({ siteA, siteB }: { siteA: string; siteB: string }) {
-  const [metrics, setMetrics] = useState<LinkMetrics | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  const fetchMetrics = () => {
-    getLinkMetrics(siteA, siteB)
-      .then((m) => { setMetrics(m); setError(null); setLastUpdated(new Date()); })
-      .catch((e) => setError(String(e)))
-      .finally(() => setLoading(false));
-  };
-
-  useEffect(() => {
-    setLoading(true);
-    setMetrics(null);
-    fetchMetrics();
-    intervalRef.current = setInterval(fetchMetrics, 30000);
-    return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
-  }, [siteA, siteB]);
-
-  if (loading && !metrics) return <div className="detail-loading">Loading metrics...</div>;
-  if (error && !metrics) return <div className="metrics-error">Failed to load metrics: {error}</div>;
-  if (!metrics) return null;
+function LinkMetricsTab({
+  siteA, siteB, metrics, metricsRefreshRate, onMetricsRefreshRateChange, onRefreshMetrics, metricsLoading,
+}: {
+  siteA: string;
+  siteB: string;
+  metrics: LinkMetrics | null;
+  metricsRefreshRate: number;
+  onMetricsRefreshRateChange: (rate: number) => void;
+  onRefreshMetrics: () => void;
+  metricsLoading: boolean;
+}) {
+  if (!metrics) {
+    return (
+      <>
+        <MetricsControls
+          metricsRefreshRate={metricsRefreshRate}
+          onMetricsRefreshRateChange={onMetricsRefreshRateChange}
+          onRefreshMetrics={onRefreshMetrics}
+          metricsLoading={metricsLoading}
+        />
+        <div className="detail-loading">Click ↻ to load metrics</div>
+      </>
+    );
+  }
 
   const hasData = metrics.a_to_b_in.length > 0 || metrics.a_to_b_out.length > 0 ||
                   metrics.b_to_a_in.length > 0 || metrics.b_to_a_out.length > 0;
 
-  if (!hasData) {
-    return <div className="detail-loading">No traffic metrics available for this link</div>;
-  }
-
   return (
     <>
-      <div className="section-title">{siteA} → {siteB}</div>
-      <PropTable rows={[
-        ['In', metrics.a_to_b_in.length > 0 ? formatBits(metrics.a_to_b_in[0].value[1]) : '—'],
-        ['Out', metrics.a_to_b_out.length > 0 ? formatBits(metrics.a_to_b_out[0].value[1]) : '—'],
-      ]} />
+      <MetricsControls
+        metricsRefreshRate={metricsRefreshRate}
+        onMetricsRefreshRateChange={onMetricsRefreshRateChange}
+        onRefreshMetrics={onRefreshMetrics}
+        metricsLoading={metricsLoading}
+      />
 
-      <div className="section-title">{siteB} → {siteA}</div>
-      <PropTable rows={[
-        ['In', metrics.b_to_a_in.length > 0 ? formatBits(metrics.b_to_a_in[0].value[1]) : '—'],
-        ['Out', metrics.b_to_a_out.length > 0 ? formatBits(metrics.b_to_a_out[0].value[1]) : '—'],
-      ]} />
+      {!hasData ? (
+        <div className="detail-loading">No traffic metrics available for this link</div>
+      ) : (
+        <>
+          <div className="section-title">{siteA} → {siteB}</div>
+          <PropTable rows={[
+            ['In', metrics.a_to_b_in.length > 0 ? formatBits(metrics.a_to_b_in[0].value[1]) : '—'],
+            ['Out', metrics.a_to_b_out.length > 0 ? formatBits(metrics.a_to_b_out[0].value[1]) : '—'],
+          ]} />
 
-      {lastUpdated && (
-        <div className="metrics-timestamp">
-          Updated: {lastUpdated.toLocaleTimeString()}
-        </div>
+          <div className="section-title">{siteB} → {siteA}</div>
+          <PropTable rows={[
+            ['In', metrics.b_to_a_in.length > 0 ? formatBits(metrics.b_to_a_in[0].value[1]) : '—'],
+            ['Out', metrics.b_to_a_out.length > 0 ? formatBits(metrics.b_to_a_out[0].value[1]) : '—'],
+          ]} />
+        </>
       )}
     </>
   );

@@ -18,6 +18,8 @@ interface ToolbarProps {
   onRefreshSlice: () => void;
   onDeleteSlice: () => void;
   onViewChange: (view: 'editor' | 'geo' | 'configure') => void;
+  onRefreshResources: () => void;
+  infraLoading: boolean;
 }
 
 export default function Toolbar(props: ToolbarProps) {
@@ -138,6 +140,19 @@ export default function Toolbar(props: ToolbarProps) {
               ✕ Delete Slice
             </button>
           )}
+        </>
+      )}
+
+      {props.currentView !== 'configure' && (
+        <>
+          <div className="separator" />
+          <button
+            onClick={props.onRefreshResources}
+            disabled={props.infraLoading}
+            title="Refresh infrastructure sites and links"
+          >
+            {props.infraLoading ? '↻...' : '↻ Resources'}
+          </button>
         </>
       )}
 

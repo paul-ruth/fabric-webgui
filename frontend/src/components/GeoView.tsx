@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { MapContainer, TileLayer, CircleMarker, Polyline, Popup, useMap } from 'react-leaflet';
 import type { LatLngBoundsExpression } from 'leaflet';
-import type { SliceData, SiteInfo, LinkInfo } from '../types/fabric';
+import type { SliceData, SiteInfo, LinkInfo, SiteMetrics, LinkMetrics } from '../types/fabric';
 import DetailPanel from './DetailPanel';
 import '../styles/geo.css';
 
@@ -55,9 +55,15 @@ interface GeoViewProps {
   sites: SiteInfo[];
   links: LinkInfo[];
   linksLoading?: boolean;
+  siteMetricsCache: Record<string, SiteMetrics>;
+  linkMetricsCache: Record<string, LinkMetrics>;
+  metricsRefreshRate: number;
+  onMetricsRefreshRateChange: (rate: number) => void;
+  onRefreshMetrics: () => void;
+  metricsLoading: boolean;
 }
 
-export default function GeoView({ sliceData, selectedElement, onNodeClick, sites, links, linksLoading }: GeoViewProps) {
+export default function GeoView({ sliceData, selectedElement, onNodeClick, sites, links, linksLoading, siteMetricsCache, linkMetricsCache, metricsRefreshRate, onMetricsRefreshRateChange, onRefreshMetrics, metricsLoading }: GeoViewProps) {
   const [showInfraSites, setShowInfraSites] = useState(true);
   const [showInfraLinks, setShowInfraLinks] = useState(true);
   const [showSliceNodes, setShowSliceNodes] = useState(true);
@@ -289,6 +295,12 @@ export default function GeoView({ sliceData, selectedElement, onNodeClick, sites
       <DetailPanel
         sliceData={sliceData}
         selectedElement={selectedElement}
+        siteMetricsCache={siteMetricsCache}
+        linkMetricsCache={linkMetricsCache}
+        metricsRefreshRate={metricsRefreshRate}
+        onMetricsRefreshRateChange={onMetricsRefreshRateChange}
+        onRefreshMetrics={onRefreshMetrics}
+        metricsLoading={metricsLoading}
       />
     </div>
   );

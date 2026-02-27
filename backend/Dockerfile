@@ -4,7 +4,7 @@ WORKDIR /app
 
 # Install system deps for FABlib (SSH, etc.)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc python3-dev libffi-dev libssl-dev openssh-client \
+    gcc python3-dev libffi-dev libssl-dev openssh-client git \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .

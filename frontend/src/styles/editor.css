@@ -237,6 +237,26 @@
   padding: 8px 0;
 }
 
+/* Metrics refresh controls row */
+.metrics-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 0;
+  margin-bottom: 8px;
+  border-bottom: 1px solid var(--fabric-border);
+}
+.metrics-controls button {
+  padding: 4px 10px;
+  font-size: 12px;
+  min-width: 32px;
+}
+.metrics-controls select {
+  font-size: 12px;
+  padding: 3px 6px;
+  flex: 1;
+}
+
 /* Multi-select for interfaces */
 .editor-panel select[multiple] {
   width: 100%;

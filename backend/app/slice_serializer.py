@@ -1,4 +1,9 @@
-"""Serialize FABlib Slice objects into plain dicts for JSON transport."""
+"""Serialize FABlib Slice objects into plain dicts for JSON transport.
+
+IMPORTANT: Only uses topology/sliver data from the Orchestrator API.
+Never calls methods that trigger SSH (get_ip_addr, get_mac, etc.)
+to avoid hangs when bastion keys are expired or unavailable.
+"""
 
 from __future__ import annotations
 from typing import Any
@@ -14,14 +19,43 @@ def _safe(fn, default=""):
 
 
 def serialize_interface(iface) -> dict[str, Any]:
-    """Serialize a FABlib Interface object."""
+    """Serialize a FABlib Interface object (no SSH calls)."""
+    # get_network() is safe — it reads from cached topology
+    # get_ip_addr() is NOT safe — it falls back to SSH
+    # Instead, read IP from fablib_data if available
+    ip_addr = ""
+    try:
+        fablib_data = iface.get_fablib_data()
+        if "addr" in fablib_data:
+            ip_addr = str(fablib_data["addr"])
+    except Exception:
+        pass
+
+    # get_mac() can also trigger SSH, read from FIM directly
+    mac = ""
+    try:
+        fim_iface = iface.get_fim()
+        if hasattr(fim_iface, 'label_allocations') and fim_iface.label_allocations:
+            mac = str(fim_iface.label_allocations.mac) if hasattr(fim_iface.label_allocations, 'mac') and fim_iface.label_allocations.mac else ""
+    except Exception:
+        pass
+
+    # Network name — use get_network() but with refresh=False via the safe wrapper
+    network_name = ""
+    try:
+        net = iface.get_network()
+        if net:
+            network_name = net.get_name()
+    except Exception:
+        pass
+
     return {
         "name": _safe(iface.get_name),
         "node_name": _safe(lambda: iface.get_node().get_name() if iface.get_node() else ""),
-        "network_name": _safe(lambda: iface.get_network().get_name() if iface.get_network() else ""),
+        "network_name": network_name,
         "vlan": _safe(iface.get_vlan),
-        "mac": _safe(iface.get_mac),
-        "ip_addr": _safe(lambda: str(iface.get_ip_addr()) if iface.get_ip_addr() else ""),
+        "mac": mac,
+        "ip_addr": ip_addr,
         "bandwidth": _safe(iface.get_bandwidth),
     }
 
@@ -40,7 +74,7 @@ def serialize_component(comp) -> dict[str, Any]:
 
 
 def serialize_node(node) -> dict[str, Any]:
-    """Serialize a FABlib Node object."""
+    """Serialize a FABlib Node object (no SSH calls)."""
     components = [
         serialize_component(c)
         for c in (_safe(node.get_components, []) or [])
@@ -49,6 +83,9 @@ def serialize_node(node) -> dict[str, Any]:
         serialize_interface(i)
         for i in (_safe(node.get_interfaces, []) or [])
     ]
+
+    # get_management_ip reads from sliver data, should be safe
+    # get_username and get_image read from topology, should be safe
     return {
         "name": _safe(node.get_name),
         "site": _safe(node.get_site),

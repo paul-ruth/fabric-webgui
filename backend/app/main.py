@@ -33,3 +33,10 @@ if os.path.isdir(static_dir):
 def health():
     from app.fablib_manager import is_configured
     return {"status": "ok", "configured": is_configured()}
+
+
+# Fast 404 for /metrics — prevents Prometheus scraper from clogging the threadpool
+@app.get("/metrics")
+async def metrics_not_found():
+    from fastapi.responses import PlainTextResponse
+    return PlainTextResponse("Not Found", status_code=404)

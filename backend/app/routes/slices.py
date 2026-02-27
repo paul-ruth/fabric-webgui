@@ -1,6 +1,7 @@
 """Slice management API routes."""
 
 from __future__ import annotations
+import asyncio
 import threading
 from typing import Any, List, Optional
 
@@ -105,14 +106,18 @@ class UpdateNodeRequest(BaseModel):
 
 
 # --- Routes ---
+# Heavy FABlib calls use async + asyncio.to_thread() so they don't block
+# the event loop or exhaust the default threadpool for other requests.
 
 @router.get("/slices")
-def list_slices() -> list[dict[str, Any]]:
+async def list_slices() -> list[dict[str, Any]]:
     """List all slices visible to the current user."""
-    fablib = get_fablib()
-    try:
+    def _do():
+        fablib = get_fablib()
         slices = fablib.get_slices()
-        results = [slice_summary(s) for s in slices]
+        return [slice_summary(s) for s in slices]
+    try:
+        results = await asyncio.to_thread(_do)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -126,42 +131,48 @@ def list_slices() -> list[dict[str, Any]]:
 
 
 @router.get("/slices/{slice_name}")
-def get_slice(slice_name: str) -> dict[str, Any]:
+async def get_slice(slice_name: str) -> dict[str, Any]:
     """Get full slice data including topology graph."""
-    try:
+    def _do():
         slice_obj = _get_slice_obj(slice_name)
         # When loading an existing (non-draft) slice, store it in drafts
         # so subsequent edits are local until Submit
         if not _is_draft(slice_name):
             _store_draft(slice_name, slice_obj, is_new=False)
         return _serialize(slice_obj)
+    try:
+        return await asyncio.to_thread(_do)
     except Exception as e:
         raise HTTPException(status_code=404, detail=f"Slice not found: {e}")
 
 
 @router.post("/slices")
-def create_slice(name: str) -> dict[str, Any]:
+async def create_slice(name: str) -> dict[str, Any]:
     """Create a new empty draft slice."""
-    fablib = get_fablib()
-    try:
+    def _do():
+        fablib = get_fablib()
         slice_obj = fablib.new_slice(name=name)
         _store_draft(name, slice_obj, is_new=True)
         return _serialize(slice_obj)
+    try:
+        return await asyncio.to_thread(_do)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/slices/{slice_name}/submit")
-def submit_slice(slice_name: str) -> dict[str, Any]:
+async def submit_slice(slice_name: str) -> dict[str, Any]:
     """Submit a slice — creates new slice or modifies existing one."""
     draft, is_new = _pop_draft(slice_name)
     if draft is not None:
-        try:
+        def _do():
             if is_new:
                 draft.submit()
             else:
                 draft.submit(wait=False)
             return _serialize(draft)
+        try:
+            return await asyncio.to_thread(_do)
         except Exception as e:
             # Put draft back so user can retry
             _store_draft(slice_name, draft, is_new=is_new)
@@ -171,34 +182,38 @@ def submit_slice(slice_name: str) -> dict[str, Any]:
 
 
 @router.post("/slices/{slice_name}/refresh")
-def refresh_slice(slice_name: str) -> dict[str, Any]:
+async def refresh_slice(slice_name: str) -> dict[str, Any]:
     """Refresh slice state from FABRIC (discards local edits)."""
     # Drop any draft — reload fresh from FABRIC
     _pop_draft(slice_name)
-    fablib = get_fablib()
-    try:
+    def _do():
+        fablib = get_fablib()
         slice_obj = fablib.get_slice(name=slice_name)
         slice_obj.update()
         # Store fresh copy as draft for further editing
         _store_draft(slice_name, slice_obj, is_new=False)
         return _serialize(slice_obj)
+    try:
+        return await asyncio.to_thread(_do)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.delete("/slices/{slice_name}")
-def delete_slice(slice_name: str) -> dict[str, str]:
+async def delete_slice(slice_name: str) -> dict[str, str]:
     """Delete a slice."""
     draft, is_new = _pop_draft(slice_name)
     if draft is not None and is_new:
         # Just a draft that was never submitted — discard it
         return {"status": "deleted", "name": slice_name}
     # Delete the actual slice from FABRIC
-    fablib = get_fablib()
-    try:
+    def _do():
+        fablib = get_fablib()
         slice_obj = fablib.get_slice(name=slice_name)
         slice_obj.delete()
         return {"status": "deleted", "name": slice_name}
+    try:
+        return await asyncio.to_thread(_do)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

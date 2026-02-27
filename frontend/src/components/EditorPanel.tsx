@@ -10,21 +10,15 @@ interface EditorPanelProps {
   sliceName: string;
   onSliceUpdated: (data: SliceData) => void;
   onCollapse: () => void;
+  sites: SiteInfo[];
+  images: string[];
+  componentModels: ComponentModel[];
 }
 
-export default function EditorPanel({ sliceData, sliceName, onSliceUpdated, onCollapse }: EditorPanelProps) {
+export default function EditorPanel({ sliceData, sliceName, onSliceUpdated, onCollapse, sites, images, componentModels }: EditorPanelProps) {
   const [activeTab, setActiveTab] = useState<Tab>('node');
-  const [sites, setSites] = useState<SiteInfo[]>([]);
-  const [images, setImages] = useState<string[]>([]);
-  const [componentModels, setComponentModels] = useState<ComponentModel[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-
-  useEffect(() => {
-    api.listImages().then(setImages).catch(() => {});
-    api.listComponentModels().then(setComponentModels).catch(() => {});
-    api.listSites().then(setSites).catch(() => {});
-  }, []);
 
   const tabs: { key: Tab; label: string }[] = [
     { key: 'node', label: 'Node' },
