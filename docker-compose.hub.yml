@@ -1,0 +1,14 @@
+services:
+  fabric-webui:
+    image: pruth/fabric-webui:latest
+    ports:
+      - "3000:3000"
+      - "8000:8000"
+    volumes:
+      - fabric_config:/fabric_config
+    environment:
+      - FABRIC_CONFIG_DIR=/fabric_config
+    restart: unless-stopped
+
+volumes:
+  fabric_config:

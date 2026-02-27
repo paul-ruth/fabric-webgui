@@ -18,6 +18,10 @@ if [ ! -f "$FABRIC_CONFIG/fabric_rc" ]; then
     echo ""
 fi
 
+# Set up storage directory for file browser
+export FABRIC_STORAGE_DIR="${FABRIC_STORAGE_DIR:-$SCRIPT_DIR/fabric_storage}"
+mkdir -p "$FABRIC_STORAGE_DIR"
+
 # Start backend
 echo "Starting backend (FastAPI)..."
 cd "$SCRIPT_DIR/backend"

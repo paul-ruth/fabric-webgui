@@ -282,9 +282,6 @@ export default function ConfigureView({ onConfigured }: ConfigureViewProps) {
             >
               Upload Token File
             </button>
-            <button className="btn primary" onClick={handleOAuthLogin} disabled={loading}>
-              Login with FABRIC
-            </button>
           </div>
           {showTokenPaste && (
             <div style={{ marginTop: 12 }}>
@@ -365,6 +362,17 @@ export default function ConfigureView({ onConfigured }: ConfigureViewProps) {
             </button>
             {status?.has_bastion_key && <span className="status-item"><span className="status-dot ok" /> Uploaded</span>}
           </div>
+          {status?.bastion_key_fingerprint && (
+            <div className="key-info">
+              <span className="key-info-label">Fingerprint:</span> {status.bastion_key_fingerprint}
+            </div>
+          )}
+          {status?.bastion_pub_key && (
+            <div className="key-display">
+              <button className="copy-btn" onClick={() => { navigator.clipboard.writeText(status.bastion_pub_key!); setMessage({ text: 'Bastion public key copied', type: 'success' }); }}>Copy</button>
+              {status.bastion_pub_key}
+            </div>
+          )}
 
           {/* Slice Keys */}
           <p style={{ marginTop: 16 }}><strong>Slice Keys</strong> — Upload an existing key pair or generate new ones.</p>
@@ -397,7 +405,18 @@ export default function ConfigureView({ onConfigured }: ConfigureViewProps) {
             </button>
             {status?.has_slice_key && <span className="status-item"><span className="status-dot ok" /> Ready</span>}
           </div>
-          {generatedPubKey && (
+          {status?.slice_key_fingerprint && (
+            <div className="key-info">
+              <span className="key-info-label">Fingerprint:</span> {status.slice_key_fingerprint}
+            </div>
+          )}
+          {status?.slice_pub_key && (
+            <div className="key-display">
+              <button className="copy-btn" onClick={() => { navigator.clipboard.writeText(status.slice_pub_key!); setMessage({ text: 'Slice public key copied', type: 'success' }); }}>Copy</button>
+              {status.slice_pub_key}
+            </div>
+          )}
+          {generatedPubKey && !status?.slice_pub_key && (
             <div className="key-display">
               <button className="copy-btn" onClick={handleCopyPubKey}>Copy</button>
               {generatedPubKey}

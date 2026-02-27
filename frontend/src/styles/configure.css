@@ -148,6 +148,19 @@
   cursor: pointer;
 }
 
+.key-info {
+  font-size: 12px;
+  color: var(--fabric-text-secondary);
+  margin-top: 6px;
+  font-family: monospace;
+}
+
+.key-info .key-info-label {
+  font-weight: 600;
+  color: var(--fabric-text-primary);
+  font-family: inherit;
+}
+
 .token-info {
   font-size: 12px;
   color: var(--fabric-text-secondary);

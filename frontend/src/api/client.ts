@@ -1,6 +1,6 @@
 /** API client for the FABRIC Web GUI backend. */
 
-import type { SliceSummary, SliceData, SiteInfo, SiteDetail, LinkInfo, ComponentModel, ConfigStatus, ProjectsResponse, ValidationResult, SiteMetrics, LinkMetrics } from '../types/fabric';
+import type { SliceSummary, SliceData, SiteInfo, SiteDetail, LinkInfo, ComponentModel, ConfigStatus, ProjectsResponse, ValidationResult, SiteMetrics, LinkMetrics, FileEntry, ProvisionRule, BootConfig, BootExecResult } from '../types/fabric';
 
 const BASE = '/api';
 
@@ -93,7 +93,15 @@ export function removeComponent(
 
 export function addNetwork(
   sliceName: string,
-  net: { name: string; type?: string; interfaces?: string[] }
+  net: {
+    name: string;
+    type?: string;
+    interfaces?: string[];
+    subnet?: string;
+    gateway?: string;
+    ip_mode?: string;
+    interface_ips?: Record<string, string>;
+  }
 ): Promise<SliceData> {
   return fetchJson(`/slices/${encodeURIComponent(sliceName)}/networks`, {
     method: 'POST',
@@ -106,6 +114,82 @@ export function removeNetwork(sliceName: string, netName: string): Promise<Slice
     `/slices/${encodeURIComponent(sliceName)}/networks/${encodeURIComponent(netName)}`,
     { method: 'DELETE' }
   );
+}
+
+// --- Post-boot config ---
+
+export function setPostBootConfig(
+  sliceName: string,
+  nodeName: string,
+  script: string
+): Promise<SliceData> {
+  return fetchJson(
+    `/slices/${encodeURIComponent(sliceName)}/nodes/${encodeURIComponent(nodeName)}/post-boot`,
+    { method: 'PUT', body: JSON.stringify({ script }) }
+  );
+}
+
+// --- Slice export/import ---
+
+export async function exportSlice(name: string): Promise<void> {
+  const res = await fetch(`${BASE}/slices/${encodeURIComponent(name)}/export`);
+  if (!res.ok) {
+    const detail = await res.text();
+    throw new Error(`API error ${res.status}: ${detail}`);
+  }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${name}.fabric.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+export function saveToStorage(name: string): Promise<{ status: string; path: string }> {
+  return fetchJson(`/slices/${encodeURIComponent(name)}/save-to-storage`, { method: 'POST' });
+}
+
+export function listStorageFiles(): Promise<Array<{ name: string; size: number; modified: number }>> {
+  return fetchJson('/slices/storage-files');
+}
+
+export function openFromStorage(filename: string): Promise<SliceData> {
+  return fetchJson('/slices/open-from-storage', {
+    method: 'POST',
+    body: JSON.stringify({ filename }),
+  });
+}
+
+export interface SliceModel {
+  format: string;
+  name: string;
+  nodes: Array<{
+    name: string;
+    site: string;
+    cores: number;
+    ram: number;
+    disk: number;
+    image: string;
+    post_boot_script?: string;
+    components: Array<{ name: string; model: string }>;
+  }>;
+  networks: Array<{
+    name: string;
+    type: string;
+    interfaces: string[];
+    subnet?: string;
+    gateway?: string;
+    ip_mode?: string;
+    interface_ips?: Record<string, string>;
+  }>;
+}
+
+export function importSlice(model: SliceModel): Promise<SliceData> {
+  return fetchJson('/slices/import', {
+    method: 'POST',
+    body: JSON.stringify(model),
+  });
 }
 
 // --- Resources ---
@@ -198,6 +282,272 @@ export async function uploadSliceKeys(
 
 export function generateSliceKeys(): Promise<{ status: string; public_key: string; message: string }> {
   return fetchJson('/config/keys/slice/generate', { method: 'POST' });
+}
+
+// --- Files (container storage) ---
+
+export function listFiles(path = ''): Promise<FileEntry[]> {
+  return fetchJson(`/files?path=${encodeURIComponent(path)}`);
+}
+
+export async function uploadFiles(path: string, files: FileList | File[]): Promise<{ uploaded: string[] }> {
+  const form = new FormData();
+  for (const f of Array.from(files)) {
+    form.append('files', f);
+  }
+  const res = await fetch(`${BASE}/files/upload?path=${encodeURIComponent(path)}`, {
+    method: 'POST',
+    body: form,
+  });
+  if (!res.ok) {
+    const detail = await res.text();
+    throw new Error(`API error ${res.status}: ${detail}`);
+  }
+  return res.json();
+}
+
+/** Upload files with explicit relative paths (for folder drag-and-drop). */
+export async function uploadFilesWithPaths(path: string, entries: Array<{ file: File; relativePath: string }>): Promise<{ uploaded: string[] }> {
+  const form = new FormData();
+  for (const { file, relativePath } of entries) {
+    form.append('files', file, relativePath);
+  }
+  const res = await fetch(`${BASE}/files/upload?path=${encodeURIComponent(path)}`, {
+    method: 'POST',
+    body: form,
+  });
+  if (!res.ok) {
+    const detail = await res.text();
+    throw new Error(`API error ${res.status}: ${detail}`);
+  }
+  return res.json();
+}
+
+export function createFolder(path: string, name: string): Promise<{ created: string }> {
+  return fetchJson(`/files/mkdir?path=${encodeURIComponent(path)}`, {
+    method: 'POST',
+    body: JSON.stringify({ name }),
+  });
+}
+
+export async function downloadFile(path: string): Promise<void> {
+  const url = `${BASE}/files/download?path=${encodeURIComponent(path)}`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Download failed: ${res.status}`);
+  const blob = await res.blob();
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = path.split('/').pop() || 'download';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(a.href);
+}
+
+export async function downloadFolder(path: string): Promise<void> {
+  const url = `${BASE}/files/download-folder?path=${encodeURIComponent(path)}`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Download failed: ${res.status}`);
+  const blob = await res.blob();
+  const folderName = path.split('/').pop() || 'folder';
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `${folderName}.zip`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(a.href);
+}
+
+export function deleteFile(path: string): Promise<{ deleted: string }> {
+  return fetchJson(`/files?path=${encodeURIComponent(path)}`, { method: 'DELETE' });
+}
+
+export function readFileContent(path: string): Promise<{ path: string; content: string }> {
+  return fetchJson(`/files/content?path=${encodeURIComponent(path)}`);
+}
+
+export function writeFileContent(path: string, content: string): Promise<{ path: string; status: string }> {
+  return fetchJson('/files/content', {
+    method: 'PUT',
+    body: JSON.stringify({ path, content }),
+  });
+}
+
+// --- Files (VM SFTP) ---
+
+export function listVmFiles(sliceName: string, nodeName: string, path = '/home'): Promise<FileEntry[]> {
+  return fetchJson(`/files/vm/${encodeURIComponent(sliceName)}/${encodeURIComponent(nodeName)}?path=${encodeURIComponent(path)}`);
+}
+
+export function downloadVmFile(sliceName: string, nodeName: string, remotePath: string, destDir: string): Promise<{ downloaded: string; local_path: string }> {
+  return fetchJson(`/files/vm/${encodeURIComponent(sliceName)}/${encodeURIComponent(nodeName)}/download`, {
+    method: 'POST',
+    body: JSON.stringify({ remote_path: remotePath, dest_dir: destDir }),
+  });
+}
+
+export function uploadToVm(sliceName: string, nodeName: string, source: string, dest: string): Promise<{ uploaded: string; remote_path: string }> {
+  return fetchJson(`/files/vm/${encodeURIComponent(sliceName)}/${encodeURIComponent(nodeName)}/upload`, {
+    method: 'POST',
+    body: JSON.stringify({ source, dest }),
+  });
+}
+
+/** Upload files directly from the browser to a VM (bypassing container storage). */
+export async function uploadDirectToVm(
+  sliceName: string,
+  nodeName: string,
+  destPath: string,
+  files: FileList | File[],
+): Promise<{ uploaded: string[] }> {
+  const form = new FormData();
+  for (const f of Array.from(files)) {
+    form.append('files', f);
+  }
+  const res = await fetch(
+    `${BASE}/files/vm/${encodeURIComponent(sliceName)}/${encodeURIComponent(nodeName)}/upload-direct?dest_path=${encodeURIComponent(destPath)}`,
+    { method: 'POST', body: form },
+  );
+  if (!res.ok) {
+    const detail = await res.text();
+    throw new Error(`API error ${res.status}: ${detail}`);
+  }
+  return res.json();
+}
+
+/** Upload files with explicit relative paths directly to a VM (for folder drag-and-drop). */
+export async function uploadDirectToVmWithPaths(
+  sliceName: string,
+  nodeName: string,
+  destPath: string,
+  entries: Array<{ file: File; relativePath: string }>,
+): Promise<{ uploaded: string[] }> {
+  const form = new FormData();
+  for (const { file, relativePath } of entries) {
+    form.append('files', file, relativePath);
+  }
+  const res = await fetch(
+    `${BASE}/files/vm/${encodeURIComponent(sliceName)}/${encodeURIComponent(nodeName)}/upload-direct?dest_path=${encodeURIComponent(destPath)}`,
+    { method: 'POST', body: form },
+  );
+  if (!res.ok) {
+    const detail = await res.text();
+    throw new Error(`API error ${res.status}: ${detail}`);
+  }
+  return res.json();
+}
+
+/** Download a file from a VM directly to the browser/desktop. */
+export async function downloadDirectFromVm(
+  sliceName: string,
+  nodeName: string,
+  remotePath: string,
+): Promise<void> {
+  const url = `${BASE}/files/vm/${encodeURIComponent(sliceName)}/${encodeURIComponent(nodeName)}/download-direct?remote_path=${encodeURIComponent(remotePath)}`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Download failed: ${res.status}`);
+  const blob = await res.blob();
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = remotePath.split('/').pop() || 'download';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(a.href);
+}
+
+/** Download a folder from a VM as a zip file to the browser/desktop. */
+export async function downloadFolderFromVm(
+  sliceName: string,
+  nodeName: string,
+  remotePath: string,
+): Promise<void> {
+  const url = `${BASE}/files/vm/${encodeURIComponent(sliceName)}/${encodeURIComponent(nodeName)}/download-folder?remote_path=${encodeURIComponent(remotePath)}`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Download failed: ${res.status}`);
+  const blob = await res.blob();
+  const folderName = remotePath.split('/').pop() || 'folder';
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `${folderName}.zip`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(a.href);
+}
+
+/** Create a directory on the VM. */
+export function vmMkdir(sliceName: string, nodeName: string, path: string): Promise<{ created: string }> {
+  return fetchJson(`/files/vm/${encodeURIComponent(sliceName)}/${encodeURIComponent(nodeName)}/mkdir`, {
+    method: 'POST',
+    body: JSON.stringify({ path }),
+  });
+}
+
+/** Delete a file or directory on the VM. */
+export function vmDelete(sliceName: string, nodeName: string, path: string): Promise<{ deleted: string }> {
+  return fetchJson(`/files/vm/${encodeURIComponent(sliceName)}/${encodeURIComponent(nodeName)}/delete`, {
+    method: 'POST',
+    body: JSON.stringify({ path }),
+  });
+}
+
+/** Read a text file from a VM for in-browser editing. */
+export function readVmFileContent(sliceName: string, nodeName: string, path: string): Promise<{ path: string; content: string }> {
+  return fetchJson(`/files/vm/${encodeURIComponent(sliceName)}/${encodeURIComponent(nodeName)}/read-content`, {
+    method: 'POST',
+    body: JSON.stringify({ path }),
+  });
+}
+
+/** Write a text file on a VM from in-browser editor. */
+export function writeVmFileContent(sliceName: string, nodeName: string, path: string, content: string): Promise<{ path: string; status: string }> {
+  return fetchJson(`/files/vm/${encodeURIComponent(sliceName)}/${encodeURIComponent(nodeName)}/write-content`, {
+    method: 'POST',
+    body: JSON.stringify({ path, content }),
+  });
+}
+
+// --- Provisioning ---
+
+export function addProvision(rule: { source: string; slice_name: string; node_name: string; dest: string }): Promise<ProvisionRule> {
+  return fetchJson('/files/provisions', {
+    method: 'POST',
+    body: JSON.stringify(rule),
+  });
+}
+
+export function listProvisions(sliceName: string): Promise<ProvisionRule[]> {
+  return fetchJson(`/files/provisions/${encodeURIComponent(sliceName)}`);
+}
+
+export function deleteProvision(sliceName: string, id: string): Promise<{ deleted: string }> {
+  return fetchJson(`/files/provisions/${encodeURIComponent(sliceName)}/${encodeURIComponent(id)}`, { method: 'DELETE' });
+}
+
+export function executeProvisions(sliceName: string, nodeName?: string): Promise<Array<{ id: string; status: string; detail?: string }>> {
+  const q = nodeName ? `?node_name=${encodeURIComponent(nodeName)}` : '';
+  return fetchJson(`/files/provisions/${encodeURIComponent(sliceName)}/execute${q}`, { method: 'POST' });
+}
+
+// --- Boot Config ---
+
+export function getBootConfig(sliceName: string, nodeName: string): Promise<BootConfig> {
+  return fetchJson(`/files/boot-config/${encodeURIComponent(sliceName)}/${encodeURIComponent(nodeName)}`);
+}
+
+export function saveBootConfig(sliceName: string, nodeName: string, config: BootConfig): Promise<BootConfig> {
+  return fetchJson(`/files/boot-config/${encodeURIComponent(sliceName)}/${encodeURIComponent(nodeName)}`, {
+    method: 'PUT',
+    body: JSON.stringify(config),
+  });
+}
+
+export function executeBootConfig(sliceName: string, nodeName: string): Promise<BootExecResult[]> {
+  return fetchJson(`/files/boot-config/${encodeURIComponent(sliceName)}/${encodeURIComponent(nodeName)}/execute`, {
+    method: 'POST',
+  });
 }
 
 export function saveConfig(config: {

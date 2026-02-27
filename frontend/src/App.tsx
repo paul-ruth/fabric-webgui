@@ -7,8 +7,9 @@ import EditorPanel from './components/EditorPanel';
 import DetailPanel from './components/DetailPanel';
 import GeoView from './components/GeoView';
 import BottomPanel from './components/BottomPanel';
-import type { TerminalTab } from './components/BottomPanel';
+import type { TerminalTab, FileBrowserTab } from './components/BottomPanel';
 import ConfigureView from './components/ConfigureView';
+import FileTransferView from './components/FileTransferView';
 import * as api from './api/client';
 import type { SliceSummary, SliceData, SiteInfo, LinkInfo, ComponentModel, SiteMetrics, LinkMetrics, ValidationIssue } from './types/fabric';
 
@@ -18,7 +19,7 @@ export default function App() {
   const [sliceData, setSliceData] = useState<SliceData | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [currentView, setCurrentView] = useState<'editor' | 'geo' | 'configure'>('editor');
+  const [currentView, setCurrentView] = useState<'editor' | 'geo' | 'files' | 'configure'>('editor');
   const [isConfigured, setIsConfigured] = useState<boolean | null>(null);
   const [layout, setLayout] = useState('dagre');
   const [selectedElement, setSelectedElement] = useState<Record<string, string> | null>(null);
@@ -28,8 +29,11 @@ export default function App() {
   const [showDetailPanel, setShowDetailPanel] = useState(true);
   const [terminalTabs, setTerminalTabs] = useState<TerminalTab[]>([]);
   const [terminalIdCounter, setTerminalIdCounter] = useState(0);
+  const [fileBrowserTabs, setFileBrowserTabs] = useState<FileBrowserTab[]>([]);
+  const [fbIdCounter, setFbIdCounter] = useState(0);
   const [validationIssues, setValidationIssues] = useState<ValidationIssue[]>([]);
   const [validationValid, setValidationValid] = useState(false);
+  const [projectName, setProjectName] = useState('');
 
   // --- Global cache: infrastructure ---
   const [infraSites, setInfraSites] = useState<SiteInfo[]>([]);
@@ -64,6 +68,11 @@ export default function App() {
       if (!cfg.configured) {
         setCurrentView('configure');
       }
+      // Derive project name from config
+      if (cfg.project_id && cfg.token_info?.projects) {
+        const proj = cfg.token_info.projects.find((p) => p.uuid === cfg.project_id);
+        if (proj) setProjectName(proj.name);
+      }
     }).catch(() => {
       setIsConfigured(false);
       setCurrentView('configure');
@@ -77,14 +86,27 @@ export default function App() {
     }
   }, []);
 
-  // --- Refresh infrastructure (sites + links) ---
+  // --- Refresh infrastructure (sites + links) + metrics ---
   const refreshInfrastructure = useCallback(async () => {
     setInfraLoading(true);
     const IGNORED = new Set(['AWS', 'AZURE', 'GCP', 'OCI', 'AL2S']);
     try {
       const [allSites, links] = await Promise.all([api.listSites(), api.listLinks()]);
-      setInfraSites(allSites.filter((s) => !IGNORED.has(s.name) && s.lat !== 0 && s.lon !== 0));
+      const filteredSites = allSites.filter((s) => !IGNORED.has(s.name) && s.lat !== 0 && s.lon !== 0);
+      setInfraSites(filteredSites);
       setInfraLinks(links);
+
+      // Refresh all site metrics in parallel
+      Promise.allSettled(filteredSites.map((s) => api.getSiteMetrics(s.name)))
+        .then((results) => {
+          const cache: Record<string, SiteMetrics> = {};
+          results.forEach((r, i) => {
+            if (r.status === 'fulfilled') {
+              cache[filteredSites[i].name] = r.value;
+            }
+          });
+          setSiteMetricsCache((prev) => ({ ...prev, ...cache }));
+        });
     } catch (e: any) {
       setError(e.message);
     } finally {
@@ -120,6 +142,11 @@ export default function App() {
       }
     }
   }, [selectedElement]);
+
+  // --- Auto-fetch infrastructure on startup ---
+  useEffect(() => {
+    if (isConfigured) refreshInfrastructure();
+  }, [isConfigured, refreshInfrastructure]);
 
   // --- Auto-refresh interval for metrics ---
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -319,25 +346,62 @@ export default function App() {
     }
   }, [selectedSliceName, terminalIdCounter]);
 
+  const handleOpenFileBrowsers = useCallback((elements: Record<string, string>[]) => {
+    let counter = fbIdCounter;
+    const newTabs: FileBrowserTab[] = [];
+    for (const el of elements) {
+      if (el.element_type === 'node' && el.management_ip) {
+        const id = `fb-${counter}`;
+        counter++;
+        newTabs.push({
+          id,
+          label: el.name,
+          sliceName: selectedSliceName,
+          nodeName: el.name,
+        });
+      }
+    }
+    if (newTabs.length > 0) {
+      setFbIdCounter(counter);
+      setFileBrowserTabs((prev) => [...prev, ...newTabs]);
+    }
+  }, [selectedSliceName, fbIdCounter]);
+
   const handleContextAction = useCallback((action: ContextMenuAction) => {
     if (action.type === 'terminal') {
       handleOpenTerminals(action.elements);
+    } else if (action.type === 'browse-files') {
+      handleOpenFileBrowsers(action.elements);
     } else if (action.type === 'delete') {
       handleDeleteElements(action.elements);
     }
-  }, [handleOpenTerminals, handleDeleteElements]);
+  }, [handleOpenTerminals, handleOpenFileBrowsers, handleDeleteElements]);
 
   const handleCloseTerminal = useCallback((id: string) => {
     setTerminalTabs((prev) => prev.filter((t) => t.id !== id));
+  }, []);
+
+  const handleCloseFileBrowser = useCallback((id: string) => {
+    setFileBrowserTabs((prev) => prev.filter((f) => f.id !== id));
   }, []);
 
   const handleSliceUpdated = useCallback((data: SliceData) => {
     updateSliceAndValidate(data);
   }, [updateSliceAndValidate]);
 
+  const handleSliceImported = useCallback((data: SliceData) => {
+    setSliceData(data);
+    setSelectedSliceName(data.name);
+    setSlices((prev) => {
+      if (prev.some((s) => s.name === data.name)) return prev;
+      return [...prev, { name: data.name, id: '', state: 'Draft' }];
+    });
+    runValidation(data.name);
+  }, [runValidation]);
+
   return (
     <>
-      <TitleBar dark={dark} currentView={currentView} onToggleDark={() => setDark((d) => !d)} />
+      <TitleBar dark={dark} currentView={currentView} onToggleDark={() => setDark((d) => !d)} projectName={projectName} />
 
       {error && (
         <div style={{
@@ -375,6 +439,7 @@ export default function App() {
         onViewChange={setCurrentView}
         onRefreshResources={refreshInfrastructure}
         infraLoading={infraLoading}
+        onSliceImported={handleSliceImported}
       />
 
       <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
@@ -384,7 +449,19 @@ export default function App() {
               setIsConfigured(true);
               setCurrentView('editor');
               setListLoaded(false);
+              // Refresh project name
+              api.getConfig().then((cfg) => {
+                if (cfg.project_id && cfg.token_info?.projects) {
+                  const proj = cfg.token_info.projects.find((p) => p.uuid === cfg.project_id);
+                  if (proj) setProjectName(proj.name);
+                }
+              }).catch(() => {});
             }}
+          />
+        ) : currentView === 'files' ? (
+          <FileTransferView
+            sliceName={selectedSliceName}
+            sliceData={sliceData}
           />
         ) : currentView === 'editor' ? (
           <>
@@ -431,6 +508,8 @@ export default function App() {
               <BottomPanel
                 terminals={terminalTabs}
                 onCloseTerminal={handleCloseTerminal}
+                fileBrowsers={fileBrowserTabs}
+                onCloseFileBrowser={handleCloseFileBrowser}
                 validationIssues={validationIssues}
                 validationValid={validationValid}
                 sliceState={sliceData?.state ?? ''}

@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 import asyncio
+import json
+import os
 import threading
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from app.fablib_manager import get_fablib
@@ -95,6 +98,21 @@ class CreateNetworkRequest(BaseModel):
     name: str
     type: str = "L2Bridge"  # L2Bridge, L2STS, L2PTP, IPv4, IPv6, etc.
     interfaces: List[str] = []  # list of interface names to attach
+    subnet: Optional[str] = None      # e.g. "192.168.1.0/24"
+    gateway: Optional[str] = None     # e.g. "192.168.1.1"
+    ip_mode: str = "none"             # "auto" | "manual" | "none"
+    interface_ips: Dict[str, str] = {} # {"node1-nic1-p1": "10.0.0.1"}
+
+
+class PostBootConfigRequest(BaseModel):
+    script: str  # bash script content
+
+
+class SliceModelImport(BaseModel):
+    format: str = "fabric-webgui-v1"
+    name: str
+    nodes: List[Dict[str, Any]] = []
+    networks: List[Dict[str, Any]] = []
 
 
 class UpdateNodeRequest(BaseModel):
@@ -406,7 +424,30 @@ def add_network(slice_name: str, req: CreateNetworkRequest) -> dict[str, Any]:
                 for iface in node.get_interfaces():
                     if iface.get_name() == iface_name:
                         ifaces.append(iface)
-        slice_obj.add_l2network(name=req.name, interfaces=ifaces, type=req.type)
+
+        l3_types = {"IPv4", "IPv6", "IPv4Ext", "IPv6Ext", "L3VPN"}
+        if req.type in l3_types:
+            # L3 network — use add_l3network, auto-assign IPs
+            net = slice_obj.add_l3network(name=req.name, interfaces=ifaces, type=req.type)
+            for iface in ifaces:
+                iface.set_mode("auto")
+        else:
+            # L2 network
+            net = slice_obj.add_l2network(name=req.name, interfaces=ifaces, type=req.type)
+            if req.subnet:
+                net.set_subnet(req.subnet)
+            if req.gateway:
+                net.set_gateway(req.gateway)
+            if req.ip_mode == "auto" and req.subnet:
+                for iface in ifaces:
+                    iface.set_mode("auto")
+            elif req.ip_mode == "manual":
+                for iface in ifaces:
+                    iface_name = iface.get_name()
+                    if iface_name in req.interface_ips:
+                        iface.set_mode("manual")
+                        iface.set_ip_addr(addr=req.interface_ips[iface_name])
+
         return _serialize(slice_obj, dirty=True)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -422,3 +463,237 @@ def remove_network(slice_name: str, net_name: str) -> dict[str, Any]:
         return _serialize(slice_obj, dirty=True)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# --- Post-boot config ---
+
+@router.put("/slices/{slice_name}/nodes/{node_name}/post-boot")
+def set_post_boot_config(slice_name: str, node_name: str, req: PostBootConfigRequest) -> dict[str, Any]:
+    """Set a post-boot config script on a node."""
+    try:
+        slice_obj = _get_slice_obj(slice_name)
+        node = slice_obj.get_node(name=node_name)
+        node.add_post_boot_upload_directory(req.script)
+        return _serialize(slice_obj, dirty=True)
+    except AttributeError:
+        # Fallback: use execute() style or set_user_data if available
+        try:
+            slice_obj = _get_slice_obj(slice_name)
+            node = slice_obj.get_node(name=node_name)
+            node.set_user_data({"post_boot_script": req.script})
+            return _serialize(slice_obj, dirty=True)
+        except Exception as e2:
+            raise HTTPException(status_code=500, detail=str(e2))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# --- Slice export/import ---
+
+@router.get("/slices/{slice_name}/export")
+def export_slice(slice_name: str):
+    """Export a slice definition as a downloadable JSON model file."""
+    try:
+        slice_obj = _get_slice_obj(slice_name)
+        data = slice_to_dict(slice_obj)
+
+        model = {
+            "format": "fabric-webgui-v1",
+            "name": data["name"],
+            "nodes": [],
+            "networks": [],
+        }
+
+        for node in data.get("nodes", []):
+            node_model = {
+                "name": node["name"],
+                "site": node.get("site", ""),
+                "cores": node.get("cores", 2),
+                "ram": node.get("ram", 8),
+                "disk": node.get("disk", 10),
+                "image": node.get("image", "default_ubuntu_22"),
+                "components": [],
+            }
+            # Try to read post-boot script from the node object
+            try:
+                fab_node = slice_obj.get_node(name=node["name"])
+                script = fab_node.get_user_data().get("post_boot_script", "")
+                if script:
+                    node_model["post_boot_script"] = script
+            except Exception:
+                pass
+            for comp in node.get("components", []):
+                node_model["components"].append({
+                    "name": comp["name"],
+                    "model": comp.get("model", ""),
+                })
+            model["nodes"].append(node_model)
+
+        for net in data.get("networks", []):
+            net_model = {
+                "name": net["name"],
+                "type": net.get("type", "L2Bridge"),
+                "interfaces": [i["name"] for i in net.get("interfaces", [])],
+                "subnet": net.get("subnet", ""),
+                "gateway": net.get("gateway", ""),
+            }
+            model["networks"].append(net_model)
+
+        return JSONResponse(
+            content=model,
+            headers={
+                "Content-Disposition": f'attachment; filename="{data["name"]}.fabric.json"'
+            },
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/slices/import")
+def import_slice(model: SliceModelImport) -> dict[str, Any]:
+    """Import a slice model and create a new draft."""
+    try:
+        fablib = get_fablib()
+        slice_obj = fablib.new_slice(name=model.name)
+
+        # Add nodes and components
+        for node_def in model.nodes:
+            kwargs: dict[str, Any] = {
+                "name": node_def["name"],
+                "cores": node_def.get("cores", 2),
+                "ram": node_def.get("ram", 8),
+                "disk": node_def.get("disk", 10),
+                "image": node_def.get("image", "default_ubuntu_22"),
+            }
+            site = node_def.get("site", "")
+            if site and site not in ("auto", ""):
+                kwargs["site"] = site
+            node = slice_obj.add_node(**kwargs)
+
+            for comp_def in node_def.get("components", []):
+                node.add_component(
+                    model=comp_def.get("model", "NIC_Basic"),
+                    name=comp_def.get("name", ""),
+                )
+
+            # Apply post-boot script if present
+            post_boot = node_def.get("post_boot_script", "")
+            if post_boot:
+                try:
+                    node.set_user_data({"post_boot_script": post_boot})
+                except Exception:
+                    pass
+
+        # Add networks
+        l3_types = {"IPv4", "IPv6", "IPv4Ext", "IPv6Ext", "L3VPN"}
+        for net_def in model.networks:
+            # Resolve interfaces by name
+            ifaces = []
+            for iface_name in net_def.get("interfaces", []):
+                for node in slice_obj.get_nodes():
+                    for iface in node.get_interfaces():
+                        if iface.get_name() == iface_name:
+                            ifaces.append(iface)
+
+            net_type = net_def.get("type", "L2Bridge")
+            if net_type in l3_types:
+                net = slice_obj.add_l3network(
+                    name=net_def["name"], interfaces=ifaces, type=net_type
+                )
+                for iface in ifaces:
+                    iface.set_mode("auto")
+            else:
+                net = slice_obj.add_l2network(
+                    name=net_def["name"], interfaces=ifaces, type=net_type
+                )
+                subnet = net_def.get("subnet", "")
+                gateway = net_def.get("gateway", "")
+                if subnet:
+                    net.set_subnet(subnet)
+                if gateway:
+                    net.set_gateway(gateway)
+
+                ip_mode = net_def.get("ip_mode", "none")
+                if ip_mode == "auto" and subnet:
+                    for iface in ifaces:
+                        iface.set_mode("auto")
+                elif ip_mode == "manual":
+                    iface_ips = net_def.get("interface_ips", {})
+                    for iface in ifaces:
+                        iname = iface.get_name()
+                        if iname in iface_ips:
+                            iface.set_mode("manual")
+                            iface.set_ip_addr(addr=iface_ips[iname])
+
+        _store_draft(model.name, slice_obj, is_new=True)
+        return _serialize(slice_obj)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# --- Save/Open to container storage ---
+
+@router.post("/slices/{slice_name}/save-to-storage")
+def save_to_storage(slice_name: str):
+    """Export a slice definition and save it to container storage."""
+    import json as _json
+    try:
+        # Reuse export logic
+        resp = export_slice(slice_name)
+        model = resp.body
+        if isinstance(model, bytes):
+            model = _json.loads(model)
+
+        storage_dir = os.environ.get("FABRIC_STORAGE_DIR", "/fabric_storage")
+        os.makedirs(storage_dir, exist_ok=True)
+        filename = f"{slice_name}.fabric.json"
+        path = os.path.join(storage_dir, filename)
+        with open(path, "w") as f:
+            _json.dump(model, f, indent=2)
+        return {"status": "ok", "path": filename}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/slices/storage-files")
+def list_storage_files():
+    """List .fabric.json files in container storage."""
+    storage_dir = os.environ.get("FABRIC_STORAGE_DIR", "/fabric_storage")
+    if not os.path.isdir(storage_dir):
+        return []
+    files = []
+    for name in sorted(os.listdir(storage_dir)):
+        if name.endswith(".fabric.json"):
+            full = os.path.join(storage_dir, name)
+            if os.path.isfile(full):
+                st = os.stat(full)
+                files.append({
+                    "name": name,
+                    "size": st.st_size,
+                    "modified": st.st_mtime,
+                })
+    return files
+
+
+@router.post("/slices/open-from-storage")
+def open_from_storage(body: dict):
+    """Read a .fabric.json file from storage and import it."""
+    import json as _json
+    filename = body.get("filename", "")
+    if not filename:
+        raise HTTPException(status_code=400, detail="filename required")
+
+    storage_dir = os.environ.get("FABRIC_STORAGE_DIR", "/fabric_storage")
+    path = os.path.realpath(os.path.join(storage_dir, filename))
+    if not path.startswith(os.path.realpath(storage_dir)):
+        raise HTTPException(status_code=400, detail="Invalid path")
+    if not os.path.isfile(path):
+        raise HTTPException(status_code=404, detail="File not found")
+
+    with open(path) as f:
+        model_data = _json.load(f)
+
+    model = SliceModelImport(**model_data)
+    return import_slice(model)

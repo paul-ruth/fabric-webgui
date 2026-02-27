@@ -94,6 +94,47 @@ def get_config_status():
                 elif line.startswith("export FABRIC_BASTION_USERNAME="):
                     bastion_username = line.split("=", 1)[1]
 
+    # Read public key contents for display
+    bastion_pub_key = ""
+    slice_pub_key = ""
+    bastion_key_fingerprint = ""
+    slice_key_fingerprint = ""
+
+    bastion_pub_path = os.path.join(_config_dir(), "fabric_bastion_key.pub")
+    if os.path.isfile(bastion_pub_path):
+        with open(bastion_pub_path) as f:
+            bastion_pub_key = f.read().strip()
+
+    # If no separate .pub, derive fingerprint from private key
+    bastion_priv_path = os.path.join(_config_dir(), "fabric_bastion_key")
+    if os.path.isfile(bastion_priv_path):
+        try:
+            from app.routes.terminal import _load_private_key
+            k = _load_private_key(bastion_priv_path)
+            fp_bytes = k.get_fingerprint()
+            bastion_key_fingerprint = ":".join(f"{b:02x}" for b in fp_bytes)
+            if not bastion_pub_key:
+                bastion_pub_key = f"{k.get_name()} {k.get_base64()}"
+        except Exception:
+            pass
+
+    slice_pub_path = os.path.join(_config_dir(), "slice_key.pub")
+    if os.path.isfile(slice_pub_path):
+        with open(slice_pub_path) as f:
+            slice_pub_key = f.read().strip()
+
+    slice_priv_path = os.path.join(_config_dir(), "slice_key")
+    if os.path.isfile(slice_priv_path):
+        try:
+            from app.routes.terminal import _load_private_key
+            k = _load_private_key(slice_priv_path)
+            fp_bytes = k.get_fingerprint()
+            slice_key_fingerprint = ":".join(f"{b:02x}" for b in fp_bytes)
+            if not slice_pub_key:
+                slice_pub_key = f"{k.get_name()} {k.get_base64()}"
+        except Exception:
+            pass
+
     return {
         "configured": is_configured(),
         "has_token": _file_exists("id_token.json"),
@@ -102,6 +143,10 @@ def get_config_status():
         "token_info": token_info,
         "project_id": project_id,
         "bastion_username": bastion_username,
+        "bastion_pub_key": bastion_pub_key,
+        "bastion_key_fingerprint": bastion_key_fingerprint,
+        "slice_pub_key": slice_pub_key,
+        "slice_key_fingerprint": slice_key_fingerprint,
     }
 
 

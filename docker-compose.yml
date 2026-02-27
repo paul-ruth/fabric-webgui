@@ -5,8 +5,10 @@ services:
       - "8000:8000"
     volumes:
       - fabric_config:/fabric_config
+      - fabric_storage:/fabric_storage
     environment:
       - FABRIC_CONFIG_DIR=/fabric_config
+      - FABRIC_STORAGE_DIR=/fabric_storage
       - HOME=/tmp
     restart: unless-stopped
 
@@ -20,3 +22,4 @@ services:
 
 volumes:
   fabric_config:
+  fabric_storage:

@@ -4,9 +4,10 @@ interface TitleBarProps {
   dark: boolean;
   currentView: string;
   onToggleDark: () => void;
+  projectName?: string;
 }
 
-export default function TitleBar({ dark, currentView, onToggleDark }: TitleBarProps) {
+export default function TitleBar({ dark, currentView, onToggleDark, projectName }: TitleBarProps) {
   const modeLabel = currentView === 'configure' ? 'Configure' : currentView === 'editor' ? 'Editor' : 'Geographic';
 
   return (
@@ -14,6 +15,7 @@ export default function TitleBar({ dark, currentView, onToggleDark }: TitleBarPr
       <div className="title-left">
         <img src="/fabric_logo.png" alt="FABRIC" className="fabric-logo" />
         <span className="title-text">FABRIC Visualization Suite</span>
+        {projectName && <span className="title-project">{projectName}</span>}
       </div>
       <div className="title-right">
         <span className="mode-label">{modeLabel}</span>

@@ -33,6 +33,16 @@
   letter-spacing: 0.5px;
 }
 
+.title-bar .title-project {
+  font-size: 12px;
+  opacity: 0.8;
+  margin-left: 14px;
+  padding: 2px 10px;
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 10px;
+  font-weight: 500;
+}
+
 .title-bar .title-right {
   display: flex;
   align-items: center;

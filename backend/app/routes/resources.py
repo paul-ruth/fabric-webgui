@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 import asyncio
+import threading
 import time
 from typing import Any
 
@@ -10,6 +11,9 @@ from fastapi import APIRouter, HTTPException
 from app.fablib_manager import get_fablib
 
 router = APIRouter(tags=["resources"])
+
+# Lock to serialize FABlib resource/topology calls (internal dicts mutate during iteration)
+_fablib_lock = threading.Lock()
 
 # Simple cache for expensive topology queries
 _cache: dict[str, tuple[float, Any]] = {}
@@ -83,27 +87,33 @@ DEFAULT_IMAGES = [
 @router.get("/sites")
 async def list_sites() -> list[dict[str, Any]]:
     """List all FABRIC sites with location and availability."""
+    cached = _cache.get("sites")
+    if cached and time.time() - cached[0] < CACHE_TTL:
+        return cached[1]
+
     def _do():
-        fablib = get_fablib()
-        resources = fablib.get_resources()
-        sites = []
-        for site_name in resources.get_site_names():
-            site = resources.get_site(site_name)
-            location = SITE_LOCATIONS.get(site_name, {"lat": 0, "lon": 0})
-            sites.append({
-                "name": site_name,
-                "lat": location["lat"],
-                "lon": location["lon"],
-                "state": str(site.get_state()) if hasattr(site, "get_state") else "Active",
-                "hosts": _safe_count(site, "get_hosts"),
-                "cores_available": _safe_attr(site, "get_core_available", 0),
-                "cores_capacity": _safe_attr(site, "get_core_capacity", 0),
-                "ram_available": _safe_attr(site, "get_ram_available", 0),
-                "ram_capacity": _safe_attr(site, "get_ram_capacity", 0),
-                "disk_available": _safe_attr(site, "get_disk_available", 0),
-                "disk_capacity": _safe_attr(site, "get_disk_capacity", 0),
-            })
-        return sites
+        with _fablib_lock:
+            fablib = get_fablib()
+            resources = fablib.get_resources()
+            sites = []
+            for site_name in list(resources.get_site_names()):
+                site = resources.get_site(site_name)
+                location = SITE_LOCATIONS.get(site_name, {"lat": 0, "lon": 0})
+                sites.append({
+                    "name": site_name,
+                    "lat": location["lat"],
+                    "lon": location["lon"],
+                    "state": str(site.get_state()) if hasattr(site, "get_state") else "Active",
+                    "hosts": _safe_count(site, "get_hosts"),
+                    "cores_available": _safe_attr(site, "get_core_available", 0),
+                    "cores_capacity": _safe_attr(site, "get_core_capacity", 0),
+                    "ram_available": _safe_attr(site, "get_ram_available", 0),
+                    "ram_capacity": _safe_attr(site, "get_ram_capacity", 0),
+                    "disk_available": _safe_attr(site, "get_disk_available", 0),
+                    "disk_capacity": _safe_attr(site, "get_disk_capacity", 0),
+                })
+            _cache["sites"] = (time.time(), sites)
+            return sites
     try:
         return await asyncio.to_thread(_do)
     except Exception as e:
@@ -115,39 +125,37 @@ async def list_links() -> list[dict[str, Any]]:
     """List unique FABRIC backbone links between sites."""
     import re
 
-    # Return cached result if fresh
     cached = _cache.get("links")
     if cached and time.time() - cached[0] < CACHE_TTL:
         return cached[1]
 
     def _do():
-        fablib = get_fablib()
-        resources = fablib.get_resources()
-        topo = resources.get_topology()
-        seen: set[tuple[str, str]] = set()
-        links = []
-        for link in topo.links.values():
-            try:
-                # Extract site names from link name pattern:
-                # "port+SITE-data-sw:... to port+SITE-data-sw:..."
-                parts = re.findall(r"port\+(\w+)-data-sw:", link.name)
-                if len(parts) < 2:
+        with _fablib_lock:
+            fablib = get_fablib()
+            resources = fablib.get_resources()
+            topo = resources.get_topology()
+            seen: set[tuple[str, str]] = set()
+            links = []
+            for link in list(topo.links.values()):
+                try:
+                    parts = re.findall(r"port\+(\w+)-data-sw:", link.name)
+                    if len(parts) < 2:
+                        continue
+                    site_a, site_b = parts[0].upper(), parts[1].upper()
+                    if site_a == site_b:
+                        continue
+                    pair = tuple(sorted([site_a, site_b]))
+                    if pair in seen:
+                        continue
+                    seen.add(pair)
+                    links.append({
+                        "site_a": pair[0],
+                        "site_b": pair[1],
+                    })
+                except Exception:
                     continue
-                site_a, site_b = parts[0].upper(), parts[1].upper()
-                if site_a == site_b:
-                    continue
-                pair = tuple(sorted([site_a, site_b]))
-                if pair in seen:
-                    continue
-                seen.add(pair)
-                links.append({
-                    "site_a": pair[0],
-                    "site_b": pair[1],
-                })
-            except Exception:
-                continue
-        _cache["links"] = (time.time(), links)
-        return links
+            _cache["links"] = (time.time(), links)
+            return links
     try:
         return await asyncio.to_thread(_do)
     except Exception as e:
@@ -172,43 +180,44 @@ COMPONENT_QUERY_MODELS = [
 async def get_site_detail(site_name: str) -> dict[str, Any]:
     """Get detailed site info including per-component resource allocation."""
     def _do():
-        fablib = get_fablib()
-        resources = fablib.get_resources()
-        site = resources.get_site(site_name)
-        location = SITE_LOCATIONS.get(site_name, {"lat": 0, "lon": 0})
+        with _fablib_lock:
+            fablib = get_fablib()
+            resources = fablib.get_resources()
+            site = resources.get_site(site_name)
+            location = SITE_LOCATIONS.get(site_name, {"lat": 0, "lon": 0})
 
-        components: dict[str, dict[str, int]] = {}
-        for model_name, display_name in COMPONENT_QUERY_MODELS:
-            try:
-                capacity = site.get_component_capacity(model_name)
-                if capacity and capacity > 0:
-                    allocated = site.get_component_allocated(model_name) or 0
-                    available = site.get_component_available(model_name) or 0
-                    components[display_name] = {
-                        "capacity": capacity,
-                        "allocated": allocated,
-                        "available": available,
-                    }
-            except Exception:
-                continue
+            components: dict[str, dict[str, int]] = {}
+            for model_name, display_name in COMPONENT_QUERY_MODELS:
+                try:
+                    capacity = site.get_component_capacity(model_name)
+                    if capacity and capacity > 0:
+                        allocated = site.get_component_allocated(model_name) or 0
+                        available = site.get_component_available(model_name) or 0
+                        components[display_name] = {
+                            "capacity": capacity,
+                            "allocated": allocated,
+                            "available": available,
+                        }
+                except Exception:
+                    continue
 
-        return {
-            "name": site_name,
-            "lat": location["lat"],
-            "lon": location["lon"],
-            "state": str(site.get_state()) if hasattr(site, "get_state") else "Active",
-            "hosts": _safe_count(site, "get_hosts"),
-            "cores_available": _safe_attr(site, "get_core_available", 0),
-            "cores_capacity": _safe_attr(site, "get_core_capacity", 0),
-            "cores_allocated": _safe_attr(site, "get_core_allocated", 0),
-            "ram_available": _safe_attr(site, "get_ram_available", 0),
-            "ram_capacity": _safe_attr(site, "get_ram_capacity", 0),
-            "ram_allocated": _safe_attr(site, "get_ram_allocated", 0),
-            "disk_available": _safe_attr(site, "get_disk_available", 0),
-            "disk_capacity": _safe_attr(site, "get_disk_capacity", 0),
-            "disk_allocated": _safe_attr(site, "get_disk_allocated", 0),
-            "components": components,
-        }
+            return {
+                "name": site_name,
+                "lat": location["lat"],
+                "lon": location["lon"],
+                "state": str(site.get_state()) if hasattr(site, "get_state") else "Active",
+                "hosts": _safe_count(site, "get_hosts"),
+                "cores_available": _safe_attr(site, "get_core_available", 0),
+                "cores_capacity": _safe_attr(site, "get_core_capacity", 0),
+                "cores_allocated": _safe_attr(site, "get_core_allocated", 0),
+                "ram_available": _safe_attr(site, "get_ram_available", 0),
+                "ram_capacity": _safe_attr(site, "get_ram_capacity", 0),
+                "ram_allocated": _safe_attr(site, "get_ram_allocated", 0),
+                "disk_available": _safe_attr(site, "get_disk_available", 0),
+                "disk_capacity": _safe_attr(site, "get_disk_capacity", 0),
+                "disk_allocated": _safe_attr(site, "get_disk_allocated", 0),
+                "components": components,
+            }
     try:
         return await asyncio.to_thread(_do)
     except Exception as e:
@@ -219,23 +228,24 @@ async def get_site_detail(site_name: str) -> dict[str, Any]:
 async def get_resources() -> dict[str, Any]:
     """Get resource availability across all sites."""
     def _do():
-        fablib = get_fablib()
-        resources = fablib.get_resources()
-        result = {}
-        for site_name in resources.get_site_names():
-            try:
-                site = resources.get_site(site_name)
-                result[site_name] = {
-                    "cores_available": _safe_attr(site, "get_core_available"),
-                    "cores_capacity": _safe_attr(site, "get_core_capacity"),
-                    "ram_available": _safe_attr(site, "get_ram_available"),
-                    "ram_capacity": _safe_attr(site, "get_ram_capacity"),
-                    "disk_available": _safe_attr(site, "get_disk_available"),
-                    "disk_capacity": _safe_attr(site, "get_disk_capacity"),
-                }
-            except Exception:
-                result[site_name] = {"error": "unavailable"}
-        return result
+        with _fablib_lock:
+            fablib = get_fablib()
+            resources = fablib.get_resources()
+            result = {}
+            for site_name in list(resources.get_site_names()):
+                try:
+                    site = resources.get_site(site_name)
+                    result[site_name] = {
+                        "cores_available": _safe_attr(site, "get_core_available"),
+                        "cores_capacity": _safe_attr(site, "get_core_capacity"),
+                        "ram_available": _safe_attr(site, "get_ram_available"),
+                        "ram_capacity": _safe_attr(site, "get_ram_capacity"),
+                        "disk_available": _safe_attr(site, "get_disk_available"),
+                        "disk_capacity": _safe_attr(site, "get_disk_capacity"),
+                    }
+                except Exception:
+                    result[site_name] = {"error": "unavailable"}
+            return result
     try:
         return await asyncio.to_thread(_do)
     except Exception as e:

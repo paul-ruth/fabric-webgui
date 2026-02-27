@@ -160,6 +160,10 @@ export interface ConfigStatus {
   } | null;
   project_id: string;
   bastion_username: string;
+  bastion_pub_key?: string;
+  bastion_key_fingerprint?: string;
+  slice_pub_key?: string;
+  slice_key_fingerprint?: string;
 }
 
 export interface ProjectInfo {
@@ -172,4 +176,54 @@ export interface ProjectsResponse {
   bastion_login: string;
   email: string;
   name: string;
+}
+
+export interface FileEntry {
+  name: string;
+  type: 'file' | 'dir';
+  size: number;
+  modified: string;
+}
+
+export interface ProvisionRule {
+  id: string;
+  source: string;
+  slice_name: string;
+  node_name: string;
+  dest: string;
+}
+
+export interface BootUpload {
+  id: string;
+  source: string;   // path relative to container storage
+  dest: string;      // absolute path on VM
+}
+
+export interface BootCommand {
+  id: string;
+  command: string;
+  order: number;
+}
+
+export interface BootNetConfig {
+  id: string;
+  iface: string;
+  mode: 'auto' | 'manual';
+  ip?: string;
+  subnet?: string;
+  gateway?: string;
+  order: number;
+}
+
+export interface BootConfig {
+  uploads: BootUpload[];
+  commands: BootCommand[];
+  network: BootNetConfig[];
+}
+
+export interface BootExecResult {
+  type: 'upload' | 'command' | 'network';
+  id: string;
+  status: 'ok' | 'error';
+  detail?: string;
 }
