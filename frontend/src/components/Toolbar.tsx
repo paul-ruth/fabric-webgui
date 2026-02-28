@@ -1,6 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
 import type { SliceSummary } from '../types/fabric';
-import * as api from '../api/client';
 import Tooltip from './Tooltip';
 import '../styles/toolbar.css';
 
@@ -19,12 +18,12 @@ interface ToolbarProps {
   onDeleteSlice: () => void;
   onRefreshTopology: () => void;
   infraLoading: boolean;
-  onSliceImported?: (data: any) => void;
   onCloneSlice?: (newName: string) => void;
   listLoaded: boolean;
   onLoadSlices: () => void;
   infraLoaded: boolean;
   statusMessage?: string;
+  onSaveSliceTemplate?: () => void;
 }
 
 export default function Toolbar(props: ToolbarProps) {
@@ -32,9 +31,6 @@ export default function Toolbar(props: ToolbarProps) {
   const [confirmingRevert, setConfirmingRevert] = useState(false);
   const [creating, setCreating] = useState(false);
   const [newSliceName, setNewSliceName] = useState('');
-  const [openingFromStorage, setOpeningFromStorage] = useState(false);
-  const [storageFiles, setStorageFiles] = useState<Array<{ name: string; size: number; modified: number }>>([]);
-  const [selectedFile, setSelectedFile] = useState('');
   const [cloning, setCloning] = useState(false);
   const [cloneName, setCloneName] = useState('');
 
@@ -55,38 +51,6 @@ export default function Toolbar(props: ToolbarProps) {
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
   }, [sliceDropOpen]);
-
-  const handleSave = async () => {
-    if (!props.selectedSlice) return;
-    try {
-      const result = await api.saveToStorage(props.selectedSlice);
-      alert(`Saved to storage: ${result.path}`);
-    } catch (e: any) {
-      alert(`Save failed: ${e.message}`);
-    }
-  };
-
-  const handleOpen = async () => {
-    try {
-      const files = await api.listStorageFiles();
-      setStorageFiles(files);
-      setSelectedFile(files.length > 0 ? files[0].name : '');
-      setOpeningFromStorage(true);
-    } catch (e: any) {
-      alert(`Failed to list files: ${e.message}`);
-    }
-  };
-
-  const handleOpenConfirm = async () => {
-    if (!selectedFile) return;
-    try {
-      const result = await api.openFromStorage(selectedFile);
-      props.onSliceImported?.(result);
-      setOpeningFromStorage(false);
-    } catch (err: any) {
-      alert(`Import failed: ${err.message}`);
-    }
-  };
 
   const handleDeleteConfirm = () => {
     props.onDeleteSlice();
@@ -291,19 +255,14 @@ export default function Toolbar(props: ToolbarProps) {
             Clone
           </button>
         </Tooltip>
-      </div>
 
-      {/* --- Template Group --- */}
-      <div className="toolbar-group">
-        <span className="toolbar-group-label">Templates</span>
-        <Tooltip text="Save topology as a reusable template">
-          <button className="toolbar-btn toolbar-btn-template" onClick={handleSave} disabled={!props.selectedSlice || props.loading} data-help-id="toolbar.save-template">
+        <Tooltip text="Save current slice as a reusable template">
+          <button
+            className="toolbar-btn"
+            onClick={() => props.onSaveSliceTemplate?.()}
+            disabled={!hasSlice || !props.sliceState || props.loading}
+          >
             Save Template
-          </button>
-        </Tooltip>
-        <Tooltip text="Load a saved topology template">
-          <button className="toolbar-btn toolbar-btn-template" onClick={handleOpen} disabled={props.loading} data-help-id="toolbar.open-template">
-            Open Template
           </button>
         </Tooltip>
       </div>
@@ -317,7 +276,7 @@ export default function Toolbar(props: ToolbarProps) {
           disabled={props.infraLoading}
           data-help-id="toolbar.refresh-resources"
         >
-          {props.infraLoading ? '\u21BB...' : props.infraLoaded ? '\u21BB Resources' : 'Load Resources'}
+          {props.infraLoading ? '\u21BB Loading Resources...' : props.infraLoaded ? '\u21BB Refresh Resources' : 'Load Resources'}
         </button>
       </Tooltip>
 
@@ -395,40 +354,6 @@ export default function Toolbar(props: ToolbarProps) {
         </div>
       )}
 
-      {/* --- Modal: Open from storage --- */}
-      {openingFromStorage && (
-        <div className="toolbar-modal-overlay" onClick={() => setOpeningFromStorage(false)}>
-          <div className="toolbar-modal" onClick={(e) => e.stopPropagation()}>
-            <h4>Open Topology Template</h4>
-            <p>Select a saved template to create a new slice with the same topology.</p>
-            {storageFiles.length === 0 ? (
-              <p style={{ fontSize: 13, color: 'var(--fabric-text-muted)' }}>
-                No templates found. Save a slice topology first or upload .fabric.json files via the Files view.
-              </p>
-            ) : (
-              <select
-                className="toolbar-modal-input"
-                value={selectedFile}
-                onChange={(e) => setSelectedFile(e.target.value)}
-              >
-                {storageFiles.map((f) => (
-                  <option key={f.name} value={f.name}>{f.name}</option>
-                ))}
-              </select>
-            )}
-            <div className="toolbar-modal-actions">
-              <button onClick={() => setOpeningFromStorage(false)}>Cancel</button>
-              <button
-                className="primary"
-                onClick={handleOpenConfirm}
-                disabled={!selectedFile || storageFiles.length === 0}
-              >
-                Open
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

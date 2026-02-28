@@ -105,7 +105,7 @@ def _get_sftp(slice_name: str, node_name: str):
     if not management_ip:
         raise HTTPException(status_code=400, detail="Node has no management IP")
 
-    ssh_config = _get_ssh_config()
+    ssh_config = _get_ssh_config(slice_name=slice_name)
     bastion = _connect_bastion(ssh_config)
     channel = _open_tunnel(bastion, management_ip)
 
@@ -135,7 +135,7 @@ async def list_files(path: str = ""):
         raise HTTPException(status_code=404, detail="Directory not found")
     entries = []
     for name in sorted(os.listdir(target)):
-        if name in (".provisions", ".boot-config"):
+        if name in (".provisions", ".boot-config", ".slice-keys", ".templates", ".vm-templates"):
             continue
         full = os.path.join(target, name)
         try:
@@ -241,7 +241,7 @@ async def download_folder(path: str = ""):
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         for root, dirs, files in os.walk(target):
             # Skip internal directories
-            dirs[:] = [d for d in dirs if d not in (".provisions", ".boot-config")]
+            dirs[:] = [d for d in dirs if d not in (".provisions", ".boot-config", ".slice-keys")]
             for fname in files:
                 full = os.path.join(root, fname)
                 arcname = os.path.relpath(full, target)
@@ -546,6 +546,21 @@ async def vm_delete(slice_name: str, node_name: str, body: VmDeleteRequest):
     return await asyncio.to_thread(_do)
 
 
+class VmExecBody(BaseModel):
+    command: str
+
+
+@router.post("/api/files/vm/{slice_name}/{node_name}/execute")
+async def execute_on_vm(slice_name: str, node_name: str, body: VmExecBody):
+    """Execute an ad-hoc command on a VM node."""
+    def _do():
+        node_obj = _get_node(slice_name, node_name)
+        stdout, stderr = node_obj.execute(body.command, quiet=True)
+        return {"stdout": stdout or "", "stderr": stderr or ""}
+
+    return await asyncio.to_thread(_do)
+
+
 # ---------------------------------------------------------------------------
 # Provisioning endpoints
 # ---------------------------------------------------------------------------
@@ -628,19 +643,77 @@ def _boot_config_dir(slice_name: str) -> str:
 
 
 def _load_boot_config(slice_name: str, node_name: str) -> dict:
+    """Load boot config.  Priority: .boot-config/ JSON file, then FABlib user_data."""
     path = os.path.join(_boot_config_dir(slice_name), f"{node_name}.json")
-    if not os.path.isfile(path):
-        return {"uploads": [], "commands": [], "network": []}
-    with open(path) as f:
-        data = json.load(f)
-    data.setdefault("network", [])
-    return data
+    if os.path.isfile(path):
+        with open(path) as f:
+            data = json.load(f)
+        data.setdefault("network", [])
+        return data
+
+    # Fallback: read from FABlib user_data (persists with slice)
+    return _load_boot_config_from_fablib(slice_name, node_name)
+
+
+def _load_boot_config_from_fablib(slice_name: str, node_name: str) -> dict:
+    """Read boot config from FABlib node user_data."""
+    empty = {"uploads": [], "commands": [], "network": []}
+    try:
+        fablib = get_fablib()
+        slice_obj = fablib.get_slice(slice_name)
+        node = slice_obj.get_node(node_name)
+        user_data = node.get_user_data()
+        bc = user_data.get("boot_config")
+        if bc and isinstance(bc, dict):
+            bc.setdefault("uploads", [])
+            bc.setdefault("commands", [])
+            bc.setdefault("network", [])
+            return bc
+    except Exception:
+        pass
+    return empty
 
 
 def _save_boot_config(slice_name: str, node_name: str, config: dict):
+    """Save boot config to .boot-config/ JSON and to FABlib user_data."""
+    # 1. Save to local JSON file (working copy for execute)
     path = os.path.join(_boot_config_dir(slice_name), f"{node_name}.json")
     with open(path, "w") as f:
         json.dump(config, f, indent=2)
+
+    # 2. Save to FABlib user_data so it persists with the slice
+    _save_boot_config_to_fablib(slice_name, node_name, config)
+
+
+def _save_boot_config_to_fablib(slice_name: str, node_name: str, config: dict):
+    """Write boot config into FABlib node user_data and post_boot_tasks."""
+    try:
+        from app.routes.slices import _get_slice_obj
+        slice_obj = _get_slice_obj(slice_name)
+        node = slice_obj.get_node(name=node_name)
+        user_data = node.get_user_data()
+
+        # Store full boot_config in user_data for round-tripping
+        user_data["boot_config"] = {
+            "uploads": config.get("uploads", []),
+            "commands": config.get("commands", []),
+            "network": config.get("network", []),
+        }
+
+        # Also set post_boot_tasks using FABlib's native format
+        # so FABlib's own post-boot system can execute them on submit
+        tasks = []
+        for u in config.get("uploads", []):
+            tasks.append(("upload_directory", u.get("source", ""), u.get("dest", ".")))
+        for c in sorted(config.get("commands", []), key=lambda x: x.get("order", 0)):
+            tasks.append(("execute", c.get("command", "")))
+        if "fablib_data" not in user_data:
+            user_data["fablib_data"] = {}
+        user_data["fablib_data"]["post_boot_tasks"] = tasks
+
+        node.set_user_data(user_data)
+    except Exception as e:
+        logging.warning("Could not save boot config to FABlib user_data: %s", e)
 
 
 # ---------------------------------------------------------------------------

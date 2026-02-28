@@ -33,6 +33,7 @@ export default function FileBrowser({ mode, sliceName, nodeName, sliceData, onPr
   const [provDest, setProvDest] = useState('/home/');
   const [dragOver, setDragOver] = useState(false);
   const [editingFile, setEditingFile] = useState<string | null>(null);
+  const [showHidden, setShowHidden] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const refresh = useCallback(async () => {
@@ -248,8 +249,10 @@ export default function FileBrowser({ mode, sliceName, nodeName, sliceData, onPr
   const pathParts = currentPath.split('/').filter(Boolean);
   const nodes: SliceNode[] = sliceData?.nodes ?? [];
 
+  const visibleEntries = showHidden ? entries : entries.filter((e) => !e.name.startsWith('.'));
+
   const hasSelectedFiles = Array.from(selected).some((name) => {
-    const entry = entries.find((e) => e.name === name);
+    const entry = visibleEntries.find((e) => e.name === name);
     return entry && entry.type === 'file';
   });
 
@@ -330,7 +333,16 @@ export default function FileBrowser({ mode, sliceName, nodeName, sliceData, onPr
         )}
         {mode === 'vm' && (
           <button className="primary" onClick={handleDownloadToContainer} disabled={!hasSelectedFiles}>
-            Download to Container
+            Download to Local
+          </button>
+        )}
+        {mode === 'container' && (
+          <button
+            className={showHidden ? 'fb-toggle-active' : ''}
+            onClick={() => setShowHidden((v) => !v)}
+            title={showHidden ? 'Hide hidden files' : 'Show hidden files'}
+          >
+            .hidden
           </button>
         )}
         <button onClick={refresh} disabled={loading} title="Refresh">↻</button>
@@ -342,7 +354,7 @@ export default function FileBrowser({ mode, sliceName, nodeName, sliceData, onPr
       <div className="fb-table-wrap">
         {loading ? (
           <div className="fb-loading">Loading...</div>
-        ) : entries.length === 0 ? (
+        ) : visibleEntries.length === 0 ? (
           <div className="fb-empty">
             {mode === 'container' ? 'Empty directory. Upload files or create a folder.' : 'Empty directory.'}
           </div>
@@ -365,7 +377,7 @@ export default function FileBrowser({ mode, sliceName, nodeName, sliceData, onPr
                   <td></td>
                 </tr>
               )}
-              {entries.map((entry) => (
+              {visibleEntries.map((entry) => (
                 <tr
                   key={entry.name}
                   className={`fb-row ${selected.has(entry.name) ? 'selected' : ''}`}

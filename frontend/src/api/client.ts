@@ -1,6 +1,6 @@
 /** API client for the FABRIC Web GUI backend. */
 
-import type { SliceSummary, SliceData, SiteInfo, SiteDetail, LinkInfo, ComponentModel, ConfigStatus, ProjectsResponse, ValidationResult, SiteMetrics, LinkMetrics, FileEntry, ProvisionRule, BootConfig, BootExecResult } from '../types/fabric';
+import type { SliceSummary, SliceData, SiteInfo, SiteDetail, LinkInfo, ComponentModel, ConfigStatus, ProjectsResponse, ValidationResult, SiteMetrics, LinkMetrics, FileEntry, ProvisionRule, BootConfig, BootExecResult, SliceKeySet, VMTemplateSummary, VMTemplateDetail } from '../types/fabric';
 
 const BASE = '/api';
 
@@ -46,6 +46,10 @@ export function deleteSlice(name: string): Promise<{ status: string }> {
   return fetchJson(`/slices/${encodeURIComponent(name)}`, { method: 'DELETE' });
 }
 
+export function cloneSlice(name: string, newName: string): Promise<SliceData> {
+  return fetchJson(`/slices/${encodeURIComponent(name)}/clone?new_name=${encodeURIComponent(newName)}`, { method: 'POST' });
+}
+
 // --- Nodes ---
 
 export function addNode(
@@ -62,6 +66,17 @@ export function removeNode(sliceName: string, nodeName: string): Promise<SliceDa
   return fetchJson(
     `/slices/${encodeURIComponent(sliceName)}/nodes/${encodeURIComponent(nodeName)}`,
     { method: 'DELETE' }
+  );
+}
+
+export function updateNode(
+  sliceName: string,
+  nodeName: string,
+  updates: { site?: string; cores?: number; ram?: number; disk?: number; image?: string }
+): Promise<SliceData> {
+  return fetchJson(
+    `/slices/${encodeURIComponent(sliceName)}/nodes/${encodeURIComponent(nodeName)}`,
+    { method: 'PUT', body: JSON.stringify(updates) }
   );
 }
 
@@ -85,6 +100,25 @@ export function removeComponent(
 ): Promise<SliceData> {
   return fetchJson(
     `/slices/${encodeURIComponent(sliceName)}/nodes/${encodeURIComponent(nodeName)}/components/${encodeURIComponent(compName)}`,
+    { method: 'DELETE' }
+  );
+}
+
+// --- Facility Ports ---
+
+export function addFacilityPort(
+  sliceName: string,
+  data: { name: string; site: string; vlan?: string; bandwidth?: number }
+): Promise<SliceData> {
+  return fetchJson(`/slices/${encodeURIComponent(sliceName)}/facility-ports`, {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+export function removeFacilityPort(sliceName: string, fpName: string): Promise<SliceData> {
+  return fetchJson(
+    `/slices/${encodeURIComponent(sliceName)}/facility-ports/${encodeURIComponent(fpName)}`,
     { method: 'DELETE' }
   );
 }
@@ -192,6 +226,68 @@ export function importSlice(model: SliceModel): Promise<SliceData> {
   });
 }
 
+// --- Templates ---
+
+export interface TemplateSummary {
+  name: string;
+  description: string;
+  source_slice: string;
+  created: string;
+  node_count: number;
+  network_count: number;
+  dir_name: string;
+}
+
+export function listTemplates(): Promise<TemplateSummary[]> {
+  return fetchJson('/templates');
+}
+
+export function saveTemplate(data: { name: string; description: string; slice_name: string }): Promise<TemplateSummary> {
+  return fetchJson('/templates', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+export function loadTemplate(name: string, sliceName?: string): Promise<SliceData> {
+  return fetchJson(`/templates/${encodeURIComponent(name)}/load`, {
+    method: 'POST',
+    body: JSON.stringify({ slice_name: sliceName || '' }),
+  });
+}
+
+export function deleteTemplate(name: string): Promise<{ status: string; name: string }> {
+  return fetchJson(`/templates/${encodeURIComponent(name)}`, { method: 'DELETE' });
+}
+
+// --- VM Templates ---
+
+export function listVmTemplates(): Promise<VMTemplateSummary[]> {
+  return fetchJson('/vm-templates');
+}
+
+export function getVmTemplate(name: string): Promise<VMTemplateDetail> {
+  return fetchJson(`/vm-templates/${encodeURIComponent(name)}`);
+}
+
+export function saveVmTemplate(data: { name: string; description: string; image: string; boot_config: BootConfig }): Promise<VMTemplateDetail> {
+  return fetchJson('/vm-templates', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+export function updateVmTemplate(name: string, data: { description?: string; image?: string; boot_config?: BootConfig }): Promise<VMTemplateDetail> {
+  return fetchJson(`/vm-templates/${encodeURIComponent(name)}`, {
+    method: 'PUT',
+    body: JSON.stringify(data),
+  });
+}
+
+export function deleteVmTemplate(name: string): Promise<{ status: string; name: string }> {
+  return fetchJson(`/vm-templates/${encodeURIComponent(name)}`, { method: 'DELETE' });
+}
+
 // --- Resources ---
 
 export function listSites(): Promise<SiteInfo[]> {
@@ -267,12 +363,13 @@ export async function uploadBastionKey(file: File): Promise<{ status: string; me
 
 export async function uploadSliceKeys(
   privateKey: File,
-  publicKey: File
+  publicKey: File,
+  keyName = 'default',
 ): Promise<{ status: string; message: string }> {
   const form = new FormData();
   form.append('private_key', privateKey);
   form.append('public_key', publicKey);
-  const res = await fetch(`${BASE}/config/keys/slice`, { method: 'POST', body: form });
+  const res = await fetch(`${BASE}/config/keys/slice?key_name=${encodeURIComponent(keyName)}`, { method: 'POST', body: form });
   if (!res.ok) {
     const detail = await res.text();
     throw new Error(`API error ${res.status}: ${detail}`);
@@ -280,8 +377,49 @@ export async function uploadSliceKeys(
   return res.json();
 }
 
-export function generateSliceKeys(): Promise<{ status: string; public_key: string; message: string }> {
-  return fetchJson('/config/keys/slice/generate', { method: 'POST' });
+export function generateSliceKeys(keyName = 'default'): Promise<{ status: string; public_key: string; message: string }> {
+  return fetchJson(`/config/keys/slice/generate?key_name=${encodeURIComponent(keyName)}`, { method: 'POST' });
+}
+
+// --- Slice Key Sets ---
+
+export function listSliceKeySets(): Promise<SliceKeySet[]> {
+  return fetchJson('/config/keys/slice/list');
+}
+
+export async function uploadSliceKeysNamed(
+  privateKey: File,
+  publicKey: File,
+  keyName: string,
+): Promise<{ status: string; message: string }> {
+  const form = new FormData();
+  form.append('private_key', privateKey);
+  form.append('public_key', publicKey);
+  const res = await fetch(`${BASE}/config/keys/slice?key_name=${encodeURIComponent(keyName)}`, { method: 'POST', body: form });
+  if (!res.ok) {
+    const detail = await res.text();
+    throw new Error(`API error ${res.status}: ${detail}`);
+  }
+  return res.json();
+}
+
+export function setDefaultSliceKey(name: string): Promise<{ status: string; default: string }> {
+  return fetchJson(`/config/keys/slice/default?key_name=${encodeURIComponent(name)}`, { method: 'PUT' });
+}
+
+export function deleteSliceKeySet(name: string): Promise<{ status: string; deleted: string }> {
+  return fetchJson(`/config/keys/slice/${encodeURIComponent(name)}`, { method: 'DELETE' });
+}
+
+export function getSliceKeyAssignment(sliceName: string): Promise<{ slice_name: string; slice_key_id: string }> {
+  return fetchJson(`/config/slice-key/${encodeURIComponent(sliceName)}`);
+}
+
+export function setSliceKeyAssignment(sliceName: string, keyId: string): Promise<{ status: string }> {
+  return fetchJson(`/config/slice-key/${encodeURIComponent(sliceName)}`, {
+    method: 'PUT',
+    body: JSON.stringify({ slice_key_id: keyId }),
+  });
 }
 
 // --- Files (container storage) ---
@@ -490,6 +628,14 @@ export function vmDelete(sliceName: string, nodeName: string, path: string): Pro
   return fetchJson(`/files/vm/${encodeURIComponent(sliceName)}/${encodeURIComponent(nodeName)}/delete`, {
     method: 'POST',
     body: JSON.stringify({ path }),
+  });
+}
+
+/** Execute an ad-hoc command on a VM node. */
+export function executeOnVm(sliceName: string, nodeName: string, command: string): Promise<{ stdout: string; stderr: string }> {
+  return fetchJson(`/files/vm/${encodeURIComponent(sliceName)}/${encodeURIComponent(nodeName)}/execute`, {
+    method: 'POST',
+    body: JSON.stringify({ command }),
   });
 }
 

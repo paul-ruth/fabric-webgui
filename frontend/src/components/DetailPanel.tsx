@@ -3,6 +3,12 @@ import type { SliceData, SliceNode, SliceNetwork, SiteDetail, SiteMetrics, LinkM
 import { getSiteDetail } from '../api/client';
 import '../styles/editor.css';
 
+interface DragHandleProps {
+  draggable: boolean;
+  onDragStart: (e: React.DragEvent) => void;
+  onDragEnd: (e: React.DragEvent) => void;
+}
+
 interface DetailPanelProps {
   sliceData: SliceData | null;
   selectedElement: Record<string, string> | null;
@@ -13,19 +19,25 @@ interface DetailPanelProps {
   onMetricsRefreshRateChange: (rate: number) => void;
   onRefreshMetrics: () => void;
   metricsLoading: boolean;
+  dragHandleProps?: DragHandleProps;
+  panelIcon?: string;
 }
 
 export default function DetailPanel({
   sliceData, selectedElement, onCollapse,
   siteMetricsCache, linkMetricsCache,
   metricsRefreshRate, onMetricsRefreshRateChange, onRefreshMetrics, metricsLoading,
+  dragHandleProps, panelIcon,
 }: DetailPanelProps) {
   if (!selectedElement) {
     return (
       <div className="detail-panel">
-        <div className="detail-header">
-          <span>Details</span>
-          {onCollapse && <button className="collapse-btn" onClick={onCollapse} title="Collapse detail panel">▶</button>}
+        <div className="detail-header" {...(dragHandleProps || {})}>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+            <span className="panel-drag-handle">{'\u283F'}</span>
+            Details
+          </span>
+          {onCollapse && <button className="collapse-btn" onClick={(e) => { e.stopPropagation(); onCollapse(); }} title="Collapse detail panel">{panelIcon || '\u2139'}</button>}
         </div>
         <div className="detail-body">
           <div className="detail-empty">Click an element to view details</div>
@@ -49,13 +61,14 @@ export default function DetailPanel({
 
   return (
     <div className="detail-panel">
-      <div className="detail-header">
-        <span>
+      <div className="detail-header" {...(dragHandleProps || {})}>
+        <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+          <span className="panel-drag-handle">{'\u283F'}</span>
           {typeLabels[elementType] ?? elementType}
           {' — '}
           {selectedElement.name || selectedElement.label}
         </span>
-        {onCollapse && <button className="collapse-btn" onClick={onCollapse} title="Collapse detail panel">▶</button>}
+        {onCollapse && <button className="collapse-btn" onClick={(e) => { e.stopPropagation(); onCollapse(); }} title="Collapse detail panel">{panelIcon || '\u2139'}</button>}
       </div>
       <div className="detail-body">
         {elementType === 'node' && sliceData && <NodeDetail node={findNode(sliceData, selectedElement.name)} data={selectedElement} />}

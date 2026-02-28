@@ -2,15 +2,25 @@
 from __future__ import annotations
 
 import asyncio
+import fcntl
 import json
 import logging
 import os
+import pty
+import struct
+import subprocess
+import termios
 from typing import Optional
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 import paramiko
 
-from app.fablib_manager import get_fablib
+from app.fablib_manager import (
+    DEFAULT_CONFIG_DIR,
+    get_fablib,
+    get_default_slice_key_path,
+    get_slice_key_path,
+)
 
 router = APIRouter()
 
@@ -32,21 +42,44 @@ def _load_private_key(path: str) -> paramiko.PKey:
 logger = logging.getLogger(__name__)
 
 
-def _get_ssh_config():
-    """Get SSH connection parameters from FABlib config."""
+def _get_ssh_config(slice_name: Optional[str] = None):
+    """Get SSH connection parameters from FABlib config.
+
+    If *slice_name* is provided, check for a per-slice key assignment first.
+    """
     fablib = get_fablib()
-    config_dir = os.environ.get(
-        "FABRIC_CONFIG_DIR",
-        "/fabric_config",
-    )
+    config_dir = os.environ.get("FABRIC_CONFIG_DIR", DEFAULT_CONFIG_DIR)
     bastion_key = os.environ.get(
         "FABRIC_BASTION_KEY_LOCATION",
         os.path.join(config_dir, "fabric_bastion_key"),
     )
-    slice_key = os.environ.get(
-        "FABRIC_SLICE_PRIVATE_KEY_FILE",
-        os.path.join(config_dir, "slice_key"),
-    )
+
+    # Determine slice key: per-slice assignment > default key set > env var
+    slice_key = None
+    if slice_name:
+        storage_dir = os.environ.get("FABRIC_STORAGE_DIR", "/fabric_storage")
+        assignment_path = os.path.join(storage_dir, ".slice-keys", f"{slice_name}.json")
+        if os.path.isfile(assignment_path):
+            try:
+                with open(assignment_path) as f:
+                    assignment = json.load(f)
+                key_id = assignment.get("slice_key_id", "")
+                if key_id:
+                    priv, _pub = get_slice_key_path(config_dir, key_id)
+                    if os.path.isfile(priv):
+                        slice_key = priv
+            except Exception:
+                pass
+
+    if not slice_key:
+        priv, _pub = get_default_slice_key_path(config_dir)
+        if os.path.isfile(priv):
+            slice_key = priv
+        else:
+            slice_key = os.environ.get(
+                "FABRIC_SLICE_PRIVATE_KEY_FILE",
+                os.path.join(config_dir, "slice_key"),
+            )
 
     # Get bastion username from fablib
     try:
@@ -135,7 +168,7 @@ async def terminal_ws(websocket: WebSocket, slice_name: str, node_name: str):
 
         # Step 2: Load SSH config
         await websocket.send_text("[terminal] Loading SSH keys and configuration...\r\n")
-        ssh_config = _get_ssh_config()
+        ssh_config = _get_ssh_config(slice_name=slice_name)
 
         # Step 3: Connect to bastion
         await websocket.send_text(f"[terminal] Connecting to bastion {ssh_config['bastion_host']}...\r\n")
@@ -225,6 +258,95 @@ def _read_shell(shell) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Container terminal WebSocket (local PTY)
+# ---------------------------------------------------------------------------
+
+@router.websocket("/ws/terminal/container")
+async def container_terminal_ws(websocket: WebSocket):
+    """WebSocket endpoint for an interactive shell on the container itself."""
+    await websocket.accept()
+
+    loop = asyncio.get_event_loop()
+    master_fd = None
+    proc = None
+
+    try:
+        # Create a pseudo-terminal
+        master_fd, slave_fd = pty.openpty()
+
+        # Start bash in the container, defaulting to /fabric_storage/
+        cwd = "/fabric_storage/" if os.path.isdir("/fabric_storage") else os.path.expanduser("~")
+        proc = subprocess.Popen(
+            ["/bin/bash"],
+            stdin=slave_fd,
+            stdout=slave_fd,
+            stderr=slave_fd,
+            cwd=cwd,
+            preexec_fn=os.setsid,
+            env={**os.environ, "TERM": "xterm-256color"},
+        )
+        os.close(slave_fd)
+
+        # Read from master fd and send to WebSocket
+        async def read_pty():
+            while True:
+                try:
+                    data = await loop.run_in_executor(None, _read_master, master_fd)
+                    if data:
+                        await websocket.send_text(data)
+                    else:
+                        await asyncio.sleep(0.05)
+                except Exception:
+                    break
+
+        read_task = asyncio.create_task(read_pty())
+
+        # Read from WebSocket and write to master fd
+        while True:
+            try:
+                msg = await websocket.receive_text()
+                parsed = json.loads(msg)
+                if parsed.get("type") == "input":
+                    os.write(master_fd, parsed["data"].encode("utf-8"))
+                elif parsed.get("type") == "resize":
+                    cols = parsed.get("cols", 80)
+                    rows = parsed.get("rows", 24)
+                    winsize = struct.pack("HHHH", rows, cols, 0, 0)
+                    fcntl.ioctl(master_fd, termios.TIOCSWINSZ, winsize)
+            except WebSocketDisconnect:
+                break
+            except Exception:
+                break
+
+        read_task.cancel()
+
+    finally:
+        if master_fd is not None:
+            try:
+                os.close(master_fd)
+            except OSError:
+                pass
+        if proc is not None:
+            try:
+                proc.terminate()
+                proc.wait(timeout=2)
+            except Exception:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+
+
+def _read_master(fd: int) -> str:
+    """Read available data from a PTY master fd."""
+    try:
+        data = os.read(fd, 4096)
+        return data.decode("utf-8", errors="replace") if data else ""
+    except OSError:
+        return ""
+
+
+# ---------------------------------------------------------------------------
 # Log file streaming WebSocket
 # ---------------------------------------------------------------------------
 
@@ -233,7 +355,7 @@ async def logs_ws(websocket: WebSocket):
     """Stream the FABlib log file to the client, tail -f style."""
     await websocket.accept()
 
-    config_dir = os.environ.get("FABRIC_CONFIG_DIR", "/fabric_config")
+    config_dir = os.environ.get("FABRIC_CONFIG_DIR", DEFAULT_CONFIG_DIR)
 
     # Check fabric_rc for log file path
     log_file = "/tmp/fablib/fablib.log"

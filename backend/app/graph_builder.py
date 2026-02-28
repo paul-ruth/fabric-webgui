@@ -52,6 +52,33 @@ COMPONENT_ABBREV = {
     "NVME_P4510": "NVMe",
 }
 
+# Component model to category (for CSS class)
+COMPONENT_CATEGORY = {
+    "NIC_Basic": "nic",
+    "NIC_ConnectX_5": "nic",
+    "NIC_ConnectX_6": "nic",
+    "NIC_ConnectX_7": "nic",
+    "GPU_TeslaT4": "gpu",
+    "GPU_RTX6000": "gpu",
+    "GPU_A30": "gpu",
+    "GPU_A40": "gpu",
+    "FPGA_Xilinx_U280": "fpga",
+    "NVME_P4510": "nvme",
+}
+
+
+def _strip_node_prefix(name: str, node_name: str) -> str:
+    """Strip the node name prefix from interface/component names.
+
+    FABRIC names interfaces as '{node}-{component}-p{port}-{idx}'.
+    Showing just '{component}-p{port}-{idx}' is cleaner since the
+    VM context is already visually clear.
+    """
+    prefix = f"{node_name}-"
+    if name.startswith(prefix):
+        return name[len(prefix):]
+    return name
+
 
 def _component_summary(components: list) -> str:
     """Build abbreviated component summary like 'NIC x2  GPU'."""
@@ -105,15 +132,20 @@ def build_graph(slice_data: dict) -> dict[str, Any]:
         state = node.get("reservation_state", "Unknown")
         state_colors = STATE_COLORS.get(state, DEFAULT_STATE)
         state_colors_dark = STATE_COLORS_DARK.get(state, DEFAULT_STATE_DARK)
-        comp_summary = _component_summary(node.get("components", []))
+        components = node.get("components", [])
+
+        # Separate components: those with interfaces get graph nodes,
+        # those without get summarized in the VM label
+        comps_with_ifaces = [c for c in components if c.get("interfaces")]
+        comps_without_ifaces = [c for c in components if not c.get("interfaces")]
 
         label_lines = [
             node_name,
             f"@ {site}",
             f"{cores}c / {ram}G / {disk}G",
         ]
-        if comp_summary:
-            label_lines.append(comp_summary)
+        if comps_without_ifaces:
+            label_lines.append(_component_summary(comps_without_ifaces))
 
         node_id = f"node:{slice_id}:{node_name}"
         nodes.append({
@@ -140,6 +172,46 @@ def build_graph(slice_data: dict) -> dict[str, Any]:
             "classes": "vm",
         })
 
+        # Component badge nodes for interface-bearing components.
+        # These are independent nodes (NOT children of the VM) so the VM
+        # keeps its fixed size and centered label.  The frontend positions
+        # them at the bottom edge of the VM after layout.
+        for comp in comps_with_ifaces:
+            comp_name = comp.get("name", "")
+            comp_model = comp.get("model", "")
+            short_comp = _strip_node_prefix(comp_name, node_name)
+            abbrev = COMPONENT_ABBREV.get(comp_model, comp_model[:6])
+            category = COMPONENT_CATEGORY.get(comp_model, "nic")
+            comp_id = f"comp:{slice_id}:{node_name}:{comp_name}"
+
+            nodes.append({
+                "data": {
+                    "id": comp_id,
+                    "parent_vm": node_id,
+                    "label": short_comp,
+                    "element_type": "component",
+                    "name": comp_name,
+                    "model": comp_model,
+                    "node_name": node_name,
+                },
+                "classes": f"component component-{category}",
+            })
+
+    # Build lookup: interface name → component node ID
+    # so edges can route from the specific component rather than the VM
+    iface_to_comp: dict[str, str] = {}
+    iface_to_comp_name: dict[str, str] = {}
+    for node in slice_data.get("nodes", []):
+        node_name = node["name"]
+        for comp in node.get("components", []):
+            comp_name = comp.get("name", "")
+            comp_id = f"comp:{slice_id}:{node_name}:{comp_name}"
+            for ci in comp.get("interfaces", []):
+                ci_name = ci.get("name", "")
+                if ci_name:
+                    iface_to_comp[ci_name] = comp_id
+                    iface_to_comp_name[ci_name] = comp_name
+
     # Network nodes
     for net in slice_data.get("networks", []):
         net_name = net["name"]
@@ -162,14 +234,20 @@ def build_graph(slice_data: dict) -> dict[str, Any]:
             "classes": f"network-{layer.lower()}",
         })
 
-        # Edges from nodes to networks via interfaces
+        # Edges from nodes/components to networks via interfaces
         for iface in net.get("interfaces", []):
             iface_node = iface.get("node_name", "")
             iface_name = iface.get("name", "")
             if iface_node:
-                source_id = f"node:{slice_id}:{iface_node}"
+                vm_id = f"node:{slice_id}:{iface_node}"
+                # Route from component if available, else from VM
+                comp_id = iface_to_comp.get(iface_name, "")
+                source_id = comp_id if comp_id else vm_id
+                comp_name = iface_to_comp_name.get(iface_name, "")
+
                 edge_id = f"edge:{slice_id}:{iface_name}"
-                edge_label_parts = []
+                short_iface = _strip_node_prefix(iface_name, iface_node)
+                edge_label_parts = [short_iface]
                 if iface.get("vlan"):
                     edge_label_parts.append(f"VLAN {iface['vlan']}")
                 if iface.get("ip_addr"):
@@ -180,6 +258,9 @@ def build_graph(slice_data: dict) -> dict[str, Any]:
                         "id": edge_id,
                         "source": source_id,
                         "target": net_id,
+                        "source_vm": vm_id,
+                        "source_comp": comp_id,
+                        "component_name": comp_name,
                         "label": "\n".join(edge_label_parts),
                         "element_type": "interface",
                         "interface_name": iface_name,
@@ -191,6 +272,57 @@ def build_graph(slice_data: dict) -> dict[str, Any]:
                         "bandwidth": iface.get("bandwidth", ""),
                     },
                     "classes": f"edge-{layer.lower()}",
+                })
+
+    # Facility port nodes
+    for fp in slice_data.get("facility_ports", []):
+        fp_name = fp["name"]
+        fp_site = fp.get("site", "?")
+        fp_vlan = fp.get("vlan", "")
+        fp_bw = fp.get("bandwidth", "")
+        fp_id = f"fp:{slice_id}:{fp_name}"
+
+        label_lines = [fp_name, f"@ {fp_site}"]
+        if fp_vlan:
+            label_lines.append(f"VLAN {fp_vlan}")
+
+        nodes.append({
+            "data": {
+                "id": fp_id,
+                "parent": f"slice:{slice_id}",
+                "label": "\n".join(label_lines),
+                "element_type": "facility-port",
+                "name": fp_name,
+                "site": fp_site,
+                "vlan": str(fp_vlan),
+                "bandwidth": str(fp_bw),
+            },
+            "classes": "facility-port",
+        })
+
+        # Edges from facility port interfaces to networks
+        for iface in fp.get("interfaces", []):
+            iface_name = iface.get("name", "")
+            net_name = iface.get("network_name", "")
+            if net_name:
+                target_id = f"net:{slice_id}:{net_name}"
+                edge_id = f"edge:{slice_id}:{iface_name}"
+                edges.append({
+                    "data": {
+                        "id": edge_id,
+                        "source": fp_id,
+                        "target": target_id,
+                        "label": "",
+                        "element_type": "interface",
+                        "interface_name": iface_name,
+                        "node_name": "",
+                        "network_name": net_name,
+                        "vlan": iface.get("vlan", ""),
+                        "mac": iface.get("mac", ""),
+                        "ip_addr": iface.get("ip_addr", ""),
+                        "bandwidth": iface.get("bandwidth", ""),
+                    },
+                    "classes": "edge-l2",
                 })
 
     return {"nodes": nodes, "edges": edges}

@@ -3,9 +3,12 @@
 from __future__ import annotations
 import asyncio
 import json
+import logging
 import os
 import threading
 from typing import Any, Dict, List, Optional
+
+logger = logging.getLogger(__name__)
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
@@ -121,6 +124,13 @@ class UpdateNodeRequest(BaseModel):
     ram: Optional[int] = None
     disk: Optional[int] = None
     image: Optional[str] = None
+
+
+class CreateFacilityPortRequest(BaseModel):
+    name: str
+    site: str
+    vlan: str = ""
+    bandwidth: int = 10
 
 
 # --- Routes ---
@@ -296,12 +306,21 @@ def validate_slice(slice_name: str) -> dict[str, Any]:
         ifaces = net.get("interfaces", [])
         iface_count = len(ifaces)
 
+        layer = net.get("layer", "L2")
         if "PTP" in net_type:
             if iface_count != 2:
                 issues.append({
                     "severity": "error",
                     "message": f"Network '{net_name}' ({net_type}) has {iface_count} interface(s), needs exactly 2.",
                     "remedy": f"Connect exactly 2 interfaces to '{net_name}'.",
+                })
+        elif layer == "L3":
+            # L3 networks have an implied gateway, so 1 interface is valid
+            if iface_count < 1:
+                issues.append({
+                    "severity": "error",
+                    "message": f"Network '{net_name}' ({net_type}) has no interfaces.",
+                    "remedy": f"Connect at least 1 interface to '{net_name}'.",
                 })
         else:
             if iface_count < 2:
@@ -370,12 +389,16 @@ def update_node(slice_name: str, node_name: str, req: UpdateNodeRequest) -> dict
         node = slice_obj.get_node(name=node_name)
         if req.site is not None:
             node.set_site(req.site)
+        # Call set_capacities once with all provided values to avoid overwrites
+        cap_kwargs: dict[str, Any] = {}
         if req.cores is not None:
-            node.set_capacities(cores=req.cores)
+            cap_kwargs["cores"] = req.cores
         if req.ram is not None:
-            node.set_capacities(ram=req.ram)
+            cap_kwargs["ram"] = req.ram
         if req.disk is not None:
-            node.set_capacities(disk=req.disk)
+            cap_kwargs["disk"] = req.disk
+        if cap_kwargs:
+            node.set_capacities(**cap_kwargs)
         if req.image is not None:
             node.set_image(req.image)
         return _serialize(slice_obj, dirty=True)
@@ -410,6 +433,44 @@ def remove_component(slice_name: str, node_name: str, comp_name: str) -> dict[st
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# --- Facility port operations ---
+
+@router.post("/slices/{slice_name}/facility-ports")
+def add_facility_port(slice_name: str, req: CreateFacilityPortRequest) -> dict[str, Any]:
+    """Add a facility port to a slice."""
+    try:
+        slice_obj = _get_slice_obj(slice_name)
+        kwargs: dict[str, Any] = {
+            "name": req.name,
+            "site": req.site,
+        }
+        if req.vlan:
+            kwargs["vlan"] = req.vlan
+        if req.bandwidth:
+            kwargs["bandwidth"] = req.bandwidth
+        slice_obj.add_facility_port(**kwargs)
+        return _serialize(slice_obj, dirty=True)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/slices/{slice_name}/facility-ports/{fp_name}")
+def remove_facility_port(slice_name: str, fp_name: str) -> dict[str, Any]:
+    """Remove a facility port from a slice."""
+    try:
+        slice_obj = _get_slice_obj(slice_name)
+        # Get facility port by name and delete
+        for fp in slice_obj.get_facility_ports():
+            if fp.get_name() == fp_name:
+                fp.delete()
+                return _serialize(slice_obj, dirty=True)
+        raise HTTPException(status_code=404, detail=f"Facility port '{fp_name}' not found")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # --- Network operations ---
 
 @router.post("/slices/{slice_name}/networks")
@@ -425,10 +486,16 @@ def add_network(slice_name: str, req: CreateNetworkRequest) -> dict[str, Any]:
                     if iface.get_name() == iface_name:
                         ifaces.append(iface)
 
-        l3_types = {"IPv4", "IPv6", "IPv4Ext", "IPv6Ext", "L3VPN"}
+        _fabnet_to_l3 = {
+            "FABNetv4": "IPv4", "FABNetv6": "IPv6",
+            "FABNetv4Ext": "IPv4Ext", "FABNetv6Ext": "IPv6Ext",
+        }
+        l3_types = {"IPv4", "IPv6", "IPv4Ext", "IPv6Ext", "L3VPN",
+                    "FABNetv4", "FABNetv6", "FABNetv4Ext", "FABNetv6Ext"}
         if req.type in l3_types:
             # L3 network — use add_l3network, auto-assign IPs
-            net = slice_obj.add_l3network(name=req.name, interfaces=ifaces, type=req.type)
+            canonical_type = _fabnet_to_l3.get(req.type, req.type)
+            net = slice_obj.add_l3network(name=req.name, interfaces=ifaces, type=canonical_type)
             for iface in ifaces:
                 iface.set_mode("auto")
         else:
@@ -488,61 +555,295 @@ def set_post_boot_config(slice_name: str, node_name: str, req: PostBootConfigReq
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# --- Slice export/import ---
+# --- Clone slice ---
 
-@router.get("/slices/{slice_name}/export")
-def export_slice(slice_name: str):
-    """Export a slice definition as a downloadable JSON model file."""
-    try:
+@router.post("/slices/{slice_name}/clone")
+async def clone_slice(slice_name: str, new_name: str) -> dict[str, Any]:
+    """Clone/copy a slice (or draft) as a new draft with a different name."""
+    def _do():
+        # --- Export phase: extract blueprint from source slice ---
+        logger.info("Clone: exporting source slice '%s' as '%s'", slice_name, new_name)
         slice_obj = _get_slice_obj(slice_name)
         data = slice_to_dict(slice_obj)
 
-        model = {
+        model_data: dict[str, Any] = {
             "format": "fabric-webgui-v1",
-            "name": data["name"],
+            "name": new_name,
             "nodes": [],
             "networks": [],
         }
 
         for node in data.get("nodes", []):
-            node_model = {
-                "name": node["name"],
-                "site": node.get("site", ""),
-                "cores": node.get("cores", 2),
-                "ram": node.get("ram", 8),
-                "disk": node.get("disk", 10),
-                "image": node.get("image", "default_ubuntu_22"),
-                "components": [],
-            }
-            # Try to read post-boot script from the node object
+            # Read attributes directly from the FABlib node object for accuracy,
+            # falling back to serialized data with safe int defaults.
+            fab_node = slice_obj.get_node(name=node["name"])
+            def _int_or(val, default):
+                try:
+                    v = int(val)
+                    return v if v > 0 else default
+                except (TypeError, ValueError):
+                    return default
+
+            cores = _int_or(node.get("cores"), 2)
+            ram = _int_or(node.get("ram"), 8)
+            disk = _int_or(node.get("disk"), 10)
+
+            # Try to get more accurate values from the FABlib object
             try:
-                fab_node = slice_obj.get_node(name=node["name"])
-                script = fab_node.get_user_data().get("post_boot_script", "")
-                if script:
-                    node_model["post_boot_script"] = script
+                cores = _int_or(fab_node.get_cores(), cores)
+                ram = _int_or(fab_node.get_ram(), ram)
+                disk = _int_or(fab_node.get_disk(), disk)
             except Exception:
                 pass
+
+            image = node.get("image", "") or "default_ubuntu_22"
+            try:
+                img = fab_node.get_image()
+                if img:
+                    image = img
+            except Exception:
+                pass
+
+            site = node.get("site", "")
+            try:
+                s = fab_node.get_site()
+                if s:
+                    site = s
+            except Exception:
+                pass
+
+            node_model: dict[str, Any] = {
+                "name": node["name"],
+                "site": site,
+                "cores": cores,
+                "ram": ram,
+                "disk": disk,
+                "image": image,
+                "components": [],
+            }
+            try:
+                ud = dict(fab_node.get_user_data())
+                bc = ud.get("boot_config")
+                if bc and isinstance(bc, dict):
+                    node_model["boot_config"] = dict(bc)
+                elif ud.get("post_boot_script"):
+                    node_model["post_boot_script"] = ud["post_boot_script"]
+            except Exception:
+                pass
+            node_name = node["name"]
             for comp in node.get("components", []):
+                comp_name = comp["name"]
+                # FABlib prefixes component names with "node_name-"; strip it
+                # to avoid duplication when add_component re-adds the prefix.
+                prefix = node_name + "-"
+                if comp_name.startswith(prefix):
+                    comp_name = comp_name[len(prefix):]
                 node_model["components"].append({
-                    "name": comp["name"],
+                    "name": comp_name,
                     "model": comp.get("model", ""),
                 })
-            model["nodes"].append(node_model)
+            model_data["nodes"].append(node_model)
+
+        # Build a map: interface name → (node_name, component_name, port_index)
+        # so we can resolve interfaces in the new slice by component, not name.
+        iface_key_map: dict[str, tuple[str, str, int]] = {}
+        for node in data.get("nodes", []):
+            for comp in node.get("components", []):
+                for port_idx, iface in enumerate(comp.get("interfaces", [])):
+                    iface_key_map[iface["name"]] = (node["name"], comp["name"], port_idx)
 
         for net in data.get("networks", []):
-            net_model = {
+            # Store interface keys (node, component, port_index) instead of names
+            iface_keys = []
+            for i in net.get("interfaces", []):
+                key = iface_key_map.get(i["name"])
+                if key:
+                    iface_keys.append(list(key))
+                else:
+                    logger.warning("Clone: interface '%s' not found in component map", i["name"])
+            model_data["networks"].append({
                 "name": net["name"],
                 "type": net.get("type", "L2Bridge"),
-                "interfaces": [i["name"] for i in net.get("interfaces", [])],
+                "interfaces": [],  # not used — resolved via iface_keys
+                "iface_keys": iface_keys,
                 "subnet": net.get("subnet", ""),
                 "gateway": net.get("gateway", ""),
-            }
-            model["networks"].append(net_model)
+            })
 
+        # --- Import phase: build the new slice directly ---
+        logger.info("Clone: creating new draft '%s' with %d nodes, %d networks",
+                     new_name, len(model_data["nodes"]), len(model_data["networks"]))
+        fablib = get_fablib()
+        new_slice = fablib.new_slice(name=new_name)
+
+        # Add nodes and components
+        for node_def in model_data["nodes"]:
+            logger.info("Clone node '%s': cores=%r ram=%r disk=%r site=%r image=%r",
+                        node_def["name"], node_def.get("cores"), node_def.get("ram"),
+                        node_def.get("disk"), node_def.get("site"), node_def.get("image"))
+            kwargs: dict[str, Any] = {
+                "name": node_def["name"],
+                "cores": node_def.get("cores", 2),
+                "ram": node_def.get("ram", 8),
+                "disk": node_def.get("disk", 10),
+                "image": node_def.get("image", "default_ubuntu_22"),
+            }
+            site = node_def.get("site", "")
+            if site and site not in ("auto", ""):
+                kwargs["site"] = site
+            new_node = new_slice.add_node(**kwargs)
+
+            for comp_def in node_def.get("components", []):
+                new_node.add_component(
+                    model=comp_def.get("model", "NIC_Basic"),
+                    name=comp_def.get("name", ""),
+                )
+
+            # Apply boot config
+            boot_config = node_def.get("boot_config")
+            if boot_config and isinstance(boot_config, dict):
+                try:
+                    ud = new_node.get_user_data()
+                    ud["boot_config"] = boot_config
+                    new_node.set_user_data(ud)
+                except Exception:
+                    pass
+            else:
+                post_boot = node_def.get("post_boot_script", "")
+                if post_boot:
+                    try:
+                        new_node.set_user_data({"post_boot_script": post_boot})
+                    except Exception:
+                        pass
+
+        # Add networks — resolve interfaces by (node_name, comp_name, port_index)
+        _fabnet_to_l3 = {
+            "FABNetv4": "IPv4", "FABNetv6": "IPv6",
+            "FABNetv4Ext": "IPv4Ext", "FABNetv6Ext": "IPv6Ext",
+        }
+        l3_types = {"IPv4", "IPv6", "IPv4Ext", "IPv6Ext", "L3VPN",
+                    "FABNetv4", "FABNetv6", "FABNetv4Ext", "FABNetv6Ext"}
+
+        for net_def in model_data["networks"]:
+            ifaces = []
+            for key in net_def.get("iface_keys", []):
+                node_name, comp_name, port_idx = key
+                try:
+                    n = new_slice.get_node(name=node_name)
+                    c = n.get_component(name=comp_name)
+                    c_ifaces = c.get_interfaces()
+                    if port_idx < len(c_ifaces):
+                        ifaces.append(c_ifaces[port_idx])
+                    else:
+                        logger.warning("Clone: port_idx %d out of range for %s/%s", port_idx, node_name, comp_name)
+                except Exception as ex:
+                    logger.warning("Clone: could not resolve interface %s/%s[%d]: %s", node_name, comp_name, port_idx, ex)
+
+            net_type = net_def.get("type", "L2Bridge")
+            if net_type in l3_types:
+                canonical_type = _fabnet_to_l3.get(net_type, net_type)
+                net = new_slice.add_l3network(
+                    name=net_def["name"], interfaces=ifaces, type=canonical_type
+                )
+                for iface in ifaces:
+                    iface.set_mode("auto")
+            else:
+                net = new_slice.add_l2network(
+                    name=net_def["name"], interfaces=ifaces, type=net_type
+                )
+                subnet = net_def.get("subnet", "")
+                gateway = net_def.get("gateway", "")
+                if subnet:
+                    net.set_subnet(subnet)
+                if gateway:
+                    net.set_gateway(gateway)
+
+        _store_draft(new_name, new_slice, is_new=True)
+        result = _serialize(new_slice)
+        logger.info("Clone: successfully created draft '%s'", new_name)
+        return result
+    try:
+        return await asyncio.to_thread(_do)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Clone failed for '%s' -> '%s'", slice_name, new_name)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# --- Slice export/import ---
+
+def build_slice_model(slice_name: str) -> dict:
+    """Build a portable JSON model from a slice (draft or FABRIC).
+
+    Returns a dict with format, name, nodes, and networks suitable
+    for serialisation to .fabric.json files.
+    """
+    slice_obj = _get_slice_obj(slice_name)
+    data = slice_to_dict(slice_obj)
+
+    model: dict[str, Any] = {
+        "format": "fabric-webgui-v1",
+        "name": data["name"],
+        "nodes": [],
+        "networks": [],
+    }
+
+    for node in data.get("nodes", []):
+        node_model: dict[str, Any] = {
+            "name": node["name"],
+            "site": node.get("site", ""),
+            "cores": node.get("cores", 2),
+            "ram": node.get("ram", 8),
+            "disk": node.get("disk", 10),
+            "image": node.get("image", "default_ubuntu_22"),
+            "components": [],
+        }
+        # Export boot config from node user_data
+        try:
+            fab_node = slice_obj.get_node(name=node["name"])
+            ud = dict(fab_node.get_user_data())
+            bc = ud.get("boot_config")
+            if bc and isinstance(bc, dict):
+                node_model["boot_config"] = dict(bc)
+            elif ud.get("post_boot_script"):
+                node_model["post_boot_script"] = ud["post_boot_script"]
+        except Exception:
+            pass
+        node_name = node["name"]
+        for comp in node.get("components", []):
+            comp_name = comp["name"]
+            prefix = node_name + "-"
+            if comp_name.startswith(prefix):
+                comp_name = comp_name[len(prefix):]
+            node_model["components"].append({
+                "name": comp_name,
+                "model": comp.get("model", ""),
+            })
+        model["nodes"].append(node_model)
+
+    for net in data.get("networks", []):
+        net_model = {
+            "name": net["name"],
+            "type": net.get("type", "L2Bridge"),
+            "interfaces": [i["name"] for i in net.get("interfaces", [])],
+            "subnet": net.get("subnet", ""),
+            "gateway": net.get("gateway", ""),
+        }
+        model["networks"].append(net_model)
+
+    return model
+
+
+@router.get("/slices/{slice_name}/export")
+def export_slice(slice_name: str):
+    """Export a slice definition as a downloadable JSON model file."""
+    try:
+        model = build_slice_model(slice_name)
         return JSONResponse(
             content=model,
             headers={
-                "Content-Disposition": f'attachment; filename="{data["name"]}.fabric.json"'
+                "Content-Disposition": f'attachment; filename="{model["name"]}.fabric.json"'
             },
         )
     except Exception as e:
@@ -576,16 +877,33 @@ def import_slice(model: SliceModelImport) -> dict[str, Any]:
                     name=comp_def.get("name", ""),
                 )
 
-            # Apply post-boot script if present
-            post_boot = node_def.get("post_boot_script", "")
-            if post_boot:
+            # Apply boot config if present (new format)
+            boot_config = node_def.get("boot_config")
+            if boot_config and isinstance(boot_config, dict):
                 try:
-                    node.set_user_data({"post_boot_script": post_boot})
+                    ud = node.get_user_data()
+                    ud["boot_config"] = boot_config
+                    node.set_user_data(ud)
                 except Exception:
                     pass
+            else:
+                # Legacy: apply old post_boot_script format
+                post_boot = node_def.get("post_boot_script", "")
+                if post_boot:
+                    try:
+                        node.set_user_data({"post_boot_script": post_boot})
+                    except Exception:
+                        pass
 
         # Add networks
-        l3_types = {"IPv4", "IPv6", "IPv4Ext", "IPv6Ext", "L3VPN"}
+        # FABlib serialises L3 types as FABNetv4 etc. but add_l3network
+        # only accepts the canonical names (IPv4, IPv6, …).
+        _fabnet_to_l3 = {
+            "FABNetv4": "IPv4", "FABNetv6": "IPv6",
+            "FABNetv4Ext": "IPv4Ext", "FABNetv6Ext": "IPv6Ext",
+        }
+        l3_types = {"IPv4", "IPv6", "IPv4Ext", "IPv6Ext", "L3VPN",
+                    "FABNetv4", "FABNetv6", "FABNetv4Ext", "FABNetv6Ext"}
         for net_def in model.networks:
             # Resolve interfaces by name
             ifaces = []
@@ -597,8 +915,10 @@ def import_slice(model: SliceModelImport) -> dict[str, Any]:
 
             net_type = net_def.get("type", "L2Bridge")
             if net_type in l3_types:
+                # Map FABNet names to canonical L3 type names
+                canonical_type = _fabnet_to_l3.get(net_type, net_type)
                 net = slice_obj.add_l3network(
-                    name=net_def["name"], interfaces=ifaces, type=net_type
+                    name=net_def["name"], interfaces=ifaces, type=canonical_type
                 )
                 for iface in ifaces:
                     iface.set_mode("auto")

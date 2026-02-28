@@ -76,6 +76,10 @@ function buildStylesheet(dark: boolean): any[] {
     { selector: '.component-hidden', style: {
       'display': 'none',
     }},
+    // Hidden slice container (when toggled off)
+    { selector: '.slice-hidden', style: {
+      'display': 'none',
+    }},
     { selector: '.network-l2', style: {
       'shape': 'ellipse', 'width': 90, 'height': 80, 'background-color': l2NodeBg,
       'border-width': 2, 'border-color': l2Color, 'label': 'data(label)',
@@ -170,7 +174,7 @@ const LAYOUTS: Record<string, any> = {
 };
 
 export interface ContextMenuAction {
-  type: 'terminal' | 'delete' | 'delete-component' | 'delete-facility-port';
+  type: 'terminal' | 'delete' | 'delete-component' | 'delete-facility-port' | 'save-vm-template';
   elements: Record<string, string>[];
   nodeName?: string;
   componentName?: string;
@@ -212,6 +216,9 @@ export default function CytoscapeGraph({
   const [showComponents, setShowComponents] = useState(true);
   const showComponentsRef = useRef(showComponents);
   showComponentsRef.current = showComponents;
+  const [showSliceBox, setShowSliceBox] = useState(true);
+  const showSliceBoxRef = useRef(showSliceBox);
+  showSliceBoxRef.current = showSliceBox;
 
   // Close context menu on clicks or escape
   const menuOpenTime = useRef(0);
@@ -411,6 +418,8 @@ export default function CytoscapeGraph({
 
     // Apply component visibility before layout
     applyComponentVisibility(cy, showComponentsRef.current);
+    // Apply slice box visibility before layout
+    applySliceBoxVisibility(cy, showSliceBoxRef.current);
 
     // Run layout on non-component elements; then position components at VM edges
     const layoutElements = cy.elements().not('.component');
@@ -433,6 +442,13 @@ export default function CytoscapeGraph({
       positionComponentsAtVmEdge(cy);
     }
   }, [showComponents]);
+
+  // Toggle slice box visibility
+  useEffect(() => {
+    const cy = cyRef.current;
+    if (!cy) return;
+    applySliceBoxVisibility(cy, showSliceBox);
+  }, [showSliceBox]);
 
   const handleFit = useCallback(() => {
     cyRef.current?.fit(undefined, 30);
@@ -498,6 +514,14 @@ export default function CytoscapeGraph({
         <label className="graph-toggle">
           <input
             type="checkbox"
+            checked={showSliceBox}
+            onChange={(e) => setShowSliceBox(e.target.checked)}
+          />
+          Slice Box
+        </label>
+        <label className="graph-toggle">
+          <input
+            type="checkbox"
             checked={showComponents}
             onChange={(e) => setShowComponents(e.target.checked)}
           />
@@ -540,7 +564,23 @@ export default function CytoscapeGraph({
               ))}
             </>
           )}
-          {deletable.length > 0 && (vmsWithIp.length > 0 || vmComponents.length > 0) && (
+          {singleVm && (
+            <>
+              {(vmsWithIp.length > 0 || vmComponents.length > 0) && (
+                <div className="graph-context-menu-sep" />
+              )}
+              <button
+                className="graph-context-menu-item"
+                onClick={() => {
+                  onContextAction({ type: 'save-vm-template', elements: [singleVm], nodeName: singleVm.name });
+                  setMenu(null);
+                }}
+              >
+                ⚙ Save as VM Template
+              </button>
+            </>
+          )}
+          {deletable.length > 0 && (singleVm || vmsWithIp.length > 0 || vmComponents.length > 0) && (
             <div className="graph-context-menu-sep" />
           )}
           {deletable.length > 0 && (
@@ -552,6 +592,40 @@ export default function CytoscapeGraph({
       )}
     </div>
   );
+}
+
+/**
+ * Show or hide the slice compound container node.
+ * When hidden, child nodes are moved out of the compound parent so they
+ * float freely; the slice node itself is hidden.
+ * When shown, child nodes are re-parented and the slice node is revealed.
+ */
+function applySliceBoxVisibility(cy: Core, show: boolean) {
+  cy.batch(() => {
+    const sliceNodes = cy.nodes('.slice');
+    if (sliceNodes.empty()) return;
+
+    if (show) {
+      sliceNodes.removeClass('slice-hidden');
+      // Restore parent on children
+      cy.nodes().forEach((n: any) => {
+        const origParent = n.data('_orig_parent');
+        if (origParent && n.data('parent') !== origParent) {
+          n.move({ parent: origParent });
+        }
+      });
+    } else {
+      // Save original parent and remove it
+      cy.nodes().forEach((n: any) => {
+        const p = n.data('parent');
+        if (p && cy.getElementById(p).hasClass('slice')) {
+          n.data('_orig_parent', p);
+          n.move({ parent: null });
+        }
+      });
+      sliceNodes.addClass('slice-hidden');
+    }
+  });
 }
 
 /**

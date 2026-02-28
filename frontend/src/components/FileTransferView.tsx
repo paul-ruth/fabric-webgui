@@ -1,4 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { Terminal } from '@xterm/xterm';
+import { FitAddon } from '@xterm/addon-fit';
+import '@xterm/xterm/css/xterm.css';
 import * as api from '../api/client';
 import type { FileEntry, SliceData } from '../types/fabric';
 import FileEditor, { isTextFile } from './FileEditor';
@@ -85,8 +88,39 @@ export default function FileTransferView({ sliceName, sliceData }: FileTransferV
   // Remember per-node paths so switching nodes preserves where you were
   const vmPathsRef = useRef<Record<string, string>>({});
 
-  // Log panel
-  const [logExpanded, setLogExpanded] = useState(false);
+  // Bottom panel
+  const [bottomExpanded, setBottomExpanded] = useState(false);
+  const [bottomTab, setBottomTab] = useState<'log' | 'local'>('log');
+  const [containerTermActive, setContainerTermActive] = useState(false);
+  const [ftvPanelHeight, setFtvPanelHeight] = useState(220);
+  const ftvDraggingRef = useRef(false);
+  const ftvStartYRef = useRef(0);
+  const ftvStartHeightRef = useRef(0);
+
+  const handleFtvDragStart = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    ftvDraggingRef.current = true;
+    ftvStartYRef.current = e.clientY;
+    ftvStartHeightRef.current = ftvPanelHeight;
+
+    const onMove = (ev: MouseEvent) => {
+      if (!ftvDraggingRef.current) return;
+      const delta = ftvStartYRef.current - ev.clientY;
+      const newHeight = Math.max(100, Math.min(window.innerHeight * 0.8, ftvStartHeightRef.current + delta));
+      setFtvPanelHeight(newHeight);
+    };
+    const onUp = () => {
+      ftvDraggingRef.current = false;
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+    document.body.style.cursor = 'row-resize';
+    document.body.style.userSelect = 'none';
+  }, [ftvPanelHeight]);
 
   // Transfer state
   const [transferring, setTransferring] = useState(false);
@@ -519,7 +553,7 @@ export default function FileTransferView({ sliceName, sliceData }: FileTransferV
           <FileEditor filePath={editingFile} onClose={() => { setEditingFile(null); refreshLeft(); }} dark={isDark} />
         ) : (
           <>
-            <div className="ftv-panel-header">Container Storage</div>
+            <div className="ftv-panel-header">Local Storage</div>
             <div className="fb-breadcrumbs">
               <button onClick={() => leftGoToSegment(-1)}>Storage</button>
               {leftPathParts.map((part, i) => (
@@ -575,7 +609,7 @@ export default function FileTransferView({ sliceName, sliceData }: FileTransferV
         {transferring && (
           <div className="ftv-progress">
             <div className="ftv-progress-label">
-              {transferDir === 'right' ? '→ VM' : '← Container'}
+              {transferDir === 'right' ? '→ VM' : '← Local'}
             </div>
             <div className="ftv-progress-bar">
               <div
@@ -595,7 +629,7 @@ export default function FileTransferView({ sliceName, sliceData }: FileTransferV
           className="ftv-arrow-btn"
           onClick={handleTransferLeft}
           disabled={!rightHasSelection || !vmNode || transferring}
-          title="← Transfer selected to Container"
+          title="← Transfer selected to Local"
         >
           ←
         </button>
@@ -682,19 +716,38 @@ export default function FileTransferView({ sliceName, sliceData }: FileTransferV
       </div>
     </div>
 
-    {/* ============ BOTTOM: Log Panel ============ */}
-    {logExpanded ? (
-      <div className="ftv-log-panel">
-        <div className="ftv-log-header" onClick={() => setLogExpanded(false)}>
-          <span>▼ FABlib Log</span>
+    {/* ============ BOTTOM: Tabbed Panel (Log + Container Terminal) ============ */}
+    {bottomExpanded ? (
+      <div className="ftv-bottom-panel" style={{ height: ftvPanelHeight }}>
+        <div className="ftv-resize-handle" onMouseDown={handleFtvDragStart} />
+        <div className="ftv-bottom-tabs">
+          <button
+            className={`ftv-bottom-tab ${bottomTab === 'log' ? 'active' : ''}`}
+            onClick={() => setBottomTab('log')}
+          >
+            Log
+          </button>
+          <button
+            className={`ftv-bottom-tab ${bottomTab === 'local' ? 'active' : ''}`}
+            onClick={() => { setBottomTab('local'); setContainerTermActive(true); }}
+          >
+            Local Terminal
+          </button>
+          <div style={{ flex: 1 }} />
+          <button className="ftv-bottom-collapse" onClick={() => setBottomExpanded(false)} title="Collapse">&#x25BC;</button>
         </div>
-        <div className="ftv-log-body">
-          <LogView />
+        <div className="ftv-bottom-body">
+          <div style={{ display: bottomTab === 'log' ? 'flex' : 'none', flex: 1, overflow: 'hidden' }}>
+            <LogView />
+          </div>
+          <div style={{ display: bottomTab === 'local' ? 'flex' : 'none', flex: 1, overflow: 'hidden' }}>
+            {containerTermActive && <FtvContainerTerminal />}
+          </div>
         </div>
       </div>
     ) : (
-      <div className="ftv-log-collapsed" onClick={() => setLogExpanded(true)}>
-        <span>▲ FABlib Log</span>
+      <div className="ftv-log-collapsed" onClick={() => setBottomExpanded(true)}>
+        <span>&#x25B2; Console</span>
       </div>
     )}
     </div>
@@ -758,4 +811,95 @@ function FileTable({
       )}
     </div>
   );
+}
+
+// --- Container Terminal for Files view ---
+const TERM_THEME = {
+  background: '#1a1a2e',
+  foreground: '#e0e0e0',
+  cursor: '#6db3d6',
+  selectionBackground: '#3a5a7a',
+  black: '#1a1a2e',
+  brightBlack: '#4a4a6a',
+  red: '#ef5350',
+  brightRed: '#ff6b6b',
+  green: '#4caf6a',
+  brightGreen: '#66cc80',
+  yellow: '#ffb74d',
+  brightYellow: '#ffd180',
+  blue: '#6db3d6',
+  brightBlue: '#8ac9ef',
+  magenta: '#ba68c8',
+  brightMagenta: '#ce93d8',
+  cyan: '#4dd0b8',
+  brightCyan: '#80e8d0',
+  white: '#e0e0e0',
+  brightWhite: '#ffffff',
+};
+
+function FtvContainerTerminal() {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const termRef = useRef<Terminal | null>(null);
+
+  useEffect(() => {
+    if (!containerRef.current) return;
+
+    const term = new Terminal({
+      cursorBlink: true,
+      fontSize: 13,
+      fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', Menlo, monospace",
+      theme: { ...TERM_THEME },
+    });
+
+    const fitAddon = new FitAddon();
+    term.loadAddon(fitAddon);
+    term.open(containerRef.current);
+    fitAddon.fit();
+    termRef.current = term;
+
+    term.writeln('\x1b[36m[local] Opening shell...\x1b[0m');
+
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsUrl = `${protocol}//${window.location.host}/ws/terminal/container`;
+    const ws = new WebSocket(wsUrl);
+
+    ws.onopen = () => {
+      ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
+    };
+
+    ws.onmessage = (event) => {
+      term.write(event.data);
+    };
+
+    ws.onerror = () => {
+      term.writeln('\r\n\x1b[31mWebSocket error.\x1b[0m');
+    };
+
+    ws.onclose = () => {
+      term.writeln('\r\n\x1b[33mConnection closed.\x1b[0m');
+    };
+
+    term.onData((data) => {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'input', data }));
+      }
+    });
+
+    const resizeObserver = new ResizeObserver(() => {
+      fitAddon.fit();
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
+      }
+    });
+    resizeObserver.observe(containerRef.current);
+
+    return () => {
+      resizeObserver.disconnect();
+      ws.close();
+      term.dispose();
+      termRef.current = null;
+    };
+  }, []);
+
+  return <div className="bp-terminal-container" ref={containerRef} />;
 }

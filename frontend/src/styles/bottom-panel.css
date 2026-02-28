@@ -16,7 +16,7 @@
 .bottom-panel-collapsed-label {
   font-size: 12px;
   font-weight: 600;
-  color: var(--fabric-text-secondary);
+  color: var(--fabric-text-muted);
   display: flex;
   align-items: center;
   gap: 8px;
@@ -102,7 +102,7 @@
   box-shadow: none;
 }
 .bp-tab:hover {
-  color: var(--fabric-text-primary);
+  color: var(--fabric-text);
   background: var(--fabric-bg-tint);
   box-shadow: none;
 }
@@ -149,7 +149,7 @@
 }
 .bp-width-toggle:hover {
   background: var(--fabric-border);
-  color: var(--fabric-text-primary);
+  color: var(--fabric-text);
   box-shadow: none;
 }
 
@@ -198,7 +198,7 @@
 }
 .bp-collapse-btn:hover {
   background: var(--fabric-border);
-  color: var(--fabric-text-primary);
+  color: var(--fabric-text);
   box-shadow: none;
 }
 

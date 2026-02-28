@@ -4,16 +4,26 @@ from __future__ import annotations
 import base64
 import json
 import os
+import shutil
 import stat
 from typing import Optional
 from urllib.parse import urlencode
 
 import paramiko
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 
-from app.fablib_manager import is_configured, reset_fablib
+from app.fablib_manager import (
+    DEFAULT_CONFIG_DIR,
+    is_configured,
+    reset_fablib,
+    _load_keys_json,
+    _save_keys_json,
+    _migrate_legacy_keys,
+    get_default_slice_key_path,
+    get_slice_key_path,
+)
 
 router = APIRouter()
 
@@ -22,7 +32,7 @@ router = APIRouter()
 # ---------------------------------------------------------------------------
 
 def _config_dir() -> str:
-    return os.environ.get("FABRIC_CONFIG_DIR", "/fabric_config")
+    return os.environ.get("FABRIC_CONFIG_DIR", DEFAULT_CONFIG_DIR)
 
 
 def _ensure_config_dir() -> str:
@@ -59,15 +69,50 @@ def _file_exists(name: str) -> bool:
     return os.path.isfile(os.path.join(_config_dir(), name))
 
 
+def _storage_dir() -> str:
+    return os.environ.get("FABRIC_STORAGE_DIR", "/fabric_storage")
+
+
+def _slice_keys_dir() -> str:
+    """Return the .slice-keys sidecar directory for per-slice key assignments."""
+    d = os.path.join(_storage_dir(), ".slice-keys")
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def _key_fingerprint(priv_path: str) -> str:
+    """Get fingerprint string from a private key file."""
+    try:
+        from app.routes.terminal import _load_private_key
+        k = _load_private_key(priv_path)
+        fp_bytes = k.get_fingerprint()
+        return ":".join(f"{b:02x}" for b in fp_bytes)
+    except Exception:
+        return ""
+
+
+def _key_pub_str(priv_path: str, pub_path: str) -> str:
+    """Get public key string, preferring .pub file, falling back to deriving from private."""
+    if os.path.isfile(pub_path):
+        with open(pub_path) as f:
+            return f.read().strip()
+    try:
+        from app.routes.terminal import _load_private_key
+        k = _load_private_key(priv_path)
+        return f"{k.get_name()} {k.get_base64()}"
+    except Exception:
+        return ""
+
+
 # ---------------------------------------------------------------------------
 # GET /api/config — overall status
 # ---------------------------------------------------------------------------
 
 @router.get("/api/config")
 def get_config_status():
+    config_dir = _config_dir()
     token_data = _read_token()
     token_info = None
-    user_info = None
 
     if token_data and "id_token" in token_data:
         try:
@@ -84,7 +129,7 @@ def get_config_status():
     # Check fabric_rc for project_id
     project_id = ""
     bastion_username = ""
-    rc_path = os.path.join(_config_dir(), "fabric_rc")
+    rc_path = os.path.join(config_dir, "fabric_rc")
     if os.path.isfile(rc_path):
         with open(rc_path) as f:
             for line in f:
@@ -96,50 +141,33 @@ def get_config_status():
 
     # Read public key contents for display
     bastion_pub_key = ""
-    slice_pub_key = ""
     bastion_key_fingerprint = ""
-    slice_key_fingerprint = ""
 
-    bastion_pub_path = os.path.join(_config_dir(), "fabric_bastion_key.pub")
+    bastion_pub_path = os.path.join(config_dir, "fabric_bastion_key.pub")
     if os.path.isfile(bastion_pub_path):
         with open(bastion_pub_path) as f:
             bastion_pub_key = f.read().strip()
 
-    # If no separate .pub, derive fingerprint from private key
-    bastion_priv_path = os.path.join(_config_dir(), "fabric_bastion_key")
+    bastion_priv_path = os.path.join(config_dir, "fabric_bastion_key")
     if os.path.isfile(bastion_priv_path):
-        try:
-            from app.routes.terminal import _load_private_key
-            k = _load_private_key(bastion_priv_path)
-            fp_bytes = k.get_fingerprint()
-            bastion_key_fingerprint = ":".join(f"{b:02x}" for b in fp_bytes)
-            if not bastion_pub_key:
-                bastion_pub_key = f"{k.get_name()} {k.get_base64()}"
-        except Exception:
-            pass
+        bastion_key_fingerprint = _key_fingerprint(bastion_priv_path)
+        if not bastion_pub_key:
+            bastion_pub_key = _key_pub_str(bastion_priv_path, bastion_pub_path)
 
-    slice_pub_path = os.path.join(_config_dir(), "slice_key.pub")
-    if os.path.isfile(slice_pub_path):
-        with open(slice_pub_path) as f:
-            slice_pub_key = f.read().strip()
-
-    slice_priv_path = os.path.join(_config_dir(), "slice_key")
-    if os.path.isfile(slice_priv_path):
-        try:
-            from app.routes.terminal import _load_private_key
-            k = _load_private_key(slice_priv_path)
-            fp_bytes = k.get_fingerprint()
-            slice_key_fingerprint = ":".join(f"{b:02x}" for b in fp_bytes)
-            if not slice_pub_key:
-                slice_pub_key = f"{k.get_name()} {k.get_base64()}"
-        except Exception:
-            pass
+    # Migrate and get default slice key info
+    _migrate_legacy_keys(config_dir)
+    keys_data = _load_keys_json(config_dir)
+    default_key = keys_data.get("default", "default")
+    priv_path, pub_path = get_default_slice_key_path(config_dir)
+    slice_pub_key = _key_pub_str(priv_path, pub_path)
+    slice_key_fingerprint = _key_fingerprint(priv_path) if os.path.isfile(priv_path) else ""
+    has_slice_key = os.path.isfile(priv_path) and os.path.isfile(pub_path)
 
     return {
         "configured": is_configured(),
         "has_token": _file_exists("id_token.json"),
         "has_bastion_key": _file_exists("fabric_bastion_key"),
-        "has_slice_key": _file_exists("slice_key") and _file_exists("slice_key.pub"),
+        "has_slice_key": has_slice_key,
         "token_info": token_info,
         "project_id": project_id,
         "bastion_username": bastion_username,
@@ -147,6 +175,8 @@ def get_config_status():
         "bastion_key_fingerprint": bastion_key_fingerprint,
         "slice_pub_key": slice_pub_key,
         "slice_key_fingerprint": slice_key_fingerprint,
+        "default_slice_key": default_key,
+        "slice_key_sets": keys_data.get("keys", []),
     }
 
 
@@ -257,18 +287,17 @@ def get_projects():
     projects = payload.get("projects", [])
 
     # Derive bastion_login from JWT claims
-    # Pattern: {email_username}_{cilogon_id_zero_padded_to_10}
     bastion_login = ""
     try:
         email = payload.get("email", "")
-        sub = payload.get("sub", "")  # e.g. http://cilogon.org/serverA/users/31379841
+        sub = payload.get("sub", "")
         if email and sub:
             username = email.split("@")[0]
             cilogon_id = sub.rstrip("/").rsplit("/", 1)[-1]
             if cilogon_id.isdigit():
                 bastion_login = f"{username}_{cilogon_id.zfill(10)}"
     except Exception:
-        pass  # Non-fatal — user can fill in manually
+        pass
 
     return {
         "projects": projects,
@@ -294,59 +323,224 @@ async def upload_bastion_key(file: UploadFile = File(...)):
 
 
 # ---------------------------------------------------------------------------
-# POST /api/config/keys/slice — upload slice key pair
+# Slice Key Set Management
 # ---------------------------------------------------------------------------
+
+@router.get("/api/config/keys/slice/list")
+def list_slice_key_sets():
+    """List all named key sets with fingerprints."""
+    config_dir = _config_dir()
+    _migrate_legacy_keys(config_dir)
+    data = _load_keys_json(config_dir)
+    default_name = data.get("default", "default")
+    result = []
+    for name in data.get("keys", []):
+        priv_path, pub_path = get_slice_key_path(config_dir, name)
+        fp = _key_fingerprint(priv_path) if os.path.isfile(priv_path) else ""
+        pub = _key_pub_str(priv_path, pub_path)
+        result.append({
+            "name": name,
+            "is_default": name == default_name,
+            "fingerprint": fp,
+            "pub_key": pub,
+        })
+    return result
+
 
 @router.post("/api/config/keys/slice")
 async def upload_slice_keys(
     private_key: UploadFile = File(...),
     public_key: UploadFile = File(...),
+    key_name: str = Query("default"),
 ):
-    d = _ensure_config_dir()
+    config_dir = _ensure_config_dir()
+    _migrate_legacy_keys(config_dir)
+
+    key_dir = os.path.join(config_dir, "slice_keys", key_name)
+    os.makedirs(key_dir, exist_ok=True)
 
     priv_content = await private_key.read()
     pub_content = await public_key.read()
 
-    priv_path = os.path.join(d, "slice_key")
+    priv_path = os.path.join(key_dir, "slice_key")
     with open(priv_path, "wb") as f:
         f.write(priv_content)
     os.chmod(priv_path, stat.S_IRUSR | stat.S_IWUSR)
 
-    pub_path = os.path.join(d, "slice_key.pub")
+    pub_path = os.path.join(key_dir, "slice_key.pub")
     with open(pub_path, "wb") as f:
         f.write(pub_content)
     os.chmod(pub_path, stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IROTH)
 
-    return {"status": "ok", "message": "Slice keys uploaded"}
+    # Register in keys.json
+    data = _load_keys_json(config_dir)
+    if key_name not in data.get("keys", []):
+        data.setdefault("keys", []).append(key_name)
+    _save_keys_json(config_dir, data)
 
+    # Also maintain legacy flat copies for the default key set
+    if key_name == data.get("default", "default"):
+        _sync_default_flat_copies(config_dir, key_name)
 
-# ---------------------------------------------------------------------------
-# POST /api/config/keys/slice/generate — auto-generate RSA 2048 slice keys
-# ---------------------------------------------------------------------------
+    return {"status": "ok", "message": f"Slice keys uploaded to set '{key_name}'"}
+
 
 @router.post("/api/config/keys/slice/generate")
-def generate_slice_keys():
-    d = _ensure_config_dir()
+def generate_slice_keys(key_name: str = Query("default")):
+    config_dir = _ensure_config_dir()
+    _migrate_legacy_keys(config_dir)
+
+    key_dir = os.path.join(config_dir, "slice_keys", key_name)
+    os.makedirs(key_dir, exist_ok=True)
 
     key = paramiko.RSAKey.generate(2048)
 
-    # Save private key
-    priv_path = os.path.join(d, "slice_key")
+    priv_path = os.path.join(key_dir, "slice_key")
     key.write_private_key_file(priv_path)
     os.chmod(priv_path, stat.S_IRUSR | stat.S_IWUSR)
 
-    # Save public key
-    pub_path = os.path.join(d, "slice_key.pub")
     pub_key_str = f"{key.get_name()} {key.get_base64()} fabric-webgui-generated"
+    pub_path = os.path.join(key_dir, "slice_key.pub")
     with open(pub_path, "w") as f:
         f.write(pub_key_str + "\n")
     os.chmod(pub_path, stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IROTH)
 
+    # Register in keys.json
+    data = _load_keys_json(config_dir)
+    if key_name not in data.get("keys", []):
+        data.setdefault("keys", []).append(key_name)
+    _save_keys_json(config_dir, data)
+
+    # Maintain legacy flat copies for default key set
+    if key_name == data.get("default", "default"):
+        _sync_default_flat_copies(config_dir, key_name)
+
     return {
         "status": "ok",
         "public_key": pub_key_str,
-        "message": "Slice keys generated. Add the public key to your FABRIC portal profile.",
+        "message": f"Slice keys generated in set '{key_name}'. Add the public key to your FABRIC portal profile.",
     }
+
+
+@router.put("/api/config/keys/slice/default")
+def set_default_slice_key(key_name: str = Query(...)):
+    """Set which key set is the default."""
+    config_dir = _config_dir()
+    _migrate_legacy_keys(config_dir)
+    data = _load_keys_json(config_dir)
+
+    if key_name not in data.get("keys", []):
+        raise HTTPException(status_code=404, detail=f"Key set '{key_name}' not found")
+
+    data["default"] = key_name
+    _save_keys_json(config_dir, data)
+
+    # Sync flat copies and update fabric_rc
+    _sync_default_flat_copies(config_dir, key_name)
+    _update_fabric_rc_slice_keys(config_dir, key_name)
+
+    # Reset FABlib so it picks up new key paths
+    reset_fablib()
+
+    return {"status": "ok", "default": key_name}
+
+
+@router.delete("/api/config/keys/slice/{key_name}")
+def delete_slice_key_set(key_name: str):
+    """Delete a named key set. Cannot delete the current default."""
+    config_dir = _config_dir()
+    _migrate_legacy_keys(config_dir)
+    data = _load_keys_json(config_dir)
+
+    if key_name == data.get("default", "default"):
+        raise HTTPException(status_code=400, detail="Cannot delete the default key set. Change default first.")
+
+    if key_name not in data.get("keys", []):
+        raise HTTPException(status_code=404, detail=f"Key set '{key_name}' not found")
+
+    # Remove from registry
+    data["keys"] = [k for k in data["keys"] if k != key_name]
+    _save_keys_json(config_dir, data)
+
+    # Remove directory
+    key_dir = os.path.join(config_dir, "slice_keys", key_name)
+    if os.path.isdir(key_dir):
+        shutil.rmtree(key_dir)
+
+    return {"status": "ok", "deleted": key_name}
+
+
+def _sync_default_flat_copies(config_dir: str, key_name: str) -> None:
+    """Copy the named key set to flat slice_key/slice_key.pub for legacy compatibility."""
+    priv_src, pub_src = get_slice_key_path(config_dir, key_name)
+    priv_dst = os.path.join(config_dir, "slice_key")
+    pub_dst = os.path.join(config_dir, "slice_key.pub")
+    if os.path.isfile(priv_src):
+        shutil.copy2(priv_src, priv_dst)
+    if os.path.isfile(pub_src):
+        shutil.copy2(pub_src, pub_dst)
+
+
+def _update_fabric_rc_slice_keys(config_dir: str, key_name: str) -> None:
+    """Update FABRIC_SLICE_*_KEY_FILE in fabric_rc to point to the named key set."""
+    rc_path = os.path.join(config_dir, "fabric_rc")
+    if not os.path.isfile(rc_path):
+        return
+    priv_path, pub_path = get_slice_key_path(config_dir, key_name)
+    with open(rc_path) as f:
+        lines = f.readlines()
+    new_lines = []
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("export FABRIC_SLICE_PRIVATE_KEY_FILE="):
+            new_lines.append(f"export FABRIC_SLICE_PRIVATE_KEY_FILE={priv_path}\n")
+        elif stripped.startswith("export FABRIC_SLICE_PUBLIC_KEY_FILE="):
+            new_lines.append(f"export FABRIC_SLICE_PUBLIC_KEY_FILE={pub_path}\n")
+        else:
+            new_lines.append(line)
+    with open(rc_path, "w") as f:
+        f.writelines(new_lines)
+
+
+# ---------------------------------------------------------------------------
+# Per-Slice Key Assignment
+# ---------------------------------------------------------------------------
+
+@router.get("/api/config/slice-key/{slice_name}")
+def get_slice_key_assignment(slice_name: str):
+    """Get the key set assigned to a specific slice."""
+    path = os.path.join(_slice_keys_dir(), f"{slice_name}.json")
+    if os.path.isfile(path):
+        with open(path) as f:
+            data = json.load(f)
+        return {"slice_name": slice_name, "slice_key_id": data.get("slice_key_id", "")}
+    return {"slice_name": slice_name, "slice_key_id": ""}
+
+
+class SliceKeyAssignment(BaseModel):
+    slice_key_id: str
+
+
+@router.put("/api/config/slice-key/{slice_name}")
+def set_slice_key_assignment(slice_name: str, body: SliceKeyAssignment):
+    """Assign a key set to a slice."""
+    config_dir = _config_dir()
+    _migrate_legacy_keys(config_dir)
+    data = _load_keys_json(config_dir)
+
+    if body.slice_key_id and body.slice_key_id not in data.get("keys", []):
+        raise HTTPException(status_code=404, detail=f"Key set '{body.slice_key_id}' not found")
+
+    path = os.path.join(_slice_keys_dir(), f"{slice_name}.json")
+    if body.slice_key_id:
+        with open(path, "w") as f:
+            json.dump({"slice_key_id": body.slice_key_id}, f, indent=2)
+    else:
+        # Empty string means "use default" — remove the assignment file
+        if os.path.isfile(path):
+            os.remove(path)
+
+    return {"status": "ok", "slice_name": slice_name, "slice_key_id": body.slice_key_id}
 
 
 # ---------------------------------------------------------------------------
@@ -385,6 +579,10 @@ def save_config(req: ConfigSaveRequest):
     # Resolve ssh_command_line config_dir placeholder
     ssh_cmd = req.ssh_command_line.replace("{config_dir}", d)
 
+    # Get default key paths for fabric_rc
+    _migrate_legacy_keys(d)
+    priv_path, pub_path = get_default_slice_key_path(d)
+
     fabric_rc = f"""export FABRIC_CREDMGR_HOST={req.credmgr_host}
 export FABRIC_ORCHESTRATOR_HOST={req.orchestrator_host}
 export FABRIC_CORE_API_HOST={req.core_api_host}
@@ -394,8 +592,8 @@ export FABRIC_BASTION_HOST={req.bastion_host}
 export FABRIC_BASTION_USERNAME={req.bastion_username}
 export FABRIC_BASTION_KEY_LOCATION={d}/fabric_bastion_key
 export FABRIC_BASTION_SSH_CONFIG_FILE={d}/ssh_config
-export FABRIC_SLICE_PUBLIC_KEY_FILE={d}/slice_key.pub
-export FABRIC_SLICE_PRIVATE_KEY_FILE={d}/slice_key
+export FABRIC_SLICE_PUBLIC_KEY_FILE={pub_path}
+export FABRIC_SLICE_PRIVATE_KEY_FILE={priv_path}
 export FABRIC_PROJECT_ID={req.project_id}
 export FABRIC_LOG_LEVEL={req.log_level}
 export FABRIC_LOG_FILE={req.log_file}

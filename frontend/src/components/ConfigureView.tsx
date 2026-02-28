@@ -1,13 +1,14 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import * as api from '../api/client';
-import type { ConfigStatus, ProjectInfo } from '../types/fabric';
+import type { ConfigStatus, ProjectInfo, SliceKeySet } from '../types/fabric';
 import '../styles/configure.css';
 
 interface ConfigureViewProps {
   onConfigured: () => void;
+  onClose?: () => void;
 }
 
-export default function ConfigureView({ onConfigured }: ConfigureViewProps) {
+export default function ConfigureView({ onConfigured, onClose }: ConfigureViewProps) {
   const [status, setStatus] = useState<ConfigStatus | null>(null);
   const [projects, setProjects] = useState<ProjectInfo[]>([]);
   const [bastionLogin, setBastionLogin] = useState('');
@@ -19,6 +20,11 @@ export default function ConfigureView({ onConfigured }: ConfigureViewProps) {
   const [saving, setSaving] = useState(false);
   const [showTokenPaste, setShowTokenPaste] = useState(false);
   const [pastedToken, setPastedToken] = useState('');
+
+  // Key set management
+  const [keySets, setKeySets] = useState<SliceKeySet[]>([]);
+  const [newKeyName, setNewKeyName] = useState('');
+  const [showAddKeySet, setShowAddKeySet] = useState(false);
 
   // Advanced settings
   const [credmgrHost, setCredmgrHost] = useState('cm.fabric-testbed.net');
@@ -50,9 +56,19 @@ export default function ConfigureView({ onConfigured }: ConfigureViewProps) {
     }
   }, []);
 
+  const loadKeySets = useCallback(async () => {
+    try {
+      const sets = await api.listSliceKeySets();
+      setKeySets(sets);
+    } catch {
+      // ignore
+    }
+  }, []);
+
   useEffect(() => {
     loadStatus();
-  }, [loadStatus]);
+    loadKeySets();
+  }, [loadStatus, loadKeySets]);
 
   // Load projects when token is available
   const loadProjects = useCallback(async () => {
@@ -150,7 +166,7 @@ export default function ConfigureView({ onConfigured }: ConfigureViewProps) {
     }
   };
 
-  const handleSliceKeyUpload = async () => {
+  const handleSliceKeyUpload = async (keyName: string) => {
     const privFile = slicePrivKeyRef.current?.files?.[0];
     const pubFile = slicePubKeyRef.current?.files?.[0];
     if (!privFile || !pubFile) {
@@ -159,9 +175,12 @@ export default function ConfigureView({ onConfigured }: ConfigureViewProps) {
     }
     setLoading(true);
     try {
-      await api.uploadSliceKeys(privFile, pubFile);
-      setMessage({ text: 'Slice keys uploaded', type: 'success' });
+      await api.uploadSliceKeys(privFile, pubFile, keyName);
+      setMessage({ text: `Slice keys uploaded to set '${keyName}'`, type: 'success' });
       await loadStatus();
+      await loadKeySets();
+      setShowAddKeySet(false);
+      setNewKeyName('');
     } catch (err: any) {
       setMessage({ text: `Slice key upload failed: ${err.message}`, type: 'error' });
     } finally {
@@ -171,13 +190,16 @@ export default function ConfigureView({ onConfigured }: ConfigureViewProps) {
     }
   };
 
-  const handleGenerateKeys = async () => {
+  const handleGenerateKeys = async (keyName: string) => {
     setLoading(true);
     try {
-      const result = await api.generateSliceKeys();
+      const result = await api.generateSliceKeys(keyName);
       setGeneratedPubKey(result.public_key);
       setMessage({ text: result.message, type: 'success' });
       await loadStatus();
+      await loadKeySets();
+      setShowAddKeySet(false);
+      setNewKeyName('');
     } catch (err: any) {
       setMessage({ text: `Key generation failed: ${err.message}`, type: 'error' });
     } finally {
@@ -185,8 +207,29 @@ export default function ConfigureView({ onConfigured }: ConfigureViewProps) {
     }
   };
 
-  const handleCopyPubKey = () => {
-    navigator.clipboard.writeText(generatedPubKey);
+  const handleSetDefault = async (name: string) => {
+    try {
+      await api.setDefaultSliceKey(name);
+      setMessage({ text: `Default key set changed to '${name}'`, type: 'success' });
+      await loadStatus();
+      await loadKeySets();
+    } catch (err: any) {
+      setMessage({ text: `Failed to set default: ${err.message}`, type: 'error' });
+    }
+  };
+
+  const handleDeleteKeySet = async (name: string) => {
+    try {
+      await api.deleteSliceKeySet(name);
+      setMessage({ text: `Key set '${name}' deleted`, type: 'success' });
+      await loadKeySets();
+    } catch (err: any) {
+      setMessage({ text: `Failed to delete: ${err.message}`, type: 'error' });
+    }
+  };
+
+  const handleCopyPubKey = (pubKey: string) => {
+    navigator.clipboard.writeText(pubKey);
     setMessage({ text: 'Public key copied to clipboard', type: 'success' });
   };
 
@@ -233,9 +276,30 @@ export default function ConfigureView({ onConfigured }: ConfigureViewProps) {
     ? new Date(status.token_info.exp * 1000).toLocaleString()
     : null;
 
+  const effectiveKeyName = showAddKeySet && newKeyName.trim() ? newKeyName.trim() : 'default';
+
   return (
     <div className="configure-view">
       <div className="configure-card">
+        {/* Header */}
+        <div className="configure-header">
+          <h2 className="configure-title">{'\u2699'} Settings</h2>
+          <div className="configure-header-actions">
+            <button
+              className="btn primary"
+              onClick={async () => { await handleSave(); onClose?.(); }}
+              disabled={saving || !status?.has_token || !selectedProject || !bastionLogin}
+            >
+              {saving ? 'Saving...' : 'Save & Close'}
+            </button>
+            {onClose && (
+              <button className="btn configure-close-btn" onClick={onClose}>
+                Close
+              </button>
+            )}
+          </div>
+        </div>
+
         {/* Status Banner */}
         <div className="status-banner">
           <div className="status-item">
@@ -263,9 +327,9 @@ export default function ConfigureView({ onConfigured }: ConfigureViewProps) {
           </div>
         )}
 
-        {/* Token Section */}
+        {/* Identity & Project Section */}
         <div className="configure-section">
-          <h3>Authentication Token</h3>
+          <h3>Identity and Project</h3>
           <p>Upload a token file, or login with FABRIC to get a token from Credential Manager.</p>
           <div className="btn-row">
             <input
@@ -317,12 +381,8 @@ export default function ConfigureView({ onConfigured }: ConfigureViewProps) {
               {tokenExpiry && <span>Expires: {tokenExpiry}</span>}
             </div>
           )}
-        </div>
 
-        {/* Project Section */}
-        <div className="configure-section">
-          <h3>Project</h3>
-          <p>Select your FABRIC project.</p>
+          <p style={{ marginTop: 16 }}><strong>Project</strong> — Select your FABRIC project.</p>
           <select
             value={selectedProject}
             onChange={(e) => setSelectedProject(e.target.value)}
@@ -338,6 +398,14 @@ export default function ConfigureView({ onConfigured }: ConfigureViewProps) {
           {projects.length === 0 && status?.has_token && (
             <p>Loading projects from token...</p>
           )}
+
+          <p style={{ marginTop: 16 }}><strong>Bastion Username</strong> — Your FABRIC bastion login username (auto-detected from token when possible).</p>
+          <input
+            type="text"
+            value={bastionLogin}
+            onChange={(e) => setBastionLogin(e.target.value)}
+            placeholder="e.g. user_name_0001234567"
+          />
         </div>
 
         {/* SSH Keys Section */}
@@ -365,75 +433,107 @@ export default function ConfigureView({ onConfigured }: ConfigureViewProps) {
           {status?.bastion_key_fingerprint && (
             <div className="key-info">
               <span className="key-info-label">Fingerprint:</span> {status.bastion_key_fingerprint}
-            </div>
-          )}
-          {status?.bastion_pub_key && (
-            <div className="key-display">
-              <button className="copy-btn" onClick={() => { navigator.clipboard.writeText(status.bastion_pub_key!); setMessage({ text: 'Bastion public key copied', type: 'success' }); }}>Copy</button>
-              {status.bastion_pub_key}
+              {status?.bastion_pub_key && (
+                <button className="btn-sm" style={{ marginLeft: 8 }} onClick={() => handleCopyPubKey(status.bastion_pub_key!)}>Copy Public Key</button>
+              )}
             </div>
           )}
 
-          {/* Slice Keys */}
-          <p style={{ marginTop: 16 }}><strong>Slice Keys</strong> — Upload an existing key pair or generate new ones.</p>
-          <div className="btn-row">
-            <input ref={slicePrivKeyRef} type="file" className="file-input-hidden" />
-            <input ref={slicePubKeyRef} type="file" className="file-input-hidden" />
-            <button
-              className="btn"
-              onClick={() => slicePrivKeyRef.current?.click()}
-              disabled={loading}
-            >
-              Private Key
-            </button>
-            <button
-              className="btn"
-              onClick={() => slicePubKeyRef.current?.click()}
-              disabled={loading}
-            >
-              Public Key
-            </button>
-            <button
-              className="btn"
-              onClick={handleSliceKeyUpload}
-              disabled={loading || !slicePrivKeyRef.current?.files?.length || !slicePubKeyRef.current?.files?.length}
-            >
-              Upload Pair
-            </button>
-            <button className="btn success" onClick={handleGenerateKeys} disabled={loading}>
-              Generate Keys
-            </button>
-            {status?.has_slice_key && <span className="status-item"><span className="status-dot ok" /> Ready</span>}
-          </div>
-          {status?.slice_key_fingerprint && (
-            <div className="key-info">
-              <span className="key-info-label">Fingerprint:</span> {status.slice_key_fingerprint}
-            </div>
-          )}
-          {status?.slice_pub_key && (
-            <div className="key-display">
-              <button className="copy-btn" onClick={() => { navigator.clipboard.writeText(status.slice_pub_key!); setMessage({ text: 'Slice public key copied', type: 'success' }); }}>Copy</button>
-              {status.slice_pub_key}
-            </div>
-          )}
-          {generatedPubKey && !status?.slice_pub_key && (
-            <div className="key-display">
-              <button className="copy-btn" onClick={handleCopyPubKey}>Copy</button>
-              {generatedPubKey}
-            </div>
-          )}
-        </div>
+          {/* Slice Key Sets */}
+          <p style={{ marginTop: 16 }}><strong>Slice Key Sets</strong> — Manage named SSH key pairs for slice access.</p>
 
-        {/* Bastion Username */}
-        <div className="configure-section">
-          <h3>Bastion Username</h3>
-          <p>Your FABRIC bastion login username (auto-detected from token when possible).</p>
-          <input
-            type="text"
-            value={bastionLogin}
-            onChange={(e) => setBastionLogin(e.target.value)}
-            placeholder="e.g. user_name_0001234567"
-          />
+          {/* Key Set List */}
+          {keySets.length > 0 && (
+            <div className="key-set-list">
+              {keySets.map((ks) => (
+                <div key={ks.name} className="key-set-row">
+                  <div className="key-set-info">
+                    <span className="key-set-name">{ks.name}</span>
+                    {ks.is_default && <span className="key-set-default-badge">default</span>}
+                    {ks.fingerprint && (
+                      <span className="key-set-fingerprint">{ks.fingerprint}</span>
+                    )}
+                  </div>
+                  <div className="key-set-actions">
+                    {ks.pub_key && (
+                      <button className="btn-sm" onClick={() => handleCopyPubKey(ks.pub_key)} title="Copy public key">
+                        Copy Pub
+                      </button>
+                    )}
+                    {!ks.is_default && (
+                      <>
+                        <button className="btn-sm primary" onClick={() => handleSetDefault(ks.name)} title="Set as default">
+                          Set Default
+                        </button>
+                        <button className="btn-sm danger" onClick={() => handleDeleteKeySet(ks.name)} title="Delete key set">
+                          Delete
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Add Key Set */}
+          {!showAddKeySet ? (
+            <div className="btn-row" style={{ marginTop: 8 }}>
+              <button className="btn" onClick={() => setShowAddKeySet(true)} disabled={loading}>
+                Add Key Set
+              </button>
+            </div>
+          ) : (
+            <div className="add-key-set-form">
+              <div className="btn-row">
+                <input
+                  type="text"
+                  value={newKeyName}
+                  onChange={(e) => setNewKeyName(e.target.value.replace(/[^a-zA-Z0-9_-]/g, ''))}
+                  placeholder="Key set name (e.g. project-x)"
+                  style={{ flex: 1, marginBottom: 0 }}
+                />
+                <button className="btn" onClick={() => { setShowAddKeySet(false); setNewKeyName(''); }}>
+                  Cancel
+                </button>
+              </div>
+              <input ref={slicePrivKeyRef} type="file" className="file-input-hidden" />
+              <input ref={slicePubKeyRef} type="file" className="file-input-hidden" />
+              <div className="btn-row" style={{ marginTop: 8 }}>
+                <button
+                  className="btn"
+                  onClick={() => slicePrivKeyRef.current?.click()}
+                  disabled={loading}
+                >
+                  Private Key
+                </button>
+                <button
+                  className="btn"
+                  onClick={() => slicePubKeyRef.current?.click()}
+                  disabled={loading}
+                >
+                  Public Key
+                </button>
+                <button
+                  className="btn"
+                  onClick={() => handleSliceKeyUpload(effectiveKeyName)}
+                  disabled={loading}
+                >
+                  Upload Pair
+                </button>
+                <button className="btn success" onClick={() => handleGenerateKeys(effectiveKeyName)} disabled={loading}>
+                  Generate
+                </button>
+              </div>
+            </div>
+          )}
+
+          {generatedPubKey && (
+            <div className="key-info" style={{ marginTop: 8 }}>
+              <span className="key-info-label">Generated key ready.</span>
+              <button className="btn-sm" style={{ marginLeft: 8 }} onClick={() => handleCopyPubKey(generatedPubKey)}>Copy Public Key</button>
+            </div>
+          )}
         </div>
 
         {/* Advanced Settings */}
@@ -486,17 +586,6 @@ export default function ConfigureView({ onConfigured }: ConfigureViewProps) {
           )}
         </div>
 
-        {/* Save */}
-        <div className="configure-section save-section">
-          <button
-            className="btn primary"
-            onClick={handleSave}
-            disabled={saving || !status?.has_token || !selectedProject || !bastionLogin}
-            style={{ padding: '12px 48px', fontSize: 15 }}
-          >
-            {saving ? 'Saving...' : 'Save & Apply'}
-          </button>
-        </div>
       </div>
     </div>
   );

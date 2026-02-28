@@ -73,6 +73,33 @@ def serialize_component(comp) -> dict[str, Any]:
     }
 
 
+def _node_capacity(node, attr: str) -> int:
+    """Read a node capacity (cores/ram/disk), falling back to FIM capacities.
+
+    FABlib's get_cores/get_ram/get_disk read from capacity_allocations which
+    is None for draft slices.  Fall back to fim.capacities which holds the
+    requested values."""
+    val = _safe(getattr(node, f"get_{attr}"))
+    try:
+        v = int(val)
+        if v > 0:
+            return v
+    except (TypeError, ValueError):
+        pass
+    # Fallback: read from FIM capacities object
+    try:
+        fim = node.get_fim_node()
+        caps = fim.capacities
+        if caps:
+            fim_attr = attr if attr != "cores" else "core"
+            v = getattr(caps, fim_attr, 0)
+            if v and int(v) > 0:
+                return int(v)
+    except Exception:
+        pass
+    return 0
+
+
 def serialize_node(node) -> dict[str, Any]:
     """Serialize a FABlib Node object (no SSH calls)."""
     components = [
@@ -90,9 +117,9 @@ def serialize_node(node) -> dict[str, Any]:
         "name": _safe(node.get_name),
         "site": _safe(node.get_site),
         "host": _safe(node.get_host),
-        "cores": _safe(node.get_cores),
-        "ram": _safe(node.get_ram),
-        "disk": _safe(node.get_disk),
+        "cores": _node_capacity(node, "cores"),
+        "ram": _node_capacity(node, "ram"),
+        "disk": _node_capacity(node, "disk"),
         "image": _safe(node.get_image),
         "image_type": _safe(node.get_image_type),
         "management_ip": _safe(node.get_management_ip),
@@ -106,7 +133,8 @@ def serialize_node(node) -> dict[str, Any]:
 def serialize_network(net) -> dict[str, Any]:
     """Serialize a FABlib NetworkService object."""
     net_type = _safe(lambda: str(net.get_type()))
-    layer = "L3" if "IPv" in net_type else "L2"
+    l3_indicators = ("IPv", "FABNetv", "L3VPN")
+    layer = "L3" if any(ind in net_type for ind in l3_indicators) else "L2"
     interfaces = [
         serialize_interface(i)
         for i in (_safe(net.get_interfaces, []) or [])
@@ -121,10 +149,31 @@ def serialize_network(net) -> dict[str, Any]:
     }
 
 
+def serialize_facility_port(fp) -> dict[str, Any]:
+    """Serialize a FABlib FacilityPort object."""
+    interfaces = [
+        serialize_interface(i)
+        for i in (_safe(fp.get_interfaces, []) or [])
+    ]
+    return {
+        "name": _safe(fp.get_name),
+        "site": _safe(fp.get_site),
+        "vlan": _safe(fp.get_vlan),
+        "bandwidth": _safe(fp.get_bandwidth),
+        "interfaces": interfaces,
+    }
+
+
 def slice_to_dict(slice_obj) -> dict[str, Any]:
     """Convert a full FABlib Slice into a plain dict."""
     nodes = [serialize_node(n) for n in (_safe(slice_obj.get_nodes, []) or [])]
     networks = [serialize_network(n) for n in (_safe(slice_obj.get_network_services, []) or [])]
+    facility_ports = []
+    try:
+        for fp in (slice_obj.get_facility_ports() or []):
+            facility_ports.append(serialize_facility_port(fp))
+    except Exception:
+        pass
 
     return {
         "name": _safe(slice_obj.get_name),
@@ -133,6 +182,7 @@ def slice_to_dict(slice_obj) -> dict[str, Any]:
         "lease_end": _safe(lambda: str(slice_obj.get_lease_end()) if slice_obj.get_lease_end() else ""),
         "nodes": nodes,
         "networks": networks,
+        "facility_ports": facility_ports,
     }
 
 

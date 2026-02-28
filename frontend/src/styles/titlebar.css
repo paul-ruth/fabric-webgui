@@ -1,8 +1,8 @@
-/* Title bar — matches fabvis _build_title() exactly */
+/* Title bar */
 .title-bar {
   background: linear-gradient(135deg, var(--fabric-primary-dark), var(--fabric-primary));
   color: white;
-  padding: 10px 16px;
+  padding: 8px 16px;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -19,58 +19,185 @@
   display: flex;
   align-items: center;
   gap: 0;
+  min-width: 0;
 }
 
 .title-bar .fabric-logo {
   height: 28px;
   margin-right: 12px;
   vertical-align: middle;
+  flex-shrink: 0;
 }
 
 .title-bar .title-text {
   font-size: 16px;
   font-weight: 600;
   letter-spacing: 0.5px;
+  white-space: nowrap;
 }
 
-.title-bar .title-project {
-  font-size: 12px;
-  opacity: 0.8;
-  margin-left: 14px;
-  padding: 2px 10px;
-  background: rgba(255, 255, 255, 0.15);
-  border-radius: 10px;
-  font-weight: 500;
+.title-bar .title-version {
+  font-size: 11px;
+  opacity: 0.6;
+  margin-left: 8px;
+  font-weight: 400;
+  letter-spacing: 0.3px;
+  white-space: nowrap;
 }
 
 .title-bar .title-right {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
+  flex-shrink: 0;
 }
 
-.title-bar .mode-label {
-  font-size: 13px;
-  opacity: 0.85;
+/* ── Pill selector (shared by View + Project) ── */
+.title-pill-wrapper {
+  position: relative;
 }
 
-/* Dark mode toggle pill */
-.theme-toggle {
-  background: rgba(255, 255, 255, 0.15);
-  border: 1px solid rgba(255, 255, 255, 0.25);
-  color: white;
-  padding: 4px 12px;
-  border-radius: 20px;
-  font-size: 12px;
-  font-weight: 500;
-  cursor: pointer;
+.title-pill {
   display: flex;
   align-items: center;
   gap: 6px;
-  transition: background 0.2s;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: rgba(255, 255, 255, 0.1);
+  color: white;
+  padding: 4px 10px 4px 10px;
+  border-radius: 20px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+  box-shadow: none;
+  white-space: nowrap;
+  line-height: 1.4;
+}
+.title-pill:hover {
+  background: rgba(255, 255, 255, 0.2);
+  border-color: rgba(255, 255, 255, 0.35);
   box-shadow: none;
 }
-.theme-toggle:hover {
+
+.title-pill-label {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  opacity: 0.55;
+  margin-right: 2px;
+}
+
+.title-pill-value {
+  font-weight: 600;
+  font-size: 12px;
+}
+
+.title-pill-arrow {
+  font-size: 9px;
+  opacity: 0.6;
+  margin-left: 2px;
+}
+
+/* ── Dropdown ── */
+.title-pill-dropdown {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  min-width: 160px;
+  background: var(--fabric-white);
+  border: 1px solid var(--fabric-border, rgba(255,255,255,0.12));
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  z-index: 9999;
+  padding: 4px;
+  animation: titlePillFadeIn 0.12s ease-out;
+}
+
+.title-pill-dropdown-projects {
+  min-width: 200px;
+  max-height: 280px;
+  overflow-y: auto;
+}
+
+@keyframes titlePillFadeIn {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.title-pill-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  border: none;
+  background: none;
+  color: var(--fabric-text);
+  padding: 7px 12px;
+  border-radius: 7px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.1s;
+  box-shadow: none;
+}
+.title-pill-option:hover {
+  background: rgba(87, 152, 188, 0.15);
+  box-shadow: none;
+}
+.title-pill-option.active {
+  background: rgba(87, 152, 188, 0.2);
+  color: var(--fabric-primary, #5798bc);
+  font-weight: 600;
+}
+
+.title-pill-option-icon {
+  font-size: 14px;
+  width: 20px;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+.title-pill-check {
+  margin-left: auto;
+  font-size: 13px;
+  color: var(--fabric-primary, #5798bc);
+}
+
+/* ── Icon buttons (settings, theme toggle) ── */
+.title-icon-btn {
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  color: white;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border-radius: 50%;
+  font-size: 14px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s;
+  box-shadow: none;
+}
+.title-icon-btn:hover {
   background: rgba(255, 255, 255, 0.25);
   box-shadow: none;
+}
+
+/* ── Responsive ── */
+@media (max-width: 800px) {
+  .title-bar {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .title-bar .title-right {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .title-bar .title-text {
+    font-size: 14px;
+  }
 }

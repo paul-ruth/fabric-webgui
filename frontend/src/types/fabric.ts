@@ -63,6 +63,14 @@ export interface CyGraph {
   edges: CyEdge[];
 }
 
+export interface SliceFacilityPort {
+  name: string;
+  site: string;
+  vlan: string;
+  bandwidth: string;
+  interfaces: SliceInterface[];
+}
+
 export interface SliceData {
   name: string;
   id: string;
@@ -71,6 +79,7 @@ export interface SliceData {
   lease_end: string;
   nodes: SliceNode[];
   networks: SliceNetwork[];
+  facility_ports: SliceFacilityPort[];
   graph: CyGraph;
 }
 
@@ -146,6 +155,13 @@ export interface ValidationResult {
   issues: ValidationIssue[];
 }
 
+export interface SliceKeySet {
+  name: string;
+  is_default: boolean;
+  fingerprint: string;
+  pub_key: string;
+}
+
 export interface ConfigStatus {
   configured: boolean;
   has_token: boolean;
@@ -164,6 +180,8 @@ export interface ConfigStatus {
   bastion_key_fingerprint?: string;
   slice_pub_key?: string;
   slice_key_fingerprint?: string;
+  default_slice_key?: string;
+  slice_key_sets?: string[];
 }
 
 export interface ProjectInfo {
@@ -219,6 +237,19 @@ export interface BootConfig {
   uploads: BootUpload[];
   commands: BootCommand[];
   network: BootNetConfig[];
+}
+
+export interface VMTemplateSummary {
+  name: string;
+  description: string;
+  image: string;
+  created: string;
+  builtin: boolean;
+  dir_name: string;
+}
+
+export interface VMTemplateDetail extends VMTemplateSummary {
+  boot_config: BootConfig;
 }
 
 export interface BootExecResult {

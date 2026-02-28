@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 import os
 
-from app.routes import slices, resources, terminal, config, metrics, files
+from app.routes import slices, resources, terminal, config, metrics, files, templates, vm_templates
 
 app = FastAPI(title="FABRIC Web GUI API", version="0.1.0")
 
@@ -23,6 +23,8 @@ app.include_router(metrics.router, prefix="/api")
 app.include_router(terminal.router)
 app.include_router(config.router)
 app.include_router(files.router)
+app.include_router(templates.router)
+app.include_router(vm_templates.router)
 
 # Serve frontend static files in production
 static_dir = os.path.join(os.path.dirname(__file__), "..", "static")

@@ -4,12 +4,14 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      - fabric_config:/fabric_config
       - fabric_storage:/fabric_storage
     environment:
-      - FABRIC_CONFIG_DIR=/fabric_config
+      - FABRIC_CONFIG_DIR=/fabric_storage/.fabric_config
       - FABRIC_STORAGE_DIR=/fabric_storage
       - HOME=/tmp
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
     restart: unless-stopped
 
   frontend:
@@ -18,8 +20,10 @@ services:
       - "3000:3000"
     depends_on:
       - backend
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
     restart: unless-stopped
 
 volumes:
-  fabric_config:
   fabric_storage:

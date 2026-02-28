@@ -264,7 +264,7 @@
 }
 
 .toolbar-modal {
-  background: var(--panel-bg, #fff);
+  background: var(--fabric-white);
   border: 1px solid var(--fabric-border);
   border-radius: 8px;
   padding: 20px;
