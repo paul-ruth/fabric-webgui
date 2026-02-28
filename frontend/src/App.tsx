@@ -10,16 +10,19 @@ import BottomPanel from './components/BottomPanel';
 import type { TerminalTab } from './components/BottomPanel';
 import ConfigureView from './components/ConfigureView';
 import FileTransferView from './components/FileTransferView';
+import HelpView from './components/HelpView';
+import HelpContextMenu from './components/HelpContextMenu';
 import * as api from './api/client';
-import type { SliceSummary, SliceData, SiteInfo, LinkInfo, ComponentModel, SiteMetrics, LinkMetrics, ValidationIssue } from './types/fabric';
+import type { SliceSummary, SliceData, SiteInfo, LinkInfo, ComponentModel, SiteMetrics, LinkMetrics, ValidationIssue, ProjectInfo } from './types/fabric';
 
 export default function App() {
   const [slices, setSlices] = useState<SliceSummary[]>([]);
   const [selectedSliceName, setSelectedSliceName] = useState('');
   const [sliceData, setSliceData] = useState<SliceData | null>(null);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
-  const [currentView, setCurrentView] = useState<'editor' | 'geo' | 'files' | 'configure'>('editor');
+  const [errors, setErrors] = useState<string[]>([]);
+  const [currentView, setCurrentView] = useState<'topology' | 'map' | 'files'>('topology');
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [isConfigured, setIsConfigured] = useState<boolean | null>(null);
   const [layout, setLayout] = useState('dagre');
   const [selectedElement, setSelectedElement] = useState<Record<string, string> | null>(null);
@@ -32,6 +35,14 @@ export default function App() {
   const [validationIssues, setValidationIssues] = useState<ValidationIssue[]>([]);
   const [validationValid, setValidationValid] = useState(false);
   const [projectName, setProjectName] = useState('');
+  const [projectId, setProjectId] = useState('');
+  const [projects, setProjects] = useState<ProjectInfo[]>([]);
+  const [helpOpen, setHelpOpen] = useState(false);
+  const [helpSection, setHelpSection] = useState<string | undefined>(undefined);
+  const [statusMessage, setStatusMessage] = useState('');
+  const [consoleFullWidth, setConsoleFullWidth] = useState(true);
+  const [consoleExpanded, setConsoleExpanded] = useState(false);
+  const [consoleHeight, setConsoleHeight] = useState(260);
 
   // --- Global cache: infrastructure ---
   const [infraSites, setInfraSites] = useState<SiteInfo[]>([]);
@@ -64,22 +75,28 @@ export default function App() {
     api.getConfig().then((cfg) => {
       setIsConfigured(cfg.configured);
       if (!cfg.configured) {
-        setCurrentView('configure');
+        setSettingsOpen(true);
       }
-      // Derive project name from config
-      if (cfg.project_id && cfg.token_info?.projects) {
-        const proj = cfg.token_info.projects.find((p) => p.uuid === cfg.project_id);
-        if (proj) setProjectName(proj.name);
+      // Populate projects list and current project
+      if (cfg.token_info?.projects) {
+        setProjects(cfg.token_info.projects);
+      }
+      if (cfg.project_id) {
+        setProjectId(cfg.project_id);
+        if (cfg.token_info?.projects) {
+          const proj = cfg.token_info.projects.find((p) => p.uuid === cfg.project_id);
+          if (proj) setProjectName(proj.name);
+        }
       }
     }).catch(() => {
       setIsConfigured(false);
-      setCurrentView('configure');
+      setSettingsOpen(true);
     });
 
     // Handle OAuth callback
     const params = new URLSearchParams(window.location.search);
     if (params.get('configLogin') === 'success') {
-      setCurrentView('configure');
+      setSettingsOpen(true);
       window.history.replaceState({}, '', '/');
     }
   }, []);
@@ -105,8 +122,21 @@ export default function App() {
           });
           setSiteMetricsCache((prev) => ({ ...prev, ...cache }));
         });
+
+      // Refresh all link metrics in parallel
+      Promise.allSettled(links.map((l) => api.getLinkMetrics(l.site_a, l.site_b)))
+        .then((results) => {
+          const cache: Record<string, any> = {};
+          results.forEach((r, i) => {
+            if (r.status === 'fulfilled') {
+              const key = `${links[i].site_a}-${links[i].site_b}`;
+              cache[key] = r.value;
+            }
+          });
+          setLinkMetricsCache((prev) => ({ ...prev, ...cache }));
+        });
     } catch (e: any) {
-      setError(e.message);
+      setErrors(prev => [...prev, e.message]);
     } finally {
       setInfraLoading(false);
     }
@@ -123,7 +153,7 @@ export default function App() {
         const m = await api.getSiteMetrics(siteName);
         setSiteMetricsCache((prev) => ({ ...prev, [siteName]: m }));
       } catch (e: any) {
-        setError(e.message);
+        setErrors(prev => [...prev, e.message]);
       } finally {
         setMetricsLoading(false);
       }
@@ -134,17 +164,19 @@ export default function App() {
         const m = await api.getLinkMetrics(selectedElement.site_a, selectedElement.site_b);
         setLinkMetricsCache((prev) => ({ ...prev, [key]: m }));
       } catch (e: any) {
-        setError(e.message);
+        setErrors(prev => [...prev, e.message]);
       } finally {
         setMetricsLoading(false);
       }
     }
   }, [selectedElement]);
 
-  // --- Auto-fetch infrastructure on startup ---
-  useEffect(() => {
-    if (isConfigured) refreshInfrastructure();
-  }, [isConfigured, refreshInfrastructure]);
+  // Infrastructure loaded flag (no auto-fetch on startup)
+  const [infraLoaded, setInfraLoaded] = useState(false);
+  const refreshInfrastructureAndMark = useCallback(async () => {
+    await refreshInfrastructure();
+    setInfraLoaded(true);
+  }, [refreshInfrastructure]);
 
   // --- Auto-refresh interval for metrics ---
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -180,34 +212,59 @@ export default function App() {
   // Load slice list on first interaction or mount
   const refreshSliceList = useCallback(async () => {
     setLoading(true);
-    setError('');
+    setErrors([]);
     try {
       const list = await api.listSlices();
       setSlices(list);
       setListLoaded(true);
     } catch (e: any) {
-      setError(e.message);
+      setErrors(prev => [...prev, e.message]);
     } finally {
       setLoading(false);
     }
   }, []);
 
-  // Auto-load list if not yet loaded and configured
-  if (!listLoaded && !loading && isConfigured) {
-    refreshSliceList();
-  }
+  const handleProjectChange = useCallback(async (uuid: string) => {
+    const proj = projects.find((p) => p.uuid === uuid);
+    if (!proj) return;
+    try {
+      // We need bastion_username from current config to save
+      const cfg = await api.getConfig();
+      await api.saveConfig({
+        project_id: uuid,
+        bastion_username: cfg.bastion_username,
+      });
+      setProjectId(uuid);
+      setProjectName(proj.name);
+      // Reset slice state and refresh
+      setSliceData(null);
+      setSelectedSliceName('');
+      setSelectedElement(null);
+      setListLoaded(false);
+    } catch (e: any) {
+      setErrors(prev => [...prev, e.message]);
+    }
+  }, [projects]);
+
+  // No auto-load — user must click "Load Slices" first
 
   const loadSlice = useCallback(async () => {
     if (!selectedSliceName) return;
     setLoading(true);
-    setError('');
+    setErrors([]);
     setSelectedElement(null);
     try {
-      const data = await api.getSlice(selectedSliceName);
+      // Refresh the slice list first, then load the selected slice
+      const [list, data] = await Promise.all([
+        api.listSlices(),
+        api.getSlice(selectedSliceName),
+      ]);
+      setSlices(list);
+      setListLoaded(true);
       setSliceData(data);
       runValidation(selectedSliceName);
     } catch (e: any) {
-      setError(e.message);
+      setErrors(prev => [...prev, e.message]);
     } finally {
       setLoading(false);
     }
@@ -225,18 +282,32 @@ export default function App() {
   const handleSubmit = useCallback(async () => {
     if (!selectedSliceName) return;
     setLoading(true);
+    setStatusMessage('Submitting slice to FABRIC...');
     try {
       const data = await api.submitSlice(selectedSliceName);
       setSliceData(data);
       setValidationIssues([]);
       setValidationValid(true);
-      await refreshSliceList();
+      setStatusMessage('Submitted. Refreshing slice state...');
+      try {
+        // Reload slice data to get updated state from FABRIC
+        const refreshed = await api.refreshSlice(selectedSliceName);
+        setSliceData(refreshed);
+        runValidation(selectedSliceName);
+      } catch {}
+      setStatusMessage('Refreshing slice list...');
+      try {
+        const list = await api.listSlices();
+        setSlices(list);
+        setListLoaded(true);
+      } catch {}
     } catch (e: any) {
-      setError(e.message);
+      setErrors(prev => [...prev, e.message]);
     } finally {
       setLoading(false);
+      setStatusMessage('');
     }
-  }, [selectedSliceName, refreshSliceList]);
+  }, [selectedSliceName, runValidation]);
 
   const handleRefreshSlice = useCallback(async () => {
     if (!selectedSliceName) return;
@@ -246,7 +317,7 @@ export default function App() {
       setSliceData(data);
       runValidation(selectedSliceName);
     } catch (e: any) {
-      setError(e.message);
+      setErrors(prev => [...prev, e.message]);
     } finally {
       setLoading(false);
     }
@@ -262,12 +333,14 @@ export default function App() {
           data = await api.removeNode(selectedSliceName, el.name);
         } else if (el.element_type === 'network') {
           data = await api.removeNetwork(selectedSliceName, el.name);
+        } else if (el.element_type === 'facility-port') {
+          data = await api.removeFacilityPort(selectedSliceName, el.name);
         }
       }
       updateSliceAndValidate(data);
       setSelectedElement(null);
     } catch (e: any) {
-      setError(e.message);
+      setErrors(prev => [...prev, e.message]);
     } finally {
       setLoading(false);
     }
@@ -276,6 +349,7 @@ export default function App() {
   const handleDeleteSlice = useCallback(async () => {
     if (!selectedSliceName) return;
     setLoading(true);
+    setStatusMessage('Deleting slice...');
     try {
       await api.deleteSlice(selectedSliceName);
       setSliceData(null);
@@ -283,13 +357,19 @@ export default function App() {
       setSelectedElement(null);
       setValidationIssues([]);
       setValidationValid(false);
-      await refreshSliceList();
+      setStatusMessage('Deleted. Refreshing slice list...');
+      try {
+        const list = await api.listSlices();
+        setSlices(list);
+        setListLoaded(true);
+      } catch {}
     } catch (e: any) {
-      setError(e.message);
+      setErrors(prev => [...prev, e.message]);
     } finally {
       setLoading(false);
+      setStatusMessage('');
     }
-  }, [selectedSliceName, refreshSliceList]);
+  }, [selectedSliceName]);
 
   const handleNodeClick = useCallback((data: Record<string, string>) => {
     setSelectedElement(data);
@@ -305,7 +385,7 @@ export default function App() {
 
   const handleCreateSlice = useCallback(async (name: string) => {
     setLoading(true);
-    setError('');
+    setErrors([]);
     try {
       const data = await api.createSlice(name);
       setSliceData(data);
@@ -314,9 +394,10 @@ export default function App() {
         if (prev.some((s) => s.name === name)) return prev;
         return [...prev, { name, id: '', state: 'Draft' }];
       });
+      setCurrentView('topology');
       runValidation(name);
     } catch (e: any) {
-      setError(e.message);
+      setErrors(prev => [...prev, e.message]);
     } finally {
       setLoading(false);
     }
@@ -344,13 +425,43 @@ export default function App() {
     }
   }, [selectedSliceName, terminalIdCounter]);
 
+  const handleDeleteComponent = useCallback(async (nodeName: string, componentName: string) => {
+    if (!selectedSliceName) return;
+    setLoading(true);
+    try {
+      const data = await api.removeComponent(selectedSliceName, nodeName, componentName);
+      updateSliceAndValidate(data);
+    } catch (e: any) {
+      setErrors(prev => [...prev, e.message]);
+    } finally {
+      setLoading(false);
+    }
+  }, [selectedSliceName, updateSliceAndValidate]);
+
+  const handleDeleteFacilityPort = useCallback(async (fpName: string) => {
+    if (!selectedSliceName) return;
+    setLoading(true);
+    try {
+      const data = await api.removeFacilityPort(selectedSliceName, fpName);
+      updateSliceAndValidate(data);
+    } catch (e: any) {
+      setErrors(prev => [...prev, e.message]);
+    } finally {
+      setLoading(false);
+    }
+  }, [selectedSliceName, updateSliceAndValidate]);
+
   const handleContextAction = useCallback((action: ContextMenuAction) => {
     if (action.type === 'terminal') {
       handleOpenTerminals(action.elements);
     } else if (action.type === 'delete') {
       handleDeleteElements(action.elements);
+    } else if (action.type === 'delete-component' && action.nodeName && action.componentName) {
+      handleDeleteComponent(action.nodeName, action.componentName);
+    } else if (action.type === 'delete-facility-port' && action.fpName) {
+      handleDeleteFacilityPort(action.fpName);
     }
-  }, [handleOpenTerminals, handleDeleteElements]);
+  }, [handleOpenTerminals, handleDeleteElements, handleDeleteComponent, handleDeleteFacilityPort]);
 
   const handleCloseTerminal = useCallback((id: string) => {
     setTerminalTabs((prev) => prev.filter((t) => t.id !== id));
@@ -359,6 +470,45 @@ export default function App() {
   const handleSliceUpdated = useCallback((data: SliceData) => {
     updateSliceAndValidate(data);
   }, [updateSliceAndValidate]);
+
+  const handleOpenHelp = useCallback((section?: string) => {
+    if (!section && helpOpen) {
+      // Toggle off when clicking the help button again with no specific section
+      setHelpOpen(false);
+      setHelpSection(undefined);
+    } else {
+      setHelpSection(section);
+      setHelpOpen(true);
+    }
+  }, [helpOpen]);
+
+  const handleCloneSlice = useCallback(async (newName: string) => {
+    if (!selectedSliceName) return;
+    setLoading(true);
+    try {
+      const data = await api.cloneSlice(selectedSliceName, newName);
+      setSliceData(data);
+      setSelectedSliceName(data.name);
+      // Refresh the full slice list from backend to include the new draft
+      try {
+        const list = await api.listSlices();
+        setSlices(list);
+        setListLoaded(true);
+      } catch {
+        // Fallback: add locally if list refresh fails
+        setSlices((prev) => {
+          if (prev.some((s) => s.name === data.name)) return prev;
+          return [...prev, { name: data.name, id: '', state: 'Draft' }];
+        });
+      }
+      setCurrentView('topology');
+      runValidation(data.name);
+    } catch (e: any) {
+      setErrors(prev => [...prev, e.message]);
+    } finally {
+      setLoading(false);
+    }
+  }, [selectedSliceName, runValidation]);
 
   const handleSliceImported = useCallback((data: SliceData) => {
     setSliceData(data);
@@ -372,25 +522,17 @@ export default function App() {
 
   return (
     <>
-      <TitleBar dark={dark} currentView={currentView} onToggleDark={() => setDark((d) => !d)} projectName={projectName} />
-
-      {error && (
-        <div style={{
-          padding: '8px 16px',
-          background: 'var(--state-error-bg)',
-          color: 'var(--state-error-border)',
-          fontSize: 13,
-          borderBottom: '1px solid var(--fabric-border)',
-        }}>
-          {error}
-          <button
-            onClick={() => setError('')}
-            style={{ float: 'right', background: 'none', border: 'none', color: 'var(--state-error-border)', fontSize: 16 }}
-          >
-            ×
-          </button>
-        </div>
-      )}
+      <TitleBar
+        dark={dark}
+        currentView={currentView}
+        onToggleDark={() => setDark((d) => !d)}
+        onViewChange={setCurrentView}
+        onOpenSettings={() => setSettingsOpen((prev) => !prev)}
+        onOpenHelp={() => handleOpenHelp()}
+        projectName={projectName}
+        projects={projects}
+        onProjectChange={handleProjectChange}
+      />
 
       <Toolbar
         slices={slices}
@@ -398,43 +540,69 @@ export default function App() {
         sliceState={sliceData?.state ?? ''}
         dirty={sliceData?.dirty ?? false}
         sliceValid={validationValid}
-        currentView={currentView}
         loading={loading}
         onSelectSlice={setSelectedSliceName}
         onLoad={loadSlice}
-        onRefreshList={refreshSliceList}
         onCreateSlice={handleCreateSlice}
         onSubmit={handleSubmit}
-        onRefreshSlice={handleRefreshSlice}
+        onReload={handleRefreshSlice}
         onDeleteSlice={handleDeleteSlice}
-        onViewChange={setCurrentView}
-        onRefreshResources={refreshInfrastructure}
+        onRefreshTopology={refreshInfrastructureAndMark}
         infraLoading={infraLoading}
         onSliceImported={handleSliceImported}
+        onCloneSlice={handleCloneSlice}
+        listLoaded={listLoaded}
+        onLoadSlices={refreshSliceList}
+        infraLoaded={infraLoaded}
+        statusMessage={statusMessage}
       />
 
-      <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
-        {currentView === 'configure' ? (
+      <HelpContextMenu onOpenHelp={handleOpenHelp} />
+
+      {/* Help overlay */}
+      {helpOpen && (
+        <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
+          <HelpView
+            scrollToSection={helpSection}
+            onClose={() => { setHelpOpen(false); setHelpSection(undefined); }}
+          />
+        </div>
+      )}
+
+      {/* Settings overlay */}
+      {settingsOpen && !helpOpen && (
+        <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
           <ConfigureView
             onConfigured={() => {
               setIsConfigured(true);
-              setCurrentView('editor');
+              setSettingsOpen(false);
               setListLoaded(false);
-              // Refresh project name
+              // Refresh project name and projects list
               api.getConfig().then((cfg) => {
-                if (cfg.project_id && cfg.token_info?.projects) {
-                  const proj = cfg.token_info.projects.find((p) => p.uuid === cfg.project_id);
-                  if (proj) setProjectName(proj.name);
+                if (cfg.token_info?.projects) {
+                  setProjects(cfg.token_info.projects);
+                }
+                if (cfg.project_id) {
+                  setProjectId(cfg.project_id);
+                  if (cfg.token_info?.projects) {
+                    const proj = cfg.token_info.projects.find((p) => p.uuid === cfg.project_id);
+                    if (proj) setProjectName(proj.name);
+                  }
                 }
               }).catch(() => {});
             }}
+            onClose={() => setSettingsOpen(false)}
           />
-        ) : currentView === 'files' ? (
+        </div>
+      )}
+
+      <div style={{ flex: 1, display: (settingsOpen || helpOpen) ? 'none' : 'flex', overflow: 'hidden' }}>
+        {currentView === 'files' ? (
           <FileTransferView
             sliceName={selectedSliceName}
             sliceData={sliceData}
           />
-        ) : currentView === 'editor' ? (
+        ) : currentView === 'topology' ? (
           <>
             {showEditorPanel && (
               <EditorPanel
@@ -445,6 +613,7 @@ export default function App() {
                 sites={infraSites}
                 images={images}
                 componentModels={componentModels}
+                selectedElement={selectedElement}
               />
             )}
             <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, overflow: 'hidden', position: 'relative' }}>
@@ -470,20 +639,32 @@ export default function App() {
                 graph={sliceData?.graph ?? null}
                 layout={layout}
                 dark={dark}
+                sliceData={sliceData}
                 onLayoutChange={setLayout}
                 onNodeClick={handleNodeClick}
                 onEdgeClick={handleEdgeClick}
                 onBackgroundClick={handleBackgroundClick}
                 onContextAction={handleContextAction}
               />
-              <BottomPanel
-                terminals={terminalTabs}
-                onCloseTerminal={handleCloseTerminal}
-                validationIssues={validationIssues}
-                validationValid={validationValid}
-                sliceState={sliceData?.state ?? ''}
-                dirty={sliceData?.dirty ?? false}
-              />
+              {!consoleFullWidth && !settingsOpen && !helpOpen && (
+                <BottomPanel
+                  terminals={terminalTabs}
+                  onCloseTerminal={handleCloseTerminal}
+                  validationIssues={validationIssues}
+                  validationValid={validationValid}
+                  sliceState={sliceData?.state ?? ''}
+                  dirty={sliceData?.dirty ?? false}
+                  errors={errors}
+                  onClearErrors={() => setErrors([])}
+                  fullWidth={consoleFullWidth}
+                  onToggleFullWidth={() => setConsoleFullWidth(fw => !fw)}
+                  showWidthToggle={currentView === 'topology'}
+                  expanded={consoleExpanded}
+                  onExpandedChange={setConsoleExpanded}
+                  panelHeight={consoleHeight}
+                  onPanelHeightChange={setConsoleHeight}
+                />
+              )}
             </div>
             {showDetailPanel && (
               <DetailPanel
@@ -516,6 +697,26 @@ export default function App() {
           />
         )}
       </div>
+
+      {!settingsOpen && !helpOpen && (consoleFullWidth || currentView !== 'topology') && (
+        <BottomPanel
+          terminals={terminalTabs}
+          onCloseTerminal={handleCloseTerminal}
+          validationIssues={validationIssues}
+          validationValid={validationValid}
+          sliceState={sliceData?.state ?? ''}
+          dirty={sliceData?.dirty ?? false}
+          errors={errors}
+          onClearErrors={() => setErrors([])}
+          fullWidth={consoleFullWidth}
+          onToggleFullWidth={() => setConsoleFullWidth(fw => !fw)}
+          showWidthToggle={currentView === 'topology'}
+          expanded={consoleExpanded}
+          onExpandedChange={setConsoleExpanded}
+          panelHeight={consoleHeight}
+          onPanelHeightChange={setConsoleHeight}
+        />
+      )}
     </>
   );
 }

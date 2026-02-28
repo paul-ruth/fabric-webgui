@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
@@ -21,6 +21,15 @@ interface BottomPanelProps {
   validationValid: boolean;
   sliceState: string;
   dirty: boolean;
+  errors: string[];
+  onClearErrors: () => void;
+  fullWidth?: boolean;
+  onToggleFullWidth?: () => void;
+  showWidthToggle?: boolean;
+  expanded: boolean;
+  onExpandedChange: (expanded: boolean) => void;
+  panelHeight: number;
+  onPanelHeightChange: (height: number) => void;
 }
 
 const TERM_THEME = {
@@ -46,8 +55,9 @@ const TERM_THEME = {
   brightWhite: '#ffffff',
 };
 
-export default function BottomPanel({ terminals, onCloseTerminal, validationIssues, validationValid, sliceState, dirty }: BottomPanelProps) {
-  const [expanded, setExpanded] = useState(false);
+export default function BottomPanel({ terminals, onCloseTerminal, validationIssues, validationValid, sliceState, dirty, errors, onClearErrors, fullWidth = true, onToggleFullWidth, showWidthToggle = false, expanded, onExpandedChange, panelHeight, onPanelHeightChange }: BottomPanelProps) {
+  const setExpanded = onExpandedChange;
+  const setPanelHeight = onPanelHeightChange;
   const [activeTab, setActiveTab] = useState('validation');
 
   // Auto-expand and switch to new terminal tab when one is added
@@ -59,42 +69,107 @@ export default function BottomPanel({ terminals, onCloseTerminal, validationIssu
       setExpanded(true);
     }
     prevTermCount.current = terminals.length;
-  }, [terminals.length]);
+  }, [terminals.length, setExpanded]);
+
+  // Auto-expand and switch to Errors tab when new errors arrive
+  const prevErrorCount = useRef(errors.length);
+  useEffect(() => {
+    if (errors.length > prevErrorCount.current) {
+      setActiveTab('errors');
+      setExpanded(true);
+    }
+    prevErrorCount.current = errors.length;
+  }, [errors.length, setExpanded]);
 
   // If active tab was closed, switch to validation
   useEffect(() => {
     if (
+      activeTab !== 'errors' &&
       activeTab !== 'log' &&
       activeTab !== 'validation' &&
+      activeTab !== 'local-terminal' &&
       !terminals.find((t) => t.id === activeTab)
     ) {
       setActiveTab('validation');
     }
   }, [terminals, activeTab]);
 
+  const [containerTermActive, setContainerTermActive] = useState(false);
+  const draggingRef = useRef(false);
+  const startYRef = useRef(0);
+  const startHeightRef = useRef(0);
+
+  const handleDragStart = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    draggingRef.current = true;
+    startYRef.current = e.clientY;
+    startHeightRef.current = panelHeight;
+
+    const onMove = (ev: MouseEvent) => {
+      if (!draggingRef.current) return;
+      const delta = startYRef.current - ev.clientY;
+      const newHeight = Math.max(100, Math.min(window.innerHeight * 0.8, startHeightRef.current + delta));
+      setPanelHeight(newHeight);
+    };
+    const onUp = () => {
+      draggingRef.current = false;
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+    document.body.style.cursor = 'row-resize';
+    document.body.style.userSelect = 'none';
+  }, [panelHeight]);
+
   const termCount = terminals.length;
-  const errorCount = validationIssues.filter((i) => i.severity === 'error').length;
+  const validationErrorCount = validationIssues.filter((i) => i.severity === 'error').length;
   const warnCount = validationIssues.filter((i) => i.severity === 'warning').length;
+  const apiErrorCount = errors.length;
 
   if (!expanded) {
     return (
-      <div className="bottom-panel-collapsed" onClick={() => setExpanded(true)}>
-        <span className="bottom-panel-collapsed-label">
+      <div className="bottom-panel-collapsed">
+        <span className="bottom-panel-collapsed-label" onClick={() => setExpanded(true)}>
           ▲ Console
-          <span className={`bottom-panel-badge ${errorCount > 0 ? 'warn' : 'ok'}`}>{errorCount} error{errorCount !== 1 ? 's' : ''}</span>
+          {apiErrorCount > 0 && <span className="bottom-panel-badge error">{apiErrorCount} error{apiErrorCount !== 1 ? 's' : ''}</span>}
+          <span className={`bottom-panel-badge ${validationErrorCount > 0 ? 'warn' : 'ok'}`}>{validationErrorCount} validation</span>
           {warnCount > 0 && <span className="bottom-panel-badge warn">{warnCount} warning{warnCount !== 1 ? 's' : ''}</span>}
           {termCount > 0 && <span className="bottom-panel-badge">{termCount} terminal{termCount !== 1 ? 's' : ''}</span>}
+          {containerTermActive && <span className="bottom-panel-badge">local</span>}
+        </span>
+        <span className="bottom-panel-collapsed-actions">
+          {showWidthToggle && onToggleFullWidth && (
+            <button
+              className="bp-width-toggle"
+              onClick={(e) => { e.stopPropagation(); onToggleFullWidth(); }}
+              title={fullWidth ? 'Fit to canvas panel' : 'Span full window width'}
+            >
+              <span className={`bp-width-icon ${fullWidth ? 'full' : 'narrow'}`} />
+            </button>
+          )}
         </span>
       </div>
     );
   }
 
   return (
-    <div className="bottom-panel">
+    <div className="bottom-panel" style={{ height: panelHeight }}>
+      <div className="bp-resize-handle" onMouseDown={handleDragStart} />
       <div className="bottom-panel-tabs">
+        <button
+          className={`bp-tab ${activeTab === 'errors' ? 'active' : ''}`}
+          onClick={() => setActiveTab('errors')}
+        >
+          Errors
+          {apiErrorCount > 0 && <span className="bp-tab-badge error">{apiErrorCount}</span>}
+        </button>
         <button
           className={`bp-tab ${activeTab === 'validation' ? 'active' : ''}`}
           onClick={() => setActiveTab('validation')}
+          data-help-id="bottom.validation"
         >
           Validation
           {!validationValid && <span className="bp-tab-indicator error" />}
@@ -104,8 +179,16 @@ export default function BottomPanel({ terminals, onCloseTerminal, validationIssu
         <button
           className={`bp-tab ${activeTab === 'log' ? 'active' : ''}`}
           onClick={() => setActiveTab('log')}
+          data-help-id="bottom.log"
         >
           Log
+        </button>
+        <button
+          className={`bp-tab bp-tab-container ${activeTab === 'local-terminal' ? 'active' : ''}`}
+          onClick={() => { setActiveTab('local-terminal'); setExpanded(true); setContainerTermActive(true); }}
+          data-help-id="bottom.local-terminal"
+        >
+          Local
         </button>
         {terminals.map((t) => (
           <button
@@ -123,14 +206,44 @@ export default function BottomPanel({ terminals, onCloseTerminal, validationIssu
           </button>
         ))}
         <div className="bp-tab-spacer" />
+        {showWidthToggle && onToggleFullWidth && (
+          <button
+            className="bp-width-toggle"
+            onClick={onToggleFullWidth}
+            title={fullWidth ? 'Fit to canvas panel' : 'Span full window width'}
+          >
+            <span className={`bp-width-icon ${fullWidth ? 'full' : 'narrow'}`} />
+          </button>
+        )}
         <button className="bp-collapse-btn" onClick={() => setExpanded(false)} title="Collapse panel">▼</button>
       </div>
       <div className="bottom-panel-content">
+        <div style={{ display: activeTab === 'errors' ? 'flex' : 'none', flex: 1, overflow: 'hidden' }}>
+          <div className="bp-errors-list">
+            <div className="bp-errors-header">
+              <span>{errors.length} error{errors.length !== 1 ? 's' : ''}</span>
+              {errors.length > 0 && (
+                <button className="bp-errors-clear" onClick={onClearErrors}>Clear All</button>
+              )}
+            </div>
+            {errors.length === 0 && (
+              <div className="bp-validation-empty">No errors.</div>
+            )}
+            {errors.map((msg, i) => (
+              <div key={i} className="bp-error-entry">
+                <span className="bp-error-message">{msg}</span>
+              </div>
+            ))}
+          </div>
+        </div>
         <div style={{ display: activeTab === 'validation' ? 'flex' : 'none', flex: 1, overflow: 'hidden' }}>
           <ValidationView issues={validationIssues} valid={validationValid} sliceState={sliceState} dirty={dirty} />
         </div>
         <div style={{ display: activeTab === 'log' ? 'flex' : 'none', flex: 1, overflow: 'hidden' }}>
           <LogView />
+        </div>
+        <div style={{ display: activeTab === 'local-terminal' ? 'flex' : 'none', flex: 1, overflow: 'hidden' }}>
+          {containerTermActive && <ContainerTerminalView />}
         </div>
         {terminals.map((t) => (
           <div key={t.id} style={{ display: activeTab === t.id ? 'flex' : 'none', flex: 1, overflow: 'hidden' }}>
@@ -278,6 +391,77 @@ function TerminalView({ sliceName, nodeName, managementIp }: { sliceName: string
       termRef.current = null;
     };
   }, [sliceName, nodeName, managementIp]);
+
+  return <div className="bp-terminal-container" ref={containerRef} />;
+}
+
+// --- Container Terminal View ---
+function ContainerTerminalView() {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const termRef = useRef<Terminal | null>(null);
+  const wsRef = useRef<WebSocket | null>(null);
+
+  useEffect(() => {
+    if (!containerRef.current) return;
+
+    const term = new Terminal({
+      cursorBlink: true,
+      fontSize: 13,
+      fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', Menlo, monospace",
+      theme: { ...TERM_THEME },
+    });
+
+    const fitAddon = new FitAddon();
+    term.loadAddon(fitAddon);
+    term.open(containerRef.current);
+    fitAddon.fit();
+    termRef.current = term;
+
+    term.writeln('\x1b[36m[local] Opening shell...\x1b[0m');
+
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsUrl = `${protocol}//${window.location.host}/ws/terminal/container`;
+    const ws = new WebSocket(wsUrl);
+    wsRef.current = ws;
+
+    ws.onopen = () => {
+      ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
+    };
+
+    ws.onmessage = (event) => {
+      term.write(event.data);
+    };
+
+    ws.onerror = () => {
+      term.writeln('\r\n\x1b[31mWebSocket error.\x1b[0m');
+    };
+
+    ws.onclose = () => {
+      term.writeln('\r\n\x1b[33mConnection closed.\x1b[0m');
+    };
+
+    term.onData((data) => {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'input', data }));
+      }
+    });
+
+    const resizeObserver = new ResizeObserver(() => {
+      fitAddon.fit();
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
+      }
+    });
+    resizeObserver.observe(containerRef.current);
+
+    return () => {
+      resizeObserver.disconnect();
+      ws.close();
+      term.dispose();
+      termRef.current = null;
+      wsRef.current = null;
+    };
+  }, []);
 
   return <div className="bp-terminal-container" ref={containerRef} />;
 }

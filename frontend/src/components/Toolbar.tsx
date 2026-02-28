@@ -1,6 +1,7 @@
-import { useState } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import type { SliceSummary } from '../types/fabric';
 import * as api from '../api/client';
+import Tooltip from './Tooltip';
 import '../styles/toolbar.css';
 
 interface ToolbarProps {
@@ -9,28 +10,51 @@ interface ToolbarProps {
   sliceState: string;
   dirty: boolean;
   sliceValid: boolean;
-  currentView: 'editor' | 'geo' | 'files' | 'configure';
   loading: boolean;
   onSelectSlice: (name: string) => void;
   onLoad: () => void;
-  onRefreshList: () => void;
   onCreateSlice: (name: string) => void;
   onSubmit: () => void;
-  onRefreshSlice: () => void;
+  onReload: () => void;
   onDeleteSlice: () => void;
-  onViewChange: (view: 'editor' | 'geo' | 'files' | 'configure') => void;
-  onRefreshResources: () => void;
+  onRefreshTopology: () => void;
   infraLoading: boolean;
   onSliceImported?: (data: any) => void;
+  onCloneSlice?: (newName: string) => void;
+  listLoaded: boolean;
+  onLoadSlices: () => void;
+  infraLoaded: boolean;
+  statusMessage?: string;
 }
 
 export default function Toolbar(props: ToolbarProps) {
-  const [confirming, setConfirming] = useState(false);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [confirmingRevert, setConfirmingRevert] = useState(false);
   const [creating, setCreating] = useState(false);
   const [newSliceName, setNewSliceName] = useState('');
   const [openingFromStorage, setOpeningFromStorage] = useState(false);
   const [storageFiles, setStorageFiles] = useState<Array<{ name: string; size: number; modified: number }>>([]);
   const [selectedFile, setSelectedFile] = useState('');
+  const [cloning, setCloning] = useState(false);
+  const [cloneName, setCloneName] = useState('');
+
+  // Combo box state for slice selector
+  const [sliceFilter, setSliceFilter] = useState('');
+  const [sliceDropOpen, setSliceDropOpen] = useState(false);
+  const comboRef = useRef<HTMLDivElement>(null);
+
+  // Close dropdown on outside click
+  useEffect(() => {
+    if (!sliceDropOpen) return;
+    const handler = (e: MouseEvent) => {
+      if (comboRef.current && !comboRef.current.contains(e.target as Node)) {
+        setSliceDropOpen(false);
+        setSliceFilter('');
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [sliceDropOpen]);
 
   const handleSave = async () => {
     if (!props.selectedSlice) return;
@@ -64,12 +88,21 @@ export default function Toolbar(props: ToolbarProps) {
     }
   };
 
-  const handleDeleteSlice = () => {
-    if (confirming) {
-      props.onDeleteSlice();
-      setConfirming(false);
+  const handleDeleteConfirm = () => {
+    props.onDeleteSlice();
+    setConfirmingDelete(false);
+  };
+
+  const handleRevertConfirm = () => {
+    props.onReload();
+    setConfirmingRevert(false);
+  };
+
+  const handleLoadSlice = () => {
+    if (hasSlice && props.dirty) {
+      setConfirmingRevert(true);
     } else {
-      setConfirming(true);
+      props.onLoad();
     }
   };
 
@@ -81,181 +114,309 @@ export default function Toolbar(props: ToolbarProps) {
     }
   };
 
+  const handleClone = () => {
+    if (cloneName.trim()) {
+      props.onCloneSlice?.(cloneName.trim());
+      setCloneName('');
+      setCloning(false);
+    }
+  };
+
   const isDraft = props.sliceState === 'Draft';
   const canSubmit = isDraft || props.dirty;
+  const hasSlice = !!props.selectedSlice && !!props.sliceState;
+
+  const loadLabel = hasSlice ? 'Reload' : 'Load';
+  const loadTitle = hasSlice
+    ? (props.dirty ? 'Reload slice from FABRIC — all uncommitted changes will be lost' : 'Reload slice data from FABRIC')
+    : 'Load the selected slice from FABRIC';
 
   return (
     <div className="toolbar">
-      {props.currentView !== 'configure' && (
-        <>
-          {/* Slice selector or create form */}
-          {creating ? (
-            <div className="create-group">
-              <input
-                type="text"
-                placeholder="Slice name..."
-                value={newSliceName}
-                onChange={(e) => setNewSliceName(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && handleCreate()}
-                autoFocus
-              />
-              <button className="success" onClick={handleCreate} disabled={!newSliceName.trim()}>
-                Create
-              </button>
-              <button onClick={() => { setCreating(false); setNewSliceName(''); }}>
-                Cancel
-              </button>
-            </div>
-          ) : (
-            <>
-              <select
-                value={props.selectedSlice}
-                onChange={(e) => props.onSelectSlice(e.target.value)}
-              >
-                <option value="">-- Select Slice --</option>
-                {props.slices.map((s) => (
-                  <option key={s.name} value={s.name}>
-                    {s.name}
-                  </option>
-                ))}
-              </select>
-              <button className="primary" onClick={props.onLoad} disabled={!props.selectedSlice || props.loading}>
-                {props.loading ? 'Loading...' : 'Load'}
-              </button>
-              <button onClick={props.onRefreshList} disabled={props.loading} title="Refresh slice list">
-                ↻
-              </button>
-              <button className="success" onClick={() => setCreating(true)} disabled={props.loading} title="Create new slice">
-                + New
-              </button>
-              <button onClick={handleSave} disabled={!props.selectedSlice || props.loading} title="Save slice definition to container storage">
-                Save
-              </button>
-              <button onClick={handleOpen} disabled={props.loading} title="Open slice definition from container storage">
-                Open
-              </button>
-            </>
-          )}
+      {/* --- Slice Group (selector + actions) --- */}
+      <div className="toolbar-group">
+        <span className="toolbar-group-label">Slice</span>
 
-          {props.sliceState && (
-            <span className={`status-badge ${props.sliceState}`}>
-              {props.sliceState}{props.dirty ? ' *' : ''}
-            </span>
-          )}
-
-          <div className="separator" />
-
-          {/* Submit — sends new or modified slice to FABRIC */}
+        {/* Load / Refresh slice list */}
+        <Tooltip text={props.listLoaded ? 'Refresh the slice list from FABRIC' : 'Fetch your slices from FABRIC'}>
           <button
-            className={canSubmit ? (props.sliceValid ? 'success' : 'warning') : ''}
+            className="toolbar-btn toolbar-btn-list"
+            onClick={props.onLoadSlices}
+            disabled={props.loading}
+          >
+            {props.listLoaded ? '\u21BB Refresh Slice List' : 'Load Slice List'}
+          </button>
+        </Tooltip>
+
+        <div className="slice-combo" ref={comboRef} data-help-id="toolbar.slice-selector">
+          <input
+            type="text"
+            className="slice-combo-input"
+            placeholder={props.selectedSlice || '-- Select Slice --'}
+            value={sliceDropOpen ? sliceFilter : (props.selectedSlice || '')}
+            onChange={(e) => { setSliceFilter(e.target.value); if (!sliceDropOpen) setSliceDropOpen(true); }}
+            onFocus={() => { setSliceDropOpen(true); setSliceFilter(''); }}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') { setSliceDropOpen(false); setSliceFilter(''); (e.target as HTMLElement).blur(); }
+            }}
+          />
+          <button
+            className="slice-combo-toggle"
+            onClick={() => { setSliceDropOpen(!sliceDropOpen); setSliceFilter(''); }}
+            tabIndex={-1}
+          >
+            {sliceDropOpen ? '\u25B4' : '\u25BE'}
+          </button>
+          {sliceDropOpen && (() => {
+            const q = sliceFilter.toLowerCase();
+            const fabricSlices = props.slices.filter((s) => s.state !== 'Draft' && s.name.toLowerCase().includes(q));
+            const draftSlices = props.slices.filter((s) => s.state === 'Draft' && s.name.toLowerCase().includes(q));
+            const hasResults = fabricSlices.length > 0 || draftSlices.length > 0;
+            return (
+              <div className="slice-combo-dropdown">
+                {!hasResults && (
+                  <div className="slice-combo-empty">No matching slices</div>
+                )}
+                {fabricSlices.length > 0 && (
+                  <>
+                    <div className="slice-combo-group-label">FABRIC Slices</div>
+                    {fabricSlices.map((s) => {
+                      const isSelected = s.name === props.selectedSlice;
+                      const dirtyMark = isSelected && props.dirty ? ' *' : '';
+                      return (
+                        <button
+                          key={s.name}
+                          className={`slice-combo-option ${isSelected ? 'active' : ''}`}
+                          onClick={() => {
+                            props.onSelectSlice(s.name);
+                            setSliceDropOpen(false);
+                            setSliceFilter('');
+                          }}
+                        >
+                          <span className="slice-combo-name">{s.name}</span>
+                          <span className={`slice-combo-state ${s.state}`}>{s.state}{dirtyMark}</span>
+                        </button>
+                      );
+                    })}
+                  </>
+                )}
+                {draftSlices.length > 0 && (
+                  <>
+                    <div className="slice-combo-group-label">Local Drafts</div>
+                    {draftSlices.map((s) => (
+                      <button
+                        key={s.name}
+                        className={`slice-combo-option ${s.name === props.selectedSlice ? 'active' : ''}`}
+                        onClick={() => {
+                          props.onSelectSlice(s.name);
+                          setSliceDropOpen(false);
+                          setSliceFilter('');
+                        }}
+                      >
+                        <span className="slice-combo-name">{s.name}</span>
+                        <span className="slice-combo-state Draft">Draft</span>
+                      </button>
+                    ))}
+                  </>
+                )}
+              </div>
+            );
+          })()}
+        </div>
+
+        <Tooltip text={loadTitle}>
+          <button
+            className={`toolbar-btn toolbar-btn-load ${hasSlice && props.dirty ? 'warning' : 'primary'}`}
+            onClick={handleLoadSlice}
+            disabled={!props.selectedSlice || props.loading}
+            data-help-id="toolbar.load"
+          >
+            {props.loading ? 'Loading...' : loadLabel}
+          </button>
+        </Tooltip>
+
+        <Tooltip text="Create a new empty draft slice">
+          <button
+            className="toolbar-btn toolbar-btn-new success"
+            onClick={() => setCreating(true)}
+            disabled={props.loading}
+            data-help-id="toolbar.new"
+          >
+            + New
+          </button>
+        </Tooltip>
+
+        {props.sliceState && (
+          <span className={`status-badge ${props.sliceState}`}>
+            {props.sliceState}{props.dirty ? ' *' : ''}
+          </span>
+        )}
+
+        {props.statusMessage && (
+          <span className="toolbar-status">
+            <span className="toolbar-spinner" />
+            <span className="toolbar-status-text">{props.statusMessage}</span>
+          </span>
+        )}
+
+        <Tooltip text={!canSubmit ? 'No pending changes' : props.sliceValid ? 'Submit slice to FABRIC for provisioning' : 'Slice has validation errors'}>
+          <button
+            className={`toolbar-btn toolbar-btn-submit ${canSubmit ? (props.sliceValid ? 'success' : 'warning') : ''}`}
             onClick={props.onSubmit}
-            disabled={!canSubmit || props.loading}
-            title={
-              !canSubmit ? 'No pending changes'
-                : props.sliceValid ? 'Submit changes to FABRIC'
-                : 'Slice has validation errors — check the Validation tab'
-            }
+            disabled={!hasSlice || !canSubmit || props.loading}
+            data-help-id="toolbar.submit"
           >
-            ✓ Submit
+            Submit
           </button>
-          <button onClick={props.onRefreshSlice} disabled={props.loading} title="Refresh slice from FABRIC (discards local edits)">
-            ↻ Refresh
-          </button>
+        </Tooltip>
 
-          <div className="separator" />
-
-          {/* Delete slice with confirmation */}
-          {confirming ? (
-            <div className="confirm-group">
-              <span>Delete slice?</span>
-              <button className="danger" onClick={handleDeleteSlice}>
-                Yes
-              </button>
-              <button onClick={() => setConfirming(false)}>No</button>
-            </div>
-          ) : (
-            <button
-              className="danger"
-              onClick={handleDeleteSlice}
-              disabled={!props.selectedSlice || props.loading}
-              title="Delete entire slice"
-            >
-              ✕ Delete Slice
-            </button>
-          )}
-        </>
-      )}
-
-      {props.currentView !== 'configure' && (
-        <>
-          <div className="separator" />
+        <Tooltip text="Delete this slice from FABRIC">
           <button
-            onClick={props.onRefreshResources}
-            disabled={props.infraLoading}
-            title="Refresh infrastructure sites and links"
+            className="toolbar-btn toolbar-btn-delete danger"
+            onClick={() => setConfirmingDelete(true)}
+            disabled={!hasSlice || props.loading}
+            data-help-id="toolbar.delete"
           >
-            {props.infraLoading ? '↻...' : '↻ Resources'}
+            Delete
           </button>
-        </>
-      )}
+        </Tooltip>
 
-      {/* View toggle */}
-      <div className="view-toggle">
-        <button
-          className={props.currentView === 'editor' ? 'active' : ''}
-          onClick={() => props.onViewChange('editor')}
-        >
-          Editor
-        </button>
-        <button
-          className={props.currentView === 'geo' ? 'active' : ''}
-          onClick={() => props.onViewChange('geo')}
-        >
-          Geographic
-        </button>
-        <button
-          className={props.currentView === 'files' ? 'active' : ''}
-          onClick={() => props.onViewChange('files')}
-        >
-          Files
-        </button>
-        <button
-          className={props.currentView === 'configure' ? 'active' : ''}
-          onClick={() => props.onViewChange('configure')}
-        >
-          Configure
-        </button>
+        <Tooltip text="Clone this slice as a new draft">
+          <button
+            className="toolbar-btn toolbar-btn-new"
+            onClick={() => { setCloneName(`${props.selectedSlice}-copy`); setCloning(true); }}
+            disabled={!hasSlice || props.loading}
+            data-help-id="toolbar.clone"
+          >
+            Clone
+          </button>
+        </Tooltip>
       </div>
 
-      {/* Open from storage dialog */}
+      {/* --- Template Group --- */}
+      <div className="toolbar-group">
+        <span className="toolbar-group-label">Templates</span>
+        <Tooltip text="Save topology as a reusable template">
+          <button className="toolbar-btn toolbar-btn-template" onClick={handleSave} disabled={!props.selectedSlice || props.loading} data-help-id="toolbar.save-template">
+            Save Template
+          </button>
+        </Tooltip>
+        <Tooltip text="Load a saved topology template">
+          <button className="toolbar-btn toolbar-btn-template" onClick={handleOpen} disabled={props.loading} data-help-id="toolbar.open-template">
+            Open Template
+          </button>
+        </Tooltip>
+      </div>
+
+      <div className="toolbar-spacer" />
+
+      <Tooltip text={props.infraLoaded ? 'Refresh site and link data from FABRIC' : 'Load site and link data from FABRIC'}>
+        <button
+          className="toolbar-btn toolbar-btn-resources"
+          onClick={props.onRefreshTopology}
+          disabled={props.infraLoading}
+          data-help-id="toolbar.refresh-resources"
+        >
+          {props.infraLoading ? '\u21BB...' : props.infraLoaded ? '\u21BB Resources' : 'Load Resources'}
+        </button>
+      </Tooltip>
+
+      {/* --- Modal: Confirm Delete --- */}
+      {confirmingDelete && (
+        <div className="toolbar-modal-overlay" onClick={() => setConfirmingDelete(false)}>
+          <div className="toolbar-modal" onClick={(e) => e.stopPropagation()}>
+            <h4>Delete Slice</h4>
+            <p>Are you sure you want to delete <strong>{props.selectedSlice}</strong>? This cannot be undone.</p>
+            <div className="toolbar-modal-actions">
+              <button onClick={() => setConfirmingDelete(false)}>Cancel</button>
+              <button className="danger" onClick={handleDeleteConfirm}>Delete</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* --- Modal: Confirm Reload --- */}
+      {confirmingRevert && (
+        <div className="toolbar-modal-overlay" onClick={() => setConfirmingRevert(false)}>
+          <div className="toolbar-modal" onClick={(e) => e.stopPropagation()}>
+            <h4>Reload Slice</h4>
+            <p>All uncommitted changes to <strong>{props.selectedSlice}</strong> will be lost. Continue?</p>
+            <div className="toolbar-modal-actions">
+              <button onClick={() => setConfirmingRevert(false)}>Cancel</button>
+              <button className="warning" onClick={handleRevertConfirm}>Reload</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* --- Modal: Create Slice --- */}
+      {creating && (
+        <div className="toolbar-modal-overlay" onClick={() => { setCreating(false); setNewSliceName(''); }}>
+          <div className="toolbar-modal" onClick={(e) => e.stopPropagation()}>
+            <h4>Create New Slice</h4>
+            <p>Enter a name for the new draft slice.</p>
+            <input
+              type="text"
+              className="toolbar-modal-input"
+              placeholder="Slice name..."
+              value={newSliceName}
+              onChange={(e) => setNewSliceName(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && handleCreate()}
+              autoFocus
+            />
+            <div className="toolbar-modal-actions">
+              <button onClick={() => { setCreating(false); setNewSliceName(''); }}>Cancel</button>
+              <button className="success" onClick={handleCreate} disabled={!newSliceName.trim()}>Create</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* --- Modal: Clone Slice --- */}
+      {cloning && (
+        <div className="toolbar-modal-overlay" onClick={() => { setCloning(false); setCloneName(''); }}>
+          <div className="toolbar-modal" onClick={(e) => e.stopPropagation()}>
+            <h4>Clone Slice</h4>
+            <p>Enter a name for the cloned draft slice.</p>
+            <input
+              type="text"
+              className="toolbar-modal-input"
+              placeholder="New slice name..."
+              value={cloneName}
+              onChange={(e) => setCloneName(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && handleClone()}
+              autoFocus
+            />
+            <div className="toolbar-modal-actions">
+              <button onClick={() => { setCloning(false); setCloneName(''); }}>Cancel</button>
+              <button className="success" onClick={handleClone} disabled={!cloneName.trim()}>Clone</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* --- Modal: Open from storage --- */}
       {openingFromStorage && (
-        <div style={{
-          position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
-          background: 'rgba(0,0,0,0.4)', zIndex: 1000,
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-        }} onClick={() => setOpeningFromStorage(false)}>
-          <div style={{
-            background: 'var(--panel-bg, #fff)', border: '1px solid var(--fabric-border)',
-            borderRadius: 8, padding: 20, minWidth: 340, maxWidth: 480,
-            boxShadow: '0 4px 16px rgba(0,0,0,0.2)',
-          }} onClick={(e) => e.stopPropagation()}>
-            <h4 style={{ margin: '0 0 12px 0', fontSize: 14 }}>Open from Storage</h4>
+        <div className="toolbar-modal-overlay" onClick={() => setOpeningFromStorage(false)}>
+          <div className="toolbar-modal" onClick={(e) => e.stopPropagation()}>
+            <h4>Open Topology Template</h4>
+            <p>Select a saved template to create a new slice with the same topology.</p>
             {storageFiles.length === 0 ? (
-              <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
-                No .fabric.json files found in storage. Save a slice first or upload files via the Files view.
+              <p style={{ fontSize: 13, color: 'var(--fabric-text-muted)' }}>
+                No templates found. Save a slice topology first or upload .fabric.json files via the Files view.
               </p>
             ) : (
               <select
+                className="toolbar-modal-input"
                 value={selectedFile}
                 onChange={(e) => setSelectedFile(e.target.value)}
-                style={{ width: '100%', padding: '6px 8px', fontSize: 13, marginBottom: 12 }}
               >
                 {storageFiles.map((f) => (
                   <option key={f.name} value={f.name}>{f.name}</option>
                 ))}
               </select>
             )}
-            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+            <div className="toolbar-modal-actions">
               <button onClick={() => setOpeningFromStorage(false)}>Cancel</button>
               <button
                 className="primary"

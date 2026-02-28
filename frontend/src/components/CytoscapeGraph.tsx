@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import cytoscape, { type Core, type EventObject } from 'cytoscape';
-import type { CyGraph } from '../types/fabric';
+import type { CyGraph, SliceData } from '../types/fabric';
 import '../styles/context-menu.css';
 
 // Register layout extensions
@@ -21,7 +21,16 @@ function buildStylesheet(dark: boolean): any[] {
   const l2NodeBg = dark ? '#1a3050' : '#ddeaf2';
   const l3Color = dark ? '#2bb5a0' : '#008e7a';
   const l3NodeBg = dark ? '#1a3a30' : '#e0f2f1';
+  const fpColor = dark ? '#ffa562' : '#ff8542';
+  const fpNodeBg = dark ? '#3a2008' : '#fff3e0';
   const selectOverlay = dark ? '#ffa562' : '#ff8542';
+
+  // Component badge colors by type
+  const nicColor = dark ? '#5bb8d9' : '#1f6a8c';
+  const gpuColor = dark ? '#66bb6a' : '#2e7d32';
+  const fpgaColor = dark ? '#ba68c8' : '#7b1fa2';
+  const nvmeColor = dark ? '#ffa726' : '#e65100';
+  const compText = dark ? '#e0e0e0' : '#ffffff';
 
   return [
     { selector: '.slice', style: {
@@ -31,6 +40,7 @@ function buildStylesheet(dark: boolean): any[] {
       'font-size': '14px', 'font-weight': 'bold', 'color': containerLabel,
       'font-family': 'Montserrat, sans-serif',
     }},
+    // VM nodes — always fixed size with centered label
     { selector: '.vm', style: {
       'shape': 'roundrectangle', 'width': 180, 'height': 70,
       'background-color': dark ? 'data(state_bg_dark)' : 'data(state_bg)',
@@ -38,6 +48,33 @@ function buildStylesheet(dark: boolean): any[] {
       'label': 'data(label)', 'text-valign': 'center', 'text-halign': 'center',
       'font-size': '10px', 'text-wrap': 'wrap', 'text-max-width': '170px',
       'color': vmText, 'font-family': 'Montserrat, sans-serif',
+    }},
+    // Component badge nodes — small pills that sit at VM edges
+    { selector: '.component', style: {
+      'shape': 'roundrectangle', 'width': 'label', 'height': 20,
+      'padding': '6px',
+      'label': 'data(label)', 'text-valign': 'center', 'text-halign': 'center',
+      'font-size': '8px', 'font-weight': 'bold',
+      'font-family': 'Montserrat, sans-serif',
+      'border-width': 1.5, 'border-opacity': 0.9,
+      'color': compText,
+      'z-index': 10,
+    }},
+    { selector: '.component-nic', style: {
+      'background-color': nicColor, 'border-color': nicColor, 'color': compText,
+    }},
+    { selector: '.component-gpu', style: {
+      'background-color': gpuColor, 'border-color': gpuColor, 'color': compText,
+    }},
+    { selector: '.component-fpga', style: {
+      'background-color': fpgaColor, 'border-color': fpgaColor, 'color': compText,
+    }},
+    { selector: '.component-nvme', style: {
+      'background-color': nvmeColor, 'border-color': nvmeColor, 'color': compText,
+    }},
+    // Hidden components (when toggled off)
+    { selector: '.component-hidden', style: {
+      'display': 'none',
     }},
     { selector: '.network-l2', style: {
       'shape': 'ellipse', 'width': 90, 'height': 80, 'background-color': l2NodeBg,
@@ -68,10 +105,58 @@ function buildStylesheet(dark: boolean): any[] {
       'text-background-padding': '2px', 'text-wrap': 'wrap', 'color': edgeText,
       'font-family': 'Montserrat, sans-serif',
     }},
+    { selector: '.facility-port', style: {
+      'shape': 'diamond', 'width': 80, 'height': 70, 'background-color': fpNodeBg,
+      'border-width': 2, 'border-color': fpColor, 'label': 'data(label)',
+      'text-valign': 'center', 'text-halign': 'center', 'font-size': '9px',
+      'text-wrap': 'wrap', 'text-max-width': '70px', 'color': fpColor,
+      'font-family': 'Montserrat, sans-serif',
+    }},
     { selector: ':selected', style: {
       'overlay-color': selectOverlay, 'overlay-opacity': 0.2, 'overlay-padding': 6,
     }},
   ];
+}
+
+/**
+ * Position component badge nodes at the bottom edge of their parent VM,
+ * overlapping the border so they look attached. Badges are spread
+ * horizontally and locked in place.
+ */
+function positionComponentsAtVmEdge(cy: Core) {
+  const compNodes = cy.nodes('.component').not('.component-hidden');
+  if (compNodes.empty()) return;
+
+  // Group components by parent VM
+  const byVm: Record<string, any[]> = {};
+  compNodes.forEach((n: any) => {
+    const vmId = n.data('parent_vm');
+    if (!vmId) return;
+    if (!byVm[vmId]) byVm[vmId] = [];
+    byVm[vmId].push(n);
+  });
+
+  for (const [vmId, comps] of Object.entries(byVm)) {
+    const vm = cy.getElementById(vmId);
+    if (vm.empty()) continue;
+
+    const vmPos = vm.position();
+    const vmH = 70;  // fixed VM height from stylesheet
+
+    // Spread components horizontally along the bottom edge
+    const spacing = 50;
+    const totalWidth = (comps.length - 1) * spacing;
+    const startX = vmPos.x - totalWidth / 2;
+
+    comps.forEach((comp: any, i: number) => {
+      comp.unlock();
+      comp.position({
+        x: startX + i * spacing,
+        y: vmPos.y + vmH / 2,  // bottom edge of VM
+      });
+      comp.lock();
+    });
+  }
 }
 
 /** Layout presets matching fabvis layouts.py */
@@ -85,14 +170,18 @@ const LAYOUTS: Record<string, any> = {
 };
 
 export interface ContextMenuAction {
-  type: 'terminal' | 'delete';
+  type: 'terminal' | 'delete' | 'delete-component' | 'delete-facility-port';
   elements: Record<string, string>[];
+  nodeName?: string;
+  componentName?: string;
+  fpName?: string;
 }
 
 interface CytoscapeGraphProps {
   graph: CyGraph | null;
   layout: string;
   dark: boolean;
+  sliceData: SliceData | null;
   onLayoutChange: (layout: string) => void;
   onNodeClick: (data: Record<string, string>) => void;
   onEdgeClick: (data: Record<string, string>) => void;
@@ -110,6 +199,7 @@ export default function CytoscapeGraph({
   graph,
   layout,
   dark,
+  sliceData,
   onLayoutChange,
   onNodeClick,
   onEdgeClick,
@@ -119,6 +209,9 @@ export default function CytoscapeGraph({
   const containerRef = useRef<HTMLDivElement>(null);
   const cyRef = useRef<Core | null>(null);
   const [menu, setMenu] = useState<MenuState | null>(null);
+  const [showComponents, setShowComponents] = useState(true);
+  const showComponentsRef = useRef(showComponents);
+  showComponentsRef.current = showComponents;
 
   // Close context menu on clicks or escape
   const menuOpenTime = useRef(0);
@@ -154,6 +247,28 @@ export default function CytoscapeGraph({
 
     cyRef.current = cy;
 
+    // Keep component badges attached to their parent VM during drag
+    cy.on('drag', '.vm', (e: any) => {
+      const vm = e.target;
+      const vmId = vm.id();
+      const vmPos = vm.position();
+      const comps = cy.nodes('.component').filter((n: any) => n.data('parent_vm') === vmId && !n.hasClass('component-hidden'));
+      if (comps.empty()) return;
+
+      const spacing = 50;
+      const total = (comps.length - 1) * spacing;
+      const startX = vmPos.x - total / 2;
+
+      comps.forEach((comp: any, i: number) => {
+        comp.unlock();
+        comp.position({
+          x: startX + i * spacing,
+          y: vmPos.y + 35,
+        });
+        comp.lock();
+      });
+    });
+
     return () => {
       cy.destroy();
       cyRef.current = null;
@@ -184,7 +299,19 @@ export default function CytoscapeGraph({
     if (!cy) return;
 
     const handleNodeClick = (e: EventObject) => {
-      onNodeClick(e.target.data());
+      const node = e.target;
+      // Component badge clicked — delegate to parent VM
+      if (node.hasClass('component')) {
+        const vmId = node.data('parent_vm');
+        if (vmId) {
+          const vm = cy.getElementById(vmId);
+          if (!vm.empty()) {
+            onNodeClick(vm.data());
+            return;
+          }
+        }
+      }
+      onNodeClick(node.data());
     };
     const handleEdgeClick = (e: EventObject) => {
       onEdgeClick(e.target.data());
@@ -212,20 +339,15 @@ export default function CytoscapeGraph({
     const container = containerRef.current;
     if (!container) return;
 
-    // Suppress native context menu on the entire graph panel
-    const suppress = (e: MouseEvent) => {
-      e.preventDefault();
-    };
+    const suppress = (e: MouseEvent) => { e.preventDefault(); };
     container.addEventListener('contextmenu', suppress);
 
-    // Use mouseup with button===2 to show menu after right-click release
     const handleRightClick = (e: MouseEvent) => {
       if (e.button !== 2) return;
 
       const cy = cyRef.current;
       if (!cy) return;
 
-      // Project screen coords to cytoscape model coords
       const r = (cy as any)._private.renderer;
       if (!r) return;
       const pos = r.projectIntoViewport(e.clientX, e.clientY);
@@ -233,19 +355,27 @@ export default function CytoscapeGraph({
 
       if (!near || near.isEdge() || near.hasClass('slice')) return;
 
-      // If the right-clicked element isn't already selected, make it the sole selection
-      if (!near.selected()) {
-        cy.elements().unselect();
-        near.select();
+      // If right-clicked a component badge, target its parent VM instead
+      let target = near;
+      if (near.hasClass('component')) {
+        const vmId = near.data('parent_vm');
+        if (vmId) {
+          const vm = cy.getElementById(vmId);
+          if (!vm.empty()) target = vm;
+          else return;
+        } else return;
       }
 
-      // Gather all selected non-container nodes
-      const selected = cy.nodes(':selected').filter((n: any) => !n.hasClass('slice'));
+      if (!target.selected()) {
+        cy.elements().unselect();
+        target.select();
+      }
+
+      const selected = cy.nodes(':selected').filter((n: any) => !n.hasClass('slice') && !n.hasClass('component'));
       if (selected.length === 0) return;
 
       const items: Record<string, string>[] = [];
       selected.forEach((n: any) => { items.push(n.data()); });
-
       setMenu({ x: e.clientX, y: e.clientY, selected: items });
     };
 
@@ -279,11 +409,30 @@ export default function CytoscapeGraph({
 
     cy.add(elements);
 
-    const layoutConfig = LAYOUTS[layout] || LAYOUTS.dagre;
-    cy.layout(layoutConfig).run();
+    // Apply component visibility before layout
+    applyComponentVisibility(cy, showComponentsRef.current);
 
-    setTimeout(() => cy.fit(undefined, 30), 500);
+    // Run layout on non-component elements; then position components at VM edges
+    const layoutElements = cy.elements().not('.component');
+    const lay = layoutElements.layout(LAYOUTS[layout] || LAYOUTS.dagre);
+    lay.on('layoutstop', () => {
+      if (showComponentsRef.current) {
+        positionComponentsAtVmEdge(cy);
+      }
+      setTimeout(() => cy.fit(undefined, 30), 100);
+    });
+    lay.run();
   }, [graph, layout]);
+
+  // Toggle component visibility
+  useEffect(() => {
+    const cy = cyRef.current;
+    if (!cy) return;
+    applyComponentVisibility(cy, showComponents);
+    if (showComponents) {
+      positionComponentsAtVmEdge(cy);
+    }
+  }, [showComponents]);
 
   const handleFit = useCallback(() => {
     cyRef.current?.fit(undefined, 30);
@@ -305,8 +454,14 @@ export default function CytoscapeGraph({
     (el) => el.element_type === 'node' && el.management_ip
   ) ?? [];
   const deletable = menu?.selected.filter(
-    (el) => el.element_type === 'node' || el.element_type === 'network'
+    (el) => el.element_type === 'node' || el.element_type === 'network' || el.element_type === 'facility-port'
   ) ?? [];
+
+  const singleVm = menu?.selected.length === 1 && menu.selected[0].element_type === 'node'
+    ? menu.selected[0] : null;
+  const vmComponents = singleVm
+    ? (sliceData?.nodes.find((n) => n.name === singleVm.name)?.components ?? [])
+    : [];
 
   const handleTerminal = () => {
     if (vmsWithIp.length > 0) {
@@ -322,18 +477,32 @@ export default function CytoscapeGraph({
     setMenu(null);
   };
 
+  const handleDeleteComponent = (nodeName: string, compName: string) => {
+    onContextAction({ type: 'delete-component', elements: [], nodeName, componentName: compName });
+    setMenu(null);
+  };
+
   return (
     <div className="graph-panel">
       <div className="cytoscape-container" ref={containerRef} />
       <div className="graph-controls">
         <label>Layout:</label>
-        <select value={layout} onChange={(e) => onLayoutChange(e.target.value)}>
+        <select value={layout} onChange={(e) => onLayoutChange(e.target.value)} data-help-id="topology.layout">
           {Object.keys(LAYOUTS).map((l) => (
             <option key={l} value={l}>{l}</option>
           ))}
         </select>
-        <button onClick={handleFit}>Fit</button>
-        <button onClick={handleExport} title="Export as PNG">Export</button>
+        <button onClick={handleFit} data-help-id="topology.fit">Fit</button>
+        <button onClick={handleExport} title="Save graph as PNG image" data-help-id="topology.export">Save PNG</button>
+        <span className="graph-controls-sep" />
+        <label className="graph-toggle">
+          <input
+            type="checkbox"
+            checked={showComponents}
+            onChange={(e) => setShowComponents(e.target.checked)}
+          />
+          Components
+        </label>
       </div>
 
       {menu && (
@@ -353,7 +522,25 @@ export default function CytoscapeGraph({
               ▸ Open Terminal{vmsWithIp.length > 1 ? ` (${vmsWithIp.length})` : ''}
             </button>
           )}
-          {vmsWithIp.length > 0 && deletable.length > 0 && (
+          {vmComponents.length > 0 && vmsWithIp.length > 0 && (
+            <div className="graph-context-menu-sep" />
+          )}
+          {vmComponents.length > 0 && singleVm && (
+            <>
+              <div className="graph-context-menu-label">Components</div>
+              {vmComponents.map((comp) => (
+                <button
+                  key={comp.name}
+                  className="graph-context-menu-item component-delete"
+                  onClick={() => handleDeleteComponent(singleVm.name, comp.name)}
+                >
+                  <span className="component-info">{comp.name} <span className="component-model">{comp.model}</span></span>
+                  <span className="component-delete-icon">✕</span>
+                </button>
+              ))}
+            </>
+          )}
+          {deletable.length > 0 && (vmsWithIp.length > 0 || vmComponents.length > 0) && (
             <div className="graph-context-menu-sep" />
           )}
           {deletable.length > 0 && (
@@ -365,6 +552,37 @@ export default function CytoscapeGraph({
       )}
     </div>
   );
+}
+
+/**
+ * Show or hide component badge nodes and re-route edges accordingly.
+ * When components are visible, edges go from component nodes to networks.
+ * When hidden, edges fall back to the parent VM node.
+ */
+function applyComponentVisibility(cy: Core, show: boolean) {
+  cy.batch(() => {
+    const compNodes = cy.nodes('.component');
+
+    if (show) {
+      compNodes.removeClass('component-hidden');
+      // Route edges from component nodes (restore original source)
+      cy.edges().forEach((edge: any) => {
+        const sourceComp = edge.data('source_comp');
+        if (sourceComp && edge.data('source') !== sourceComp) {
+          edge.move({ source: sourceComp });
+        }
+      });
+    } else {
+      compNodes.addClass('component-hidden');
+      // Route edges from VM nodes (fallback source)
+      cy.edges().forEach((edge: any) => {
+        const sourceVm = edge.data('source_vm');
+        if (sourceVm && edge.data('source') !== sourceVm) {
+          edge.move({ source: sourceVm });
+        }
+      });
+    }
+  });
 }
 
 export { LAYOUTS };
