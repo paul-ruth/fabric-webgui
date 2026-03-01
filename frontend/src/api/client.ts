@@ -1,6 +1,6 @@
 /** API client for the FABRIC Web GUI backend. */
 
-import type { SliceSummary, SliceData, SiteInfo, SiteDetail, LinkInfo, ComponentModel, ConfigStatus, ProjectsResponse, ValidationResult, SiteMetrics, LinkMetrics, FileEntry, ProvisionRule, BootConfig, BootExecResult, SliceKeySet, VMTemplateSummary, VMTemplateDetail } from '../types/fabric';
+import type { SliceSummary, SliceData, SiteInfo, SiteDetail, LinkInfo, ComponentModel, ConfigStatus, ProjectsResponse, ValidationResult, SiteMetrics, LinkMetrics, FileEntry, ProvisionRule, BootConfig, BootExecResult, SliceKeySet, VMTemplateSummary, VMTemplateDetail, HostInfo } from '../types/fabric';
 
 const BASE = '/api';
 
@@ -236,6 +236,7 @@ export interface TemplateSummary {
   node_count: number;
   network_count: number;
   dir_name: string;
+  builtin?: boolean;
 }
 
 export function listTemplates(): Promise<TemplateSummary[]> {
@@ -300,6 +301,17 @@ export function listLinks(): Promise<LinkInfo[]> {
 
 export function getSiteDetail(name: string): Promise<SiteDetail> {
   return fetchJson(`/sites/${encodeURIComponent(name)}`);
+}
+
+export function listSiteHosts(siteName: string): Promise<HostInfo[]> {
+  return fetchJson(`/sites/${encodeURIComponent(siteName)}/hosts`);
+}
+
+export function resolveSites(sliceName: string, overrides?: Record<string, string>): Promise<SliceData> {
+  return fetchJson(`/slices/${encodeURIComponent(sliceName)}/resolve-sites`, {
+    method: 'POST',
+    body: JSON.stringify({ group_overrides: overrides || {} }),
+  });
 }
 
 export function getSiteMetrics(name: string): Promise<SiteMetrics> {

@@ -17,8 +17,42 @@ from pydantic import BaseModel
 from app.fablib_manager import get_fablib
 from app.slice_serializer import slice_to_dict, slice_summary
 from app.graph_builder import build_graph
+from app.site_resolver import resolve_sites
+from app.routes.resources import get_cached_sites, get_fresh_sites
 
 router = APIRouter(tags=["slices"])
+
+
+def _resolve_vm_template(name: str) -> dict | None:
+    """Look up a VM template by name and return its data dict (or None).
+
+    Triggers VM template seeding so builtins are available, then reads
+    the template JSON from disk.  If the template has a ``tools/``
+    directory, an extra ``_tools_source`` key is added with its path.
+    """
+    from app.routes.vm_templates import _seed_if_needed, _sanitize_name, _vm_templates_dir
+    import json as _json
+
+    _seed_if_needed()
+    try:
+        safe = _sanitize_name(name)
+    except Exception:
+        return None
+    tdir = _vm_templates_dir()
+    tmpl_dir = os.path.join(tdir, safe)
+    tmpl_path = os.path.join(tmpl_dir, "vm-template.json")
+    if not os.path.isfile(tmpl_path):
+        return None
+    try:
+        with open(tmpl_path) as f:
+            data = _json.load(f)
+    except Exception:
+        return None
+    # Check for tools directory
+    tools_dir = os.path.join(tmpl_dir, "tools")
+    if os.path.isdir(tools_dir) and os.listdir(tools_dir):
+        data["_tools_source"] = tools_dir
+    return data
 
 # ---------------------------------------------------------------------------
 # Draft slice store — holds slices that are being edited locally.
@@ -30,6 +64,8 @@ _draft_lock = threading.Lock()
 _draft_slices: dict[str, Any] = {}
 # Track which drafts are "new" (never submitted) vs "loaded" (existing slice)
 _draft_is_new: dict[str, bool] = {}
+# Track site group membership: slice_name -> {node_name: "@group"}
+_draft_site_groups: dict[str, dict[str, str]] = {}
 
 
 def _store_draft(name: str, slice_obj: Any, is_new: bool = True) -> None:
@@ -42,6 +78,7 @@ def _pop_draft(name: str) -> tuple[Any | None, bool]:
     with _draft_lock:
         obj = _draft_slices.pop(name, None)
         is_new = _draft_is_new.pop(name, True)
+        _draft_site_groups.pop(name, None)
         return obj, is_new
 
 
@@ -58,6 +95,23 @@ def _is_draft(name: str) -> bool:
 def _is_new_draft(name: str) -> bool:
     with _draft_lock:
         return _draft_is_new.get(name, True)
+
+
+def is_site_group(site: str) -> bool:
+    """Return True if a site value is a group reference (starts with @)."""
+    return isinstance(site, str) and site.startswith("@")
+
+
+def _store_site_groups(name: str, groups: dict[str, str]) -> None:
+    """Store node→group mapping for a slice."""
+    with _draft_lock:
+        _draft_site_groups[name] = groups
+
+
+def _get_site_groups(name: str) -> dict[str, str]:
+    """Get node→group mapping for a slice (empty dict if none)."""
+    with _draft_lock:
+        return dict(_draft_site_groups.get(name, {}))
 
 
 def _get_slice_obj(name: str):
@@ -77,6 +131,13 @@ def _serialize(slice_obj, dirty: bool = False) -> dict[str, Any]:
         data["state"] = "Draft"
     # Keep real state for loaded slices
     data["dirty"] = dirty
+    # Annotate nodes with site group info
+    site_groups = _get_site_groups(name)
+    if site_groups:
+        for node in data.get("nodes", []):
+            grp = site_groups.get(node["name"])
+            if grp:
+                node["site_group"] = grp
     graph = build_graph(data)
     return {**data, "graph": graph}
 
@@ -133,6 +194,10 @@ class CreateFacilityPortRequest(BaseModel):
     bandwidth: int = 10
 
 
+class ResolveSitesRequest(BaseModel):
+    group_overrides: Dict[str, str] = {}  # "@group" -> "SITE_NAME"
+
+
 # --- Routes ---
 # Heavy FABlib calls use async + asyncio.to_thread() so they don't block
 # the event loop or exhaust the default threadpool for other requests.
@@ -149,11 +214,13 @@ async def list_slices() -> list[dict[str, Any]]:
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-    # Append any new draft slices not yet submitted
+    # Append only NEW (never-submitted) draft slices.
+    # Loaded slices (is_new=False) already appear from the FABRIC API;
+    # if they went Dead/Closing they are intentionally excluded.
     existing_names = {r["name"] for r in results}
     with _draft_lock:
         for name in _draft_slices:
-            if name not in existing_names:
+            if name not in existing_names and _draft_is_new.get(name, True):
                 results.append({"name": name, "id": "", "state": "Draft"})
     return results
 
@@ -191,10 +258,48 @@ async def create_slice(name: str) -> dict[str, Any]:
 @router.post("/slices/{slice_name}/submit")
 async def submit_slice(slice_name: str) -> dict[str, Any]:
     """Submit a slice — creates new slice or modifies existing one."""
+    # Capture site groups before popping draft (pop clears them)
+    site_groups = _get_site_groups(slice_name)
     draft, is_new = _pop_draft(slice_name)
     if draft is not None:
         def _do():
             if is_new:
+                # Force-refresh resource availability (including host-level)
+                # and re-resolve all node site assignments before submitting.
+                logger.info("Submit: refreshing resource availability for slice '%s'", slice_name)
+                fresh_sites = get_fresh_sites()
+
+                data = slice_to_dict(draft)
+                # Build node defs — restore @group tags for grouped nodes,
+                # keep explicit sites, mark ungrouped nodes as "auto" so
+                # the resolver assigns them to sites with real capacity.
+                node_defs = []
+                for node in data.get("nodes", []):
+                    grp = site_groups.get(node["name"])
+                    if grp:
+                        site = grp  # pass @group tag for group resolution
+                    else:
+                        site = node.get("site", "auto")
+                    node_defs.append({
+                        "name": node["name"],
+                        "site": site,
+                        "cores": node.get("cores", 2),
+                        "ram": node.get("ram", 8),
+                        "disk": node.get("disk", 10),
+                        "components": node.get("components", []),
+                    })
+
+                resolved_defs, _ = resolve_sites(node_defs, fresh_sites)
+
+                # Apply resolved sites to draft nodes
+                for nd in resolved_defs:
+                    try:
+                        fab_node = draft.get_node(name=nd["name"])
+                        fab_node.set_site(nd["site"])
+                        logger.info("Submit: node '%s' -> site '%s'", nd["name"], nd["site"])
+                    except Exception as ex:
+                        logger.warning("Submit re-resolve: could not set site for %s: %s", nd["name"], ex)
+
                 draft.submit()
             else:
                 draft.submit(wait=False)
@@ -204,6 +309,8 @@ async def submit_slice(slice_name: str) -> dict[str, Any]:
         except Exception as e:
             # Put draft back so user can retry
             _store_draft(slice_name, draft, is_new=is_new)
+            if site_groups:
+                _store_site_groups(slice_name, site_groups)
             raise HTTPException(status_code=500, detail=str(e))
     # Not a draft — nothing to submit
     raise HTTPException(status_code=400, detail="No pending changes to submit")
@@ -223,6 +330,76 @@ async def refresh_slice(slice_name: str) -> dict[str, Any]:
         return _serialize(slice_obj)
     try:
         return await asyncio.to_thread(_do)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/slices/{slice_name}/resolve-sites")
+async def resolve_sites_endpoint(slice_name: str, body: ResolveSitesRequest = ResolveSitesRequest()) -> dict[str, Any]:
+    """Re-resolve site groups for a draft slice.
+
+    Optionally accepts group_overrides to pin specific groups to sites.
+    Groups not overridden are re-resolved using fresh resource data.
+    """
+    draft = _get_draft(slice_name)
+    if draft is None:
+        raise HTTPException(status_code=404, detail=f"No draft found for slice '{slice_name}'")
+
+    site_groups = _get_site_groups(slice_name)
+    if not site_groups:
+        raise HTTPException(status_code=400, detail="Slice has no site groups to resolve")
+
+    def _do():
+        data = slice_to_dict(draft)
+        nodes = data.get("nodes", [])
+
+        # Build node defs for the resolver
+        node_defs = []
+        for node in nodes:
+            grp = site_groups.get(node["name"])
+            if grp:
+                # Check if this group is overridden
+                if grp in body.group_overrides:
+                    site = body.group_overrides[grp]
+                else:
+                    site = grp  # Pass @group tag for re-resolution
+            else:
+                site = node.get("site", "")
+            node_defs.append({
+                "name": node["name"],
+                "site": site,
+                "cores": node.get("cores", 2),
+                "ram": node.get("ram", 8),
+                "disk": node.get("disk", 10),
+                "components": node.get("components", []),
+            })
+
+        # Refresh cached sites for current availability
+        sites = get_cached_sites()
+
+        # Re-resolve — only non-overridden groups will be resolved
+        resolved_defs, new_groups = resolve_sites(node_defs, sites)
+
+        # Update FABlib draft node sites
+        fablib = get_fablib()
+        for nd in resolved_defs:
+            try:
+                fab_node = draft.get_node(name=nd["name"])
+                fab_node.set_site(site=nd["site"])
+            except Exception:
+                logger.warning("Could not update site for node %s", nd["name"])
+
+        # Merge: keep all original group memberships, update resolved sites
+        merged_groups = dict(site_groups)
+        merged_groups.update(new_groups)
+        _store_site_groups(slice_name, merged_groups)
+
+        return _serialize(draft, dirty=True)
+
+    try:
+        return await asyncio.to_thread(_do)
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -573,6 +750,8 @@ async def clone_slice(slice_name: str, new_name: str) -> dict[str, Any]:
             "networks": [],
         }
 
+        src_groups = _get_site_groups(slice_name)
+
         for node in data.get("nodes", []):
             # Read attributes directly from the FABlib node object for accuracy,
             # falling back to serialized data with safe int defaults.
@@ -604,13 +783,16 @@ async def clone_slice(slice_name: str, new_name: str) -> dict[str, Any]:
             except Exception:
                 pass
 
-            site = node.get("site", "")
-            try:
-                s = fab_node.get_site()
-                if s:
-                    site = s
-            except Exception:
-                pass
+            # Use @group reference from source if available, else concrete site
+            site = src_groups.get(node["name"], "")
+            if not site:
+                site = node.get("site", "")
+                try:
+                    s = fab_node.get_site()
+                    if s:
+                        site = s
+                except Exception:
+                    pass
 
             node_model: dict[str, Any] = {
                 "name": node["name"],
@@ -674,6 +856,10 @@ async def clone_slice(slice_name: str, new_name: str) -> dict[str, Any]:
         logger.info("Clone: creating new draft '%s' with %d nodes, %d networks",
                      new_name, len(model_data["nodes"]), len(model_data["networks"]))
         fablib = get_fablib()
+
+        # Resolve sites (@group and auto) with fresh availability data
+        model_data["nodes"], clone_groups = resolve_sites(model_data["nodes"], get_cached_sites())
+
         new_slice = fablib.new_slice(name=new_name)
 
         # Add nodes and components
@@ -699,12 +885,40 @@ async def clone_slice(slice_name: str, new_name: str) -> dict[str, Any]:
                     name=comp_def.get("name", ""),
                 )
 
-            # Apply boot config
-            boot_config = node_def.get("boot_config")
-            if boot_config and isinstance(boot_config, dict):
+            # Resolve boot configuration from VM template + node-level overrides
+            final_bc = None
+            vm_tmpl_name = node_def.get("vm_template")
+            if vm_tmpl_name:
+                vm_tmpl = _resolve_vm_template(vm_tmpl_name)
+                if vm_tmpl:
+                    vm_bc = vm_tmpl.get("boot_config", {})
+                    final_bc = {
+                        "uploads": list(vm_bc.get("uploads", [])),
+                        "commands": list(vm_bc.get("commands", [])),
+                        "network": list(vm_bc.get("network", [])),
+                    }
+                    if vm_tmpl.get("_tools_source"):
+                        final_bc["uploads"].insert(0, {
+                            "id": "vm-tools",
+                            "source": vm_tmpl["_tools_source"],
+                            "dest": "~/tools",
+                        })
+                    vm_image = vm_tmpl.get("image")
+                    if vm_image:
+                        new_node.set_image(vm_image)
+
+            node_bc = node_def.get("boot_config")
+            if node_bc and isinstance(node_bc, dict):
+                if final_bc is None:
+                    final_bc = {"uploads": [], "commands": [], "network": []}
+                final_bc["uploads"].extend(node_bc.get("uploads", []))
+                final_bc["commands"].extend(node_bc.get("commands", []))
+                final_bc["network"].extend(node_bc.get("network", []))
+
+            if final_bc:
                 try:
                     ud = new_node.get_user_data()
-                    ud["boot_config"] = boot_config
+                    ud["boot_config"] = final_bc
                     new_node.set_user_data(ud)
                 except Exception:
                     pass
@@ -759,6 +973,9 @@ async def clone_slice(slice_name: str, new_name: str) -> dict[str, Any]:
                     net.set_gateway(gateway)
 
         _store_draft(new_name, new_slice, is_new=True)
+        # Store resolved group membership for the clone
+        if clone_groups:
+            _store_site_groups(new_name, clone_groups)
         result = _serialize(new_slice)
         logger.info("Clone: successfully created draft '%s'", new_name)
         return result
@@ -781,6 +998,7 @@ def build_slice_model(slice_name: str) -> dict:
     """
     slice_obj = _get_slice_obj(slice_name)
     data = slice_to_dict(slice_obj)
+    site_groups = _get_site_groups(slice_name)
 
     model: dict[str, Any] = {
         "format": "fabric-webgui-v1",
@@ -790,9 +1008,11 @@ def build_slice_model(slice_name: str) -> dict:
     }
 
     for node in data.get("nodes", []):
+        # Export @group reference instead of resolved site if available
+        export_site = site_groups.get(node["name"], node.get("site", ""))
         node_model: dict[str, Any] = {
             "name": node["name"],
-            "site": node.get("site", ""),
+            "site": export_site,
             "cores": node.get("cores", 2),
             "ram": node.get("ram", 8),
             "disk": node.get("disk", 10),
@@ -857,8 +1077,12 @@ def import_slice(model: SliceModelImport) -> dict[str, Any]:
         fablib = get_fablib()
         slice_obj = fablib.new_slice(name=model.name)
 
+        # --- Resolve site references (@group, auto) using resource availability ---
+        node_defs = [dict(nd) for nd in model.nodes]
+        node_defs, node_groups = resolve_sites(node_defs, get_cached_sites())
+
         # Add nodes and components
-        for node_def in model.nodes:
+        for node_def in node_defs:
             kwargs: dict[str, Any] = {
                 "name": node_def["name"],
                 "cores": node_def.get("cores", 2),
@@ -877,12 +1101,43 @@ def import_slice(model: SliceModelImport) -> dict[str, Any]:
                     name=comp_def.get("name", ""),
                 )
 
-            # Apply boot config if present (new format)
-            boot_config = node_def.get("boot_config")
-            if boot_config and isinstance(boot_config, dict):
+            # Resolve boot configuration from VM template + node-level overrides
+            final_bc = None
+            vm_tmpl_name = node_def.get("vm_template")
+            if vm_tmpl_name:
+                vm_tmpl = _resolve_vm_template(vm_tmpl_name)
+                if vm_tmpl:
+                    vm_bc = vm_tmpl.get("boot_config", {})
+                    final_bc = {
+                        "uploads": list(vm_bc.get("uploads", [])),
+                        "commands": list(vm_bc.get("commands", [])),
+                        "network": list(vm_bc.get("network", [])),
+                    }
+                    # Add tools upload if VM template has tools
+                    if vm_tmpl.get("_tools_source"):
+                        final_bc["uploads"].insert(0, {
+                            "id": "vm-tools",
+                            "source": vm_tmpl["_tools_source"],
+                            "dest": "~/tools",
+                        })
+                    # Override image from VM template
+                    vm_image = vm_tmpl.get("image")
+                    if vm_image:
+                        node.set_image(vm_image)
+
+            # Merge node-level boot_config additions
+            node_bc = node_def.get("boot_config")
+            if node_bc and isinstance(node_bc, dict):
+                if final_bc is None:
+                    final_bc = {"uploads": [], "commands": [], "network": []}
+                final_bc["uploads"].extend(node_bc.get("uploads", []))
+                final_bc["commands"].extend(node_bc.get("commands", []))
+                final_bc["network"].extend(node_bc.get("network", []))
+
+            if final_bc:
                 try:
                     ud = node.get_user_data()
-                    ud["boot_config"] = boot_config
+                    ud["boot_config"] = final_bc
                     node.set_user_data(ud)
                 except Exception:
                     pass
@@ -946,6 +1201,8 @@ def import_slice(model: SliceModelImport) -> dict[str, Any]:
                             iface.set_ip_addr(addr=iface_ips[iname])
 
         _store_draft(model.name, slice_obj, is_new=True)
+        if node_groups:
+            _store_site_groups(model.name, node_groups)
         return _serialize(slice_obj)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

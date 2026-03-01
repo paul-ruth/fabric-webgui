@@ -52,19 +52,59 @@ cd frontend && npm run build   # outputs to frontend/dist/
 - `app/fablib_manager.py` — Singleton FablibManager (reads `FABRIC_CONFIG_DIR` env)
 - `app/slice_serializer.py` — Converts FABlib objects to JSON-serializable dicts
 - `app/graph_builder.py` — Converts slice data to Cytoscape.js graph JSON (nodes, edges, classes, state colors)
-- `app/routes/slices.py` — CRUD + submit/modify/refresh/delete for slices, nodes, components, networks
-- `app/routes/resources.py` — Sites (with GPS coords), images, component models
+- `app/site_resolver.py` — Maps `@group` tags and `auto` sites to concrete FABRIC sites using resource availability (including host-level checks)
+- `app/routes/slices.py` — CRUD + submit/modify/refresh/delete for slices, nodes, components, networks; `POST /resolve-sites` for re-resolving site assignments
+- `app/routes/resources.py` — Sites (with GPS coords + host-level availability), images, component models; `GET /sites/{name}/hosts` for per-host resources
+- `app/routes/templates.py` — Slice template CRUD (list, load, save, delete)
+- `app/routes/vm_templates.py` — VM template CRUD (list, get, save, delete)
+- `app/routes/files.py` — Dual-panel file manager (container storage + VM SFTP)
 
 ### Frontend (`frontend/src/`)
 - `App.tsx` — Root component, state management, API orchestration
 - `api/client.ts` — Typed fetch wrappers for all backend endpoints
 - `components/CytoscapeGraph.tsx` — Cytoscape.js with fabvis-matching stylesheet and 6 layout algorithms
-- `components/EditorPanel.tsx` — 5-tab editor (Node, Component, Network, Remove, Configure)
+- `components/EditorPanel.tsx` — Node/component/network editor with Site Mapping view for group-to-site assignments, boot config, and VM template integration
 - `components/DetailPanel.tsx` — Properties display for clicked element
 - `components/GeoView.tsx` — Leaflet map with site markers and network connections
-- `components/Toolbar.tsx` — Slice selector, action buttons, view toggle, delete confirmation
+- `components/Toolbar.tsx` — Slice selector, action buttons, clone, save-as-template
+- `components/TemplatePanel.tsx` — Slice template browser with load/delete
+- `components/VMTemplatePanel.tsx` — VM template browser with add-to-slice/delete
+- `components/BottomPanel.tsx` — Console with errors, validation, log, local terminal, and SSH node terminals
 - `components/TitleBar.tsx` — FABRIC branded gradient header
+- `components/Tooltip.tsx` — Hover tooltip component used across all panels
+- `components/HelpView.tsx` — Full help page with searchable documentation
+- `data/helpData.ts` — Help entries and section definitions for contextual help system
 - `types/fabric.ts` — TypeScript interfaces matching backend response shapes
+
+## Key Features
+
+### Template System
+- **Slice Templates**: Pre-built topologies (e.g., "Wide-Area L2 Network") with `@group` site tags for co-location. Load creates a new draft. Save any slice as a reusable template.
+- **VM Templates**: Single-node configurations (image + boot config). Add a VM from a template to quickly create nodes with pre-configured settings. Save any node as a VM template.
+
+### Site Resolution & Resource Mapping
+- **Site Resolver** (`site_resolver.py`): Maps `@group` tags to concrete sites using live availability data. Performs host-level feasibility checks — verifies at least one physical host can fit each VM, not just site-level totals.
+- **Site Mapping View**: Toggle "Sites" in EditorPanel to see group-to-site assignments, manually override via dropdown, or click "Auto-Assign" to re-resolve with fresh data.
+- **Submit-time Resolution**: On submit, resources are force-refreshed (bypassing cache) and all nodes are re-resolved to sites with current availability.
+- **`POST /slices/{name}/resolve-sites`**: Backend endpoint for manual/auto site re-resolution with optional group overrides.
+
+### Boot Configuration
+- Per-node boot scripts (commands, file uploads, network config) that run on first boot
+- Stored as part of slice templates and VM templates
+- Execute and view results from the Boot Config tab in the editor
+
+### Help System
+- **Tooltip**: Hover over any labeled element for a brief description
+- **Right-click context help**: Right-click elements with `data-help-id` for detailed help
+- **Help page**: Full searchable documentation accessible from the title bar
+- **`helpData.ts`**: Central registry of all help entries organized by section
+
+### Console (Bottom Panel)
+- **Errors**: API and operation error log with clear-all
+- **Validation**: Real-time slice validation with errors, warnings, and remedies
+- **Log**: Application event log with timestamps
+- **Local Terminal**: Shell on the backend container for FABlib/SSH debugging
+- **Node Terminals**: SSH sessions to provisioned VMs via WebSocket
 
 ## FABRIC Brand Colors (from fabvis)
 - Primary: `#5798bc`, Dark: `#1f6a8c`, Teal: `#008e7a`, Orange: `#ff8542`, Coral: `#e25241`

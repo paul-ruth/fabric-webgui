@@ -139,9 +139,13 @@ def build_graph(slice_data: dict) -> dict[str, Any]:
         comps_with_ifaces = [c for c in components if c.get("interfaces")]
         comps_without_ifaces = [c for c in components if not c.get("interfaces")]
 
+        site_group = node.get("site_group", "")
+        site_line = f"@ {site}"
+        if site_group:
+            site_line += f"  ({site_group})"
         label_lines = [
             node_name,
-            f"@ {site}",
+            site_line,
             f"{cores}c / {ram}G / {disk}G",
         ]
         if comps_without_ifaces:
@@ -164,6 +168,7 @@ def build_graph(slice_data: dict) -> dict[str, Any]:
                 "state_color": state_colors["border"],
                 "state_bg_dark": state_colors_dark["bg"],
                 "state_color_dark": state_colors_dark["border"],
+                "site_group": site_group,
                 "image": node.get("image", ""),
                 "management_ip": node.get("management_ip", ""),
                 "username": node.get("username", ""),

@@ -113,6 +113,15 @@ def serialize_node(node) -> dict[str, Any]:
 
     # get_management_ip reads from sliver data, should be safe
     # get_username and get_image read from topology, should be safe
+    # user_data holds boot_config and other per-node metadata
+    user_data = {}
+    try:
+        ud = node.get_user_data()
+        if ud and isinstance(ud, dict):
+            user_data = dict(ud)
+    except Exception:
+        pass
+
     return {
         "name": _safe(node.get_name),
         "site": _safe(node.get_site),
@@ -125,6 +134,7 @@ def serialize_node(node) -> dict[str, Any]:
         "management_ip": _safe(node.get_management_ip),
         "reservation_state": _safe(lambda: str(node.get_reservation_state())),
         "username": _safe(node.get_username),
+        "user_data": user_data,
         "components": components,
         "interfaces": interfaces,
     }

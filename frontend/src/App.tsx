@@ -163,6 +163,7 @@ export default function App() {
   const [consoleFullWidth, setConsoleFullWidth] = useState(true);
   const [consoleExpanded, setConsoleExpanded] = useState(false);
   const [consoleHeight, setConsoleHeight] = useState(260);
+  const [dropIndicator, setDropIndicator] = useState<{ panelId: PanelId; edge: 'left' | 'right' } | null>(null);
 
   // --- Global cache: infrastructure ---
   const [infraSites, setInfraSites] = useState<SiteInfo[]>([]);
@@ -743,7 +744,14 @@ export default function App() {
         dirty={sliceData?.dirty ?? false}
         sliceValid={validationValid}
         loading={loading}
-        onSelectSlice={setSelectedSliceName}
+        onSelectSlice={(name) => {
+          setSelectedSliceName(name);
+          // Clear canvas whenever selection changes (data reloads on Load)
+          setSliceData(null);
+          setSelectedElement(null);
+          setValidationIssues([]);
+          setValidationValid(false);
+        }}
         onLoad={loadSlice}
         onCreateSlice={handleCreateSlice}
         onSubmit={handleSubmit}
@@ -855,6 +863,9 @@ export default function App() {
                       dragHandleProps={dragProps}
                       panelIcon={icon}
                       onVmTemplatesChanged={refreshVmTemplates}
+                      sliceName={selectedSliceName}
+                      sliceData={sliceData}
+                      onNodeAdded={updateSliceAndValidate}
                     />
                   );
                 case 'detail':
@@ -882,9 +893,6 @@ export default function App() {
             const rightExpanded = sortByOrder(PANEL_IDS.filter(id => panelLayout[id].side === 'right' && !panelLayout[id].collapsed));
             const leftCollapsed = sortByOrder(PANEL_IDS.filter(id => panelLayout[id].side === 'left' && panelLayout[id].collapsed));
             const rightCollapsed = sortByOrder(PANEL_IDS.filter(id => panelLayout[id].side === 'right' && panelLayout[id].collapsed));
-
-            // Track drop indicator: which panel has a highlight, and on which edge
-            const [dropIndicator, setDropIndicator] = useState<{ panelId: PanelId; edge: 'left' | 'right' } | null>(null);
 
             // Helper: find which panel the cursor is over by checking child element bounds
             const findTargetPanel = (groupEl: HTMLElement, clientX: number, panels: PanelId[]): { panelId: PanelId; edge: 'left' | 'right' } | null => {
@@ -1041,7 +1049,7 @@ export default function App() {
                       sliceState={sliceData?.state ?? ''}
                       dirty={sliceData?.dirty ?? false}
                       errors={errors}
-                      onClearErrors={() => setErrors([])}
+                      onClearErrors={() => { setErrors([]); setValidationIssues([]); setValidationValid(false); }}
                       fullWidth={consoleFullWidth}
                       onToggleFullWidth={() => setConsoleFullWidth(fw => !fw)}
                       showWidthToggle={currentView === 'topology'}
@@ -1083,7 +1091,7 @@ export default function App() {
           sliceState={sliceData?.state ?? ''}
           dirty={sliceData?.dirty ?? false}
           errors={errors}
-          onClearErrors={() => setErrors([])}
+          onClearErrors={() => { setErrors([]); setValidationIssues([]); setValidationValid(false); }}
           fullWidth={consoleFullWidth}
           onToggleFullWidth={() => setConsoleFullWidth(fw => !fw)}
           showWidthToggle={currentView === 'topology'}

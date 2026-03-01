@@ -71,15 +71,14 @@ export default function BottomPanel({ terminals, onCloseTerminal, validationIssu
     prevTermCount.current = terminals.length;
   }, [terminals.length, setExpanded]);
 
-  // Auto-expand and switch to Errors tab when new errors arrive
+  // Switch to Errors tab when new errors arrive (but don't auto-expand)
   const prevErrorCount = useRef(errors.length);
   useEffect(() => {
     if (errors.length > prevErrorCount.current) {
       setActiveTab('errors');
-      setExpanded(true);
     }
     prevErrorCount.current = errors.length;
-  }, [errors.length, setExpanded]);
+  }, [errors.length]);
 
   // If active tab was closed, switch to validation
   useEffect(() => {
@@ -162,6 +161,7 @@ export default function BottomPanel({ terminals, onCloseTerminal, validationIssu
         <button
           className={`bp-tab ${activeTab === 'errors' ? 'active' : ''}`}
           onClick={() => setActiveTab('errors')}
+          data-help-id="bottom.errors"
         >
           Errors
           {apiErrorCount > 0 && <span className="bp-tab-badge error">{apiErrorCount}</span>}

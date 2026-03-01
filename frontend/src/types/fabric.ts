@@ -26,6 +26,7 @@ export interface SliceComponent {
 export interface SliceNode {
   name: string;
   site: string;
+  site_group?: string;
   host: string;
   cores: number;
   ram: number;
@@ -101,6 +102,17 @@ export interface ComponentModel {
   model: string;
   type: string;
   description: string;
+}
+
+export interface HostInfo {
+  name: string;
+  cores_available: number;
+  cores_capacity: number;
+  ram_available: number;
+  ram_capacity: number;
+  disk_available: number;
+  disk_capacity: number;
+  components: Record<string, { available: number; capacity: number }>;
 }
 
 export interface LinkInfo {

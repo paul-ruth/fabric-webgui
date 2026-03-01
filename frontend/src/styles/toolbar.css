@@ -104,11 +104,30 @@
 .toolbar-btn-delete {
   width: 68px;
 }
+.toolbar-btn-clone {
+  width: 62px;
+  border-color: var(--fabric-primary, #5798bc);
+  color: var(--fabric-primary, #5798bc);
+}
+.toolbar-btn-clone:hover:not(:disabled) {
+  background: var(--fabric-primary, #5798bc);
+  color: white;
+}
+
+.toolbar-btn-save-template {
+  border-color: var(--fabric-teal, #008e7a);
+  color: var(--fabric-teal, #008e7a);
+}
+.toolbar-btn-save-template:hover:not(:disabled) {
+  background: var(--fabric-teal, #008e7a);
+  color: white;
+}
+
 .toolbar-btn-template {
   width: 130px;
 }
 .toolbar-btn-resources {
-  width: 130px;
+  width: 170px;
   font-size: 12px;
   opacity: 0.7;
 }

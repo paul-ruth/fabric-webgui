@@ -84,6 +84,116 @@ DEFAULT_IMAGES = [
 ]
 
 
+def _fetch_host_details(site) -> list[dict[str, Any]]:
+    """Fetch per-host resource details for a site object."""
+    hosts_detail: list[dict[str, Any]] = []
+    try:
+        hosts = site.get_hosts()
+    except Exception:
+        return hosts_detail
+    for host in hosts:
+        host_info: dict[str, Any] = {
+            "name": str(getattr(host, "name", "")),
+            "cores_available": _safe_attr(host, "get_core_available", 0),
+            "cores_capacity": _safe_attr(host, "get_core_capacity", 0),
+            "ram_available": _safe_attr(host, "get_ram_available", 0),
+            "ram_capacity": _safe_attr(host, "get_ram_capacity", 0),
+            "disk_available": _safe_attr(host, "get_disk_available", 0),
+            "disk_capacity": _safe_attr(host, "get_disk_capacity", 0),
+        }
+        # Per-host component availability
+        host_components: dict[str, dict[str, int]] = {}
+        for model_name, display_name in COMPONENT_QUERY_MODELS:
+            try:
+                cap = host.get_component_capacity(model_name)
+                if cap and cap > 0:
+                    avail = host.get_component_available(model_name) or 0
+                    host_components[model_name] = {
+                        "capacity": cap,
+                        "available": avail,
+                    }
+            except Exception:
+                continue
+        host_info["components"] = host_components
+        hosts_detail.append(host_info)
+    return hosts_detail
+
+
+def _fetch_sites_sync() -> list[dict[str, Any]]:
+    """Fetch sites from FABlib (synchronous, must hold _fablib_lock)."""
+    fablib = get_fablib()
+    resources = fablib.get_resources()
+    sites = []
+    for site_name in list(resources.get_site_names()):
+        site = resources.get_site(site_name)
+        location = SITE_LOCATIONS.get(site_name, {"lat": 0, "lon": 0})
+
+        # Query component availability for the resolver
+        components: dict[str, dict[str, int]] = {}
+        for model_name, display_name in COMPONENT_QUERY_MODELS:
+            try:
+                capacity = site.get_component_capacity(model_name)
+                if capacity and capacity > 0:
+                    allocated = site.get_component_allocated(model_name) or 0
+                    available = site.get_component_available(model_name) or 0
+                    components[model_name] = {
+                        "capacity": capacity,
+                        "allocated": allocated,
+                        "available": available,
+                    }
+            except Exception:
+                continue
+
+        # Per-host resource detail for host-level feasibility checks
+        hosts_detail = _fetch_host_details(site)
+
+        sites.append({
+            "name": site_name,
+            "lat": location["lat"],
+            "lon": location["lon"],
+            "state": str(site.get_state()) if hasattr(site, "get_state") else "Active",
+            "hosts": _safe_count(site, "get_hosts"),
+            "cores_available": _safe_attr(site, "get_core_available", 0),
+            "cores_capacity": _safe_attr(site, "get_core_capacity", 0),
+            "ram_available": _safe_attr(site, "get_ram_available", 0),
+            "ram_capacity": _safe_attr(site, "get_ram_capacity", 0),
+            "disk_available": _safe_attr(site, "get_disk_available", 0),
+            "disk_capacity": _safe_attr(site, "get_disk_capacity", 0),
+            "components": components,
+            "hosts_detail": hosts_detail,
+        })
+    _cache["sites"] = (time.time(), sites)
+    return sites
+
+
+def get_cached_sites() -> list[dict[str, Any]]:
+    """Return cached sites data, fetching fresh if cache is stale or empty.
+
+    This is used by the site resolver so it doesn't duplicate FABlib calls.
+    Safe to call from a synchronous context (e.g. inside asyncio.to_thread).
+    """
+    cached = _cache.get("sites")
+    if cached and time.time() - cached[0] < CACHE_TTL:
+        return cached[1]
+    with _fablib_lock:
+        # Double-check after acquiring lock
+        cached = _cache.get("sites")
+        if cached and time.time() - cached[0] < CACHE_TTL:
+            return cached[1]
+        return _fetch_sites_sync()
+
+
+def get_fresh_sites() -> list[dict[str, Any]]:
+    """Force-refresh site data, bypassing cache.
+
+    Used before slice submission to ensure site assignments are based on
+    current resource availability including host-level data.
+    Safe to call from a synchronous context (e.g. inside asyncio.to_thread).
+    """
+    with _fablib_lock:
+        return _fetch_sites_sync()
+
+
 @router.get("/sites")
 async def list_sites() -> list[dict[str, Any]]:
     """List all FABRIC sites with location and availability."""
@@ -93,27 +203,7 @@ async def list_sites() -> list[dict[str, Any]]:
 
     def _do():
         with _fablib_lock:
-            fablib = get_fablib()
-            resources = fablib.get_resources()
-            sites = []
-            for site_name in list(resources.get_site_names()):
-                site = resources.get_site(site_name)
-                location = SITE_LOCATIONS.get(site_name, {"lat": 0, "lon": 0})
-                sites.append({
-                    "name": site_name,
-                    "lat": location["lat"],
-                    "lon": location["lon"],
-                    "state": str(site.get_state()) if hasattr(site, "get_state") else "Active",
-                    "hosts": _safe_count(site, "get_hosts"),
-                    "cores_available": _safe_attr(site, "get_core_available", 0),
-                    "cores_capacity": _safe_attr(site, "get_core_capacity", 0),
-                    "ram_available": _safe_attr(site, "get_ram_available", 0),
-                    "ram_capacity": _safe_attr(site, "get_ram_capacity", 0),
-                    "disk_available": _safe_attr(site, "get_disk_available", 0),
-                    "disk_capacity": _safe_attr(site, "get_disk_capacity", 0),
-                })
-            _cache["sites"] = (time.time(), sites)
-            return sites
+            return _fetch_sites_sync()
     try:
         return await asyncio.to_thread(_do)
     except Exception as e:
@@ -174,6 +264,31 @@ COMPONENT_QUERY_MODELS = [
     ("FPGA-Xilinx-U280", "FPGA Xilinx U280"),
     ("NVME-P4510", "NVMe P4510"),
 ]
+
+
+@router.get("/sites/{site_name}/hosts")
+async def list_site_hosts(site_name: str) -> list[dict[str, Any]]:
+    """Get per-host resource availability for a site."""
+    # Try cached data first
+    cached = _cache.get("sites")
+    if cached and time.time() - cached[0] < CACHE_TTL:
+        for site in cached[1]:
+            if site.get("name") == site_name:
+                return site.get("hosts_detail", [])
+
+    def _do():
+        with _fablib_lock:
+            fablib = get_fablib()
+            resources = fablib.get_resources()
+            try:
+                site = resources.get_site(site_name)
+            except Exception:
+                return []
+            return _fetch_host_details(site)
+    try:
+        return await asyncio.to_thread(_do)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/sites/{site_name}")

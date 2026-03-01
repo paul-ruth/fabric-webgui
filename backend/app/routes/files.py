@@ -135,7 +135,7 @@ async def list_files(path: str = ""):
         raise HTTPException(status_code=404, detail="Directory not found")
     entries = []
     for name in sorted(os.listdir(target)):
-        if name in (".provisions", ".boot-config", ".slice-keys", ".templates", ".vm-templates"):
+        if name in (".provisions", ".boot-config", ".slice-keys"):
             continue
         full = os.path.join(target, name)
         try:
@@ -659,8 +659,8 @@ def _load_boot_config_from_fablib(slice_name: str, node_name: str) -> dict:
     """Read boot config from FABlib node user_data."""
     empty = {"uploads": [], "commands": [], "network": []}
     try:
-        fablib = get_fablib()
-        slice_obj = fablib.get_slice(slice_name)
+        from app.routes.slices import _get_slice_obj
+        slice_obj = _get_slice_obj(slice_name)
         node = slice_obj.get_node(node_name)
         user_data = node.get_user_data()
         bc = user_data.get("boot_config")

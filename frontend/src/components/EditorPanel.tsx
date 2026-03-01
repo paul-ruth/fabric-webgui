@@ -42,6 +42,7 @@ export default function EditorPanel({ sliceData, sliceName, onSliceUpdated, onCo
   const [addMode, setAddMode] = useState<AddSliverType | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [showSiteMapping, setShowSiteMapping] = useState(false);
 
   // Per-slice key assignment
   const [keySets, setKeySets] = useState<SliceKeySet[]>([]);
@@ -112,6 +113,10 @@ export default function EditorPanel({ sliceData, sliceName, onSliceUpdated, onCo
   const selectedNetwork: SliceNetwork | undefined = sliverPrefix === 'net' ? sliceData?.networks.find((n) => n.name === sliverName) : undefined;
   const selectedFP: SliceFacilityPort | undefined = sliverPrefix === 'fp' ? (sliceData?.facility_ports ?? []).find((f) => f.name === sliverName) : undefined;
 
+  // Determine if slice has site groups (from template)
+  const hasSiteGroups = sliceData?.nodes.some(n => n.site_group) ?? false;
+  const isDraft = sliceData?.state === 'Draft';
+
   const apiCall = async (fn: () => Promise<SliceData>) => {
     setLoading(true);
     setError('');
@@ -140,14 +145,25 @@ export default function EditorPanel({ sliceData, sliceName, onSliceUpdated, onCo
       </div>
 
       <>
-      {/* Sliver selector + Add button */}
+      {/* Sliver selector + Add button + Site Mapping toggle */}
       <div className="editor-sliver-bar" data-help-id="editor.sliver-selector">
         <SliverComboBox
           sliceData={sliceData}
           selectedSliverKey={selectedSliverKey}
-          onSelect={handleSliverSelect}
+          onSelect={(key) => { handleSliverSelect(key); setShowSiteMapping(false); }}
         />
-        <AddSliverMenu onSelect={handleAddSelect} />
+        <AddSliverMenu onSelect={(type) => { handleAddSelect(type); setShowSiteMapping(false); }} />
+        {hasSiteGroups && isDraft && (
+          <Tooltip text="View and manage site group assignments from template. See which sites are assigned to each @group and reassign them.">
+            <button
+              className={`site-mapping-toggle${showSiteMapping ? ' active' : ''}`}
+              onClick={() => { setShowSiteMapping(!showSiteMapping); if (!showSiteMapping) { setAddMode(null); setSelectedSliverKey(''); } }}
+              data-help-id="editor.site-mapping"
+            >
+              {'\u2316'} Sites
+            </button>
+          </Tooltip>
+        )}
       </div>
 
       {/* Per-slice SSH key selector */}
@@ -166,8 +182,21 @@ export default function EditorPanel({ sliceData, sliceName, onSliceUpdated, onCo
       <div className="tab-content">
         {error && <div style={{ color: 'var(--fabric-coral)', fontSize: 12, marginBottom: 8 }}>{error}</div>}
 
+        {/* Site Mapping view */}
+        {showSiteMapping && sliceData && (
+          <SiteMappingView
+            sliceData={sliceData}
+            sliceName={sliceName}
+            sites={sites}
+            loading={loading}
+            onSliceUpdated={onSliceUpdated}
+            setLoading={setLoading}
+            setError={setError}
+          />
+        )}
+
         {/* Add mode forms */}
-        {addMode === 'node' && (
+        {!showSiteMapping && addMode === 'node' && (
           <NodeForm
             mode="add"
             sites={sites}
@@ -178,8 +207,16 @@ export default function EditorPanel({ sliceData, sliceName, onSliceUpdated, onCo
             sliceData={sliceData}
             vmTemplates={vmTemplates}
             onSubmit={async (data) => {
-              const result = await apiCall(() => api.addNode(sliceName, data));
+              let result = await apiCall(() => api.addNode(sliceName, data));
               if (result) {
+                // Add pending components
+                if (data._pendingComponents?.length) {
+                  for (const comp of data._pendingComponents) {
+                    try {
+                      result = await apiCall(() => api.addComponent(sliceName, data.name, comp)) || result;
+                    } catch { /* ignore */ }
+                  }
+                }
                 // Apply pending boot config from VM template
                 if (data._pendingBootConfig) {
                   try {
@@ -192,7 +229,7 @@ export default function EditorPanel({ sliceData, sliceName, onSliceUpdated, onCo
             }}
           />
         )}
-        {addMode === 'l2network' && (
+        {!showSiteMapping && addMode === 'l2network' && (
           <NetworkForm
             mode="add"
             defaultLayer="L2"
@@ -208,7 +245,7 @@ export default function EditorPanel({ sliceData, sliceName, onSliceUpdated, onCo
             }}
           />
         )}
-        {addMode === 'l3network' && (
+        {!showSiteMapping && addMode === 'l3network' && (
           <NetworkForm
             mode="add"
             defaultLayer="L3"
@@ -224,7 +261,7 @@ export default function EditorPanel({ sliceData, sliceName, onSliceUpdated, onCo
             }}
           />
         )}
-        {addMode === 'facility-port' && (
+        {!showSiteMapping && addMode === 'facility-port' && (
           <FacilityPortForm
             mode="add"
             sites={sites}
@@ -242,7 +279,7 @@ export default function EditorPanel({ sliceData, sliceName, onSliceUpdated, onCo
         )}
 
         {/* Edit mode: selected node */}
-        {!addMode && selectedNode && (
+        {!showSiteMapping && !addMode && selectedNode && (
           <NodeForm
             key={`edit-node-${selectedNode.name}`}
             mode="edit"
@@ -272,7 +309,7 @@ export default function EditorPanel({ sliceData, sliceName, onSliceUpdated, onCo
         )}
 
         {/* Edit mode: selected network (read-only) */}
-        {!addMode && selectedNetwork && (
+        {!showSiteMapping && !addMode && selectedNetwork && (
           <NetworkReadOnlyView
             network={selectedNetwork}
             loading={loading}
@@ -284,7 +321,7 @@ export default function EditorPanel({ sliceData, sliceName, onSliceUpdated, onCo
         )}
 
         {/* Edit mode: selected facility port (read-only) */}
-        {!addMode && selectedFP && (
+        {!showSiteMapping && !addMode && selectedFP && (
           <FacilityPortReadOnlyView
             fp={selectedFP}
             loading={loading}
@@ -296,13 +333,176 @@ export default function EditorPanel({ sliceData, sliceName, onSliceUpdated, onCo
         )}
 
         {/* Nothing selected, no add mode */}
-        {!addMode && !selectedNode && !selectedNetwork && !selectedFP && (
+        {!showSiteMapping && !addMode && !selectedNode && !selectedNetwork && !selectedFP && (
           <div className="editor-empty">
             Select a sliver to edit, or click <strong>+</strong> to add one.
           </div>
         )}
       </div>
       </>
+    </div>
+  );
+}
+
+
+// --- Site Mapping View ---
+function SiteMappingView({
+  sliceData, sliceName, sites, loading, onSliceUpdated, setLoading, setError,
+}: {
+  sliceData: SliceData;
+  sliceName: string;
+  sites: SiteInfo[];
+  loading: boolean;
+  onSliceUpdated: (data: SliceData) => void;
+  setLoading: (v: boolean) => void;
+  setError: (v: string) => void;
+}) {
+  const [resolving, setResolving] = useState(false);
+  const [localOverrides, setLocalOverrides] = useState<Record<string, string>>({});
+
+  // Build group data from nodes
+  const groupMap: Record<string, { nodes: SliceNode[]; totalCores: number; totalRam: number; totalDisk: number; currentSite: string }> = {};
+  for (const node of sliceData.nodes) {
+    const grp = node.site_group;
+    if (!grp) continue;
+    if (!groupMap[grp]) {
+      groupMap[grp] = { nodes: [], totalCores: 0, totalRam: 0, totalDisk: 0, currentSite: node.site };
+    }
+    groupMap[grp].nodes.push(node);
+    groupMap[grp].totalCores += node.cores;
+    groupMap[grp].totalRam += node.ram;
+    groupMap[grp].totalDisk += node.disk;
+    groupMap[grp].currentSite = node.site; // all nodes in group share same site
+  }
+
+  const groups = Object.entries(groupMap).sort((a, b) => a[0].localeCompare(b[0]));
+  const activeSites = sites.filter(s => s.state === 'Active');
+
+  const handleGroupSiteChange = async (group: string, newSite: string) => {
+    const newOverrides = { ...localOverrides, [group]: newSite };
+    setLocalOverrides(newOverrides);
+    // Apply immediately
+    setResolving(true);
+    setError('');
+    try {
+      const result = await api.resolveSites(sliceName, newOverrides);
+      onSliceUpdated(result);
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setResolving(false);
+    }
+  };
+
+  const handleAutoAssign = async () => {
+    setResolving(true);
+    setError('');
+    try {
+      // Pass only the manually overridden groups; everything else re-resolves
+      const result = await api.resolveSites(sliceName, localOverrides);
+      onSliceUpdated(result);
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setResolving(false);
+    }
+  };
+
+  const handleResetOverrides = async () => {
+    setLocalOverrides({});
+    setResolving(true);
+    setError('');
+    try {
+      const result = await api.resolveSites(sliceName, {});
+      onSliceUpdated(result);
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setResolving(false);
+    }
+  };
+
+  if (groups.length === 0) {
+    return <div className="editor-empty">No site groups in this slice.</div>;
+  }
+
+  return (
+    <div className="site-mapping-section">
+      <div className="site-mapping-header">
+        <span className="site-mapping-title">Site Mapping</span>
+        <div style={{ display: 'flex', gap: 4 }}>
+          {Object.keys(localOverrides).length > 0 && (
+            <Tooltip text="Clear all manual site overrides and re-resolve every group using live resource availability">
+              <button
+                className="site-mapping-auto-btn"
+                onClick={handleResetOverrides}
+                disabled={resolving}
+                style={{ background: 'transparent', color: 'var(--fabric-text-muted)', borderColor: 'var(--fabric-border)' }}
+              >
+                Reset
+              </button>
+            </Tooltip>
+          )}
+          <Tooltip text="Re-resolve site assignments using current resource availability. Pinned groups keep their assigned site.">
+            <button
+              className="site-mapping-auto-btn"
+              onClick={handleAutoAssign}
+              disabled={resolving}
+              data-help-id="editor.auto-assign"
+            >
+              {resolving ? 'Resolving...' : 'Auto-Assign'}
+            </button>
+          </Tooltip>
+        </div>
+      </div>
+
+      <div className="site-mapping-list">
+        {groups.map(([group, info]) => {
+          const currentSite = info.currentSite;
+          const siteInfo = sites.find(s => s.name === currentSite);
+          const insufficientResources = siteInfo && (
+            siteInfo.cores_available < info.totalCores ||
+            siteInfo.ram_available < info.totalRam ||
+            siteInfo.disk_available < info.totalDisk
+          );
+
+          return (
+            <div key={group} className={`site-mapping-row${insufficientResources ? ' warning' : ''}`}>
+              <div className="site-mapping-group-header">
+                <span className="site-mapping-group-tag">{group}</span>
+                <span className="site-mapping-node-count">{info.nodes.length} node{info.nodes.length !== 1 ? 's' : ''}</span>
+                {localOverrides[group] && (
+                  <span style={{ fontSize: 9, color: 'var(--fabric-orange)', fontWeight: 600 }}>PINNED</span>
+                )}
+              </div>
+              <div className="site-mapping-resources">
+                {info.totalCores} cores, {info.totalRam} GB RAM, {info.totalDisk} GB disk
+              </div>
+              <div className="site-mapping-select-row">
+                <select
+                  value={currentSite}
+                  onChange={(e) => handleGroupSiteChange(group, e.target.value)}
+                  disabled={resolving}
+                >
+                  {activeSites.map(s => (
+                    <option key={s.name} value={s.name}>
+                      {s.name} ({s.cores_available}c / {s.ram_available}G)
+                    </option>
+                  ))}
+                </select>
+              </div>
+              {insufficientResources && (
+                <div className="site-mapping-warning">
+                  {'\u26A0'} Site may lack sufficient resources for this group
+                </div>
+              )}
+              <div className="site-mapping-nodes-list">
+                {info.nodes.map(n => n.name).join(', ')}
+              </div>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -374,6 +574,9 @@ function NodeForm({
   const existingCompNames = node?.components.map((c) => c.name) ?? [];
   const [compName, setCompName] = useState(() => nextName(compPrefix('NIC_Basic'), existingCompNames));
 
+  // Components to add with node in add mode
+  const [pendingComponents, setPendingComponents] = useState<Array<{ name: string; model: string }>>([]);
+
   // Sync when node changes
   useEffect(() => {
     if (mode === 'edit' && node) {
@@ -408,10 +611,15 @@ function NodeForm({
         </div>
         <div className="form-group" data-help-id="editor.node.site">
           <label><Tooltip text="FABRIC site where the VM will be deployed">Site</Tooltip></label>
-          <select value={site} onChange={(e) => setSite(e.target.value)}>
-            <option value="auto">auto</option>
-            {sites.map((s) => <option key={s.name} value={s.name}>{s.name}</option>)}
-          </select>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <select value={site} onChange={(e) => setSite(e.target.value)} style={{ flex: 1 }}>
+              <option value="auto">auto</option>
+              {sites.map((s) => <option key={s.name} value={s.name}>{s.name}</option>)}
+            </select>
+            {node?.site_group && (
+              <span style={{ color: '#008e7a', fontSize: '0.85em', whiteSpace: 'nowrap' }} title="Co-location group from template">group: {node.site_group}</span>
+            )}
+          </div>
         </div>
         <div className="form-group" data-help-id="editor.node.cores">
           <label><Tooltip text="CPU cores (1-64)">Cores</Tooltip> <span className="range-value">{cores}</span></label>
@@ -440,11 +648,69 @@ function NodeForm({
           </div>
         )}
 
+        {/* Components section for add mode */}
+        <div className="editor-section-divider" style={{ margin: '12px 0 8px' }} />
+        <div className="editor-section-label">Components</div>
+
+        {pendingComponents.length > 0 && (
+          <div className="component-list" style={{ marginBottom: 8 }}>
+            {pendingComponents.map((comp, idx) => (
+              <div key={idx} className="component-row">
+                <span className="component-row-name">{comp.name}</span>
+                <span className="component-row-model">{comp.model}</span>
+                <button
+                  className="component-row-delete"
+                  onClick={() => {
+                    setPendingComponents(pendingComponents.filter((_, i) => i !== idx));
+                  }}
+                  title={`Remove ${comp.name}`}
+                >
+                  {'\u2715'}
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {componentModels.length > 0 && (
+          <div className="form-group" data-help-id="editor.comp.model">
+            <label><Tooltip text="Hardware type to attach">Add Component</Tooltip></label>
+            <select value={compModel} onChange={(e) => {
+              setCompModel(e.target.value);
+              const allNames = [...(node?.components.map((c) => c.name) ?? []), ...pendingComponents.map((c) => c.name)];
+              setCompName(nextName(compPrefix(e.target.value), allNames));
+            }} style={{ marginBottom: 4 }}>
+              {componentModels.map((c) => (
+                <option key={c.model} value={c.model}>{c.model} — {c.description}</option>
+              ))}
+            </select>
+            <div style={{ display: 'flex', gap: 4 }}>
+              <input
+                type="text"
+                value={compName}
+                onChange={(e) => setCompName(e.target.value)}
+                placeholder="nic1"
+                style={{ flex: 1 }}
+              />
+              <button
+                disabled={!compName}
+                onClick={() => {
+                  setPendingComponents([...pendingComponents, { name: compName, model: compModel }]);
+                  const allNames = [...(node?.components.map((c) => c.name) ?? []), ...pendingComponents.map((c) => c.name), compName];
+                  setCompName(nextName(compPrefix(compModel), allNames));
+                }}
+              >
+                Add
+              </button>
+            </div>
+          </div>
+        )}
+
         <div className="form-actions">
           <button
             className="primary"
             disabled={loading || !name || !sliceName}
-            onClick={() => onSubmit({ name, site, cores, ram, disk, image, _pendingBootConfig: pendingBootConfig })}
+            onClick={() => onSubmit({ name, site, cores, ram, disk, image, _pendingBootConfig: pendingBootConfig, _pendingComponents: pendingComponents })}
           >
             Add Node
           </button>
@@ -463,7 +729,7 @@ function NodeForm({
         <button className={nodeTab === 'components' ? 'active' : ''} onClick={() => setNodeTab('components')}>
           Components{node && node.components.length > 0 ? ` (${node.components.length})` : ''}
         </button>
-        <button className={nodeTab === 'boot' ? 'active' : ''} onClick={() => setNodeTab('boot')}>Boot Config</button>
+        <button className={nodeTab === 'boot' ? 'active' : ''} onClick={() => setNodeTab('boot')} data-help-id="editor.boot-config">Boot Config</button>
         {isNodeActive && (
           <>
             <button className={nodeTab === 'files' ? 'active' : ''} onClick={() => setNodeTab('files')}>Files</button>
@@ -518,10 +784,15 @@ function NodeForm({
             <>
               <div className="form-group" data-help-id="editor.node.site">
                 <label><Tooltip text="FABRIC site where the VM will be deployed">Site</Tooltip></label>
-                <select value={site} onChange={(e) => setSite(e.target.value)}>
-                  <option value="auto">auto</option>
-                  {sites.map((s) => <option key={s.name} value={s.name}>{s.name}</option>)}
-                </select>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <select value={site} onChange={(e) => setSite(e.target.value)} style={{ flex: 1 }}>
+                    <option value="auto">auto</option>
+                    {sites.map((s) => <option key={s.name} value={s.name}>{s.name}</option>)}
+                  </select>
+                  {node?.site_group && (
+                    <span style={{ color: '#008e7a', fontSize: '0.85em', whiteSpace: 'nowrap' }} title="Co-location group from template">group: {node.site_group}</span>
+                  )}
+                </div>
               </div>
               <div className="form-group" data-help-id="editor.node.cores">
                 <label><Tooltip text="CPU cores (1-64)">Cores</Tooltip> <span className="range-value">{cores}</span></label>
@@ -559,13 +830,15 @@ function NodeForm({
                   Update Node
                 </button>
                 {onSaveVmTemplate && node && (
-                  <button
-                    disabled={loading}
-                    onClick={() => onSaveVmTemplate(node.name)}
-                    title="Save this node's image and boot config as a VM template"
-                  >
-                    Save VM Template
-                  </button>
+                  <Tooltip text="Save this node's image and boot config as a reusable VM template">
+                    <button
+                      disabled={loading}
+                      onClick={() => onSaveVmTemplate(node.name)}
+                      data-help-id="editor.node.vm-template"
+                    >
+                      Save VM Template
+                    </button>
+                  </Tooltip>
                 )}
               </div>
 

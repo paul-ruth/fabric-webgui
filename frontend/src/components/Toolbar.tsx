@@ -210,22 +210,9 @@ export default function Toolbar(props: ToolbarProps) {
           </button>
         </Tooltip>
 
-        {props.sliceState && (
-          <span className={`status-badge ${props.sliceState}`}>
-            {props.sliceState}{props.dirty ? ' *' : ''}
-          </span>
-        )}
-
-        {props.statusMessage && (
-          <span className="toolbar-status">
-            <span className="toolbar-spinner" />
-            <span className="toolbar-status-text">{props.statusMessage}</span>
-          </span>
-        )}
-
         <Tooltip text={!canSubmit ? 'No pending changes' : props.sliceValid ? 'Submit slice to FABRIC for provisioning' : 'Slice has validation errors'}>
           <button
-            className={`toolbar-btn toolbar-btn-submit ${canSubmit ? (props.sliceValid ? 'success' : 'warning') : ''}`}
+            className={`toolbar-btn toolbar-btn-submit ${canSubmit ? (props.sliceValid ? 'success' : 'warning') : 'primary'}`}
             onClick={props.onSubmit}
             disabled={!hasSlice || !canSubmit || props.loading}
             data-help-id="toolbar.submit"
@@ -247,7 +234,7 @@ export default function Toolbar(props: ToolbarProps) {
 
         <Tooltip text="Clone this slice as a new draft">
           <button
-            className="toolbar-btn toolbar-btn-new"
+            className="toolbar-btn toolbar-btn-clone"
             onClick={() => { setCloneName(`${props.selectedSlice}-copy`); setCloning(true); }}
             disabled={!hasSlice || props.loading}
             data-help-id="toolbar.clone"
@@ -258,14 +245,27 @@ export default function Toolbar(props: ToolbarProps) {
 
         <Tooltip text="Save current slice as a reusable template">
           <button
-            className="toolbar-btn"
+            className="toolbar-btn toolbar-btn-save-template"
             onClick={() => props.onSaveSliceTemplate?.()}
             disabled={!hasSlice || !props.sliceState || props.loading}
           >
-            Save Template
+            Save as Template
           </button>
         </Tooltip>
       </div>
+
+      {props.sliceState && (
+        <span className={`status-badge ${props.sliceState}`}>
+          {props.sliceState}{props.dirty ? ' *' : ''}
+        </span>
+      )}
+
+      {props.statusMessage && (
+        <span className="toolbar-status">
+          <span className="toolbar-spinner" />
+          <span className="toolbar-status-text">{props.statusMessage}</span>
+        </span>
+      )}
 
       <div className="toolbar-spacer" />
 

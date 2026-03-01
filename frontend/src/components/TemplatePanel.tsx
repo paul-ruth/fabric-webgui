@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import type { SliceData } from '../types/fabric';
 import type { TemplateSummary } from '../api/client';
 import * as api from '../api/client';
+import Tooltip from './Tooltip';
 import '../styles/template-panel.css';
 
 interface DragHandleProps {
@@ -28,6 +29,9 @@ export default function TemplatePanel({ onSliceImported, onCollapse, dragHandleP
 
   // Delete confirmation
   const [deletingTemplate, setDeletingTemplate] = useState<string | null>(null);
+
+  // Search filter
+  const [searchFilter, setSearchFilter] = useState('');
 
   const refreshTemplates = useCallback(async () => {
     setLoading(true);
@@ -80,12 +84,14 @@ export default function TemplatePanel({ onSliceImported, onCollapse, dragHandleP
   };
 
   return (
-    <div className="template-panel">
+    <div className="template-panel" data-help-id="templates.panel">
       <div className="template-header" {...(dragHandleProps || {})}>
-        <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-          <span className="panel-drag-handle">{'\u283F'}</span>
-          Slice Templates
-        </span>
+        <Tooltip text="Pre-built slice topologies. Load a template to create a new draft slice with pre-configured nodes, networks, and site groups.">
+          <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+            <span className="panel-drag-handle">{'\u283F'}</span>
+            Slice Templates
+          </span>
+        </Tooltip>
         <button className="collapse-btn" onClick={(e) => { e.stopPropagation(); onCollapse(); }} title="Collapse">
           {panelIcon || '\u29C9'}
         </button>
@@ -93,6 +99,19 @@ export default function TemplatePanel({ onSliceImported, onCollapse, dragHandleP
 
       <div className="template-body">
           {error && <div className="template-error">{error}</div>}
+
+          {/* Search filter */}
+          {templates.length > 0 && (
+            <div className="template-search-wrapper">
+              <input
+                type="text"
+                className="template-search-input"
+                placeholder="Filter slice templates..."
+                value={searchFilter}
+                onChange={(e) => setSearchFilter(e.target.value)}
+              />
+            </div>
+          )}
 
           {/* Template List */}
           <div className="template-list">
@@ -104,10 +123,17 @@ export default function TemplatePanel({ onSliceImported, onCollapse, dragHandleP
                 No templates saved yet. Use the "Save Template" button in the toolbar to create one.
               </div>
             )}
-            {templates.map((t) => (
+            {templates
+              .filter((t) => {
+                if (!searchFilter) return true;
+                const q = searchFilter.toLowerCase();
+                return t.name.toLowerCase().includes(q) || (t.description || '').toLowerCase().includes(q);
+              })
+              .map((t) => (
               <div className="template-card" key={t.dir_name}>
                 <div className="template-card-header">
                   <span className="template-card-name">{t.name}</span>
+                  {t.builtin && <span className="template-builtin-badge">built-in</span>}
                 </div>
                 {t.description && (
                   <div className="template-card-desc">{t.description}</div>
@@ -118,21 +144,27 @@ export default function TemplatePanel({ onSliceImported, onCollapse, dragHandleP
                   <span>{formatDate(t.created)}</span>
                 </div>
                 <div className="template-card-actions">
-                  <button
-                    className="template-btn-load"
-                    onClick={() => {
-                      setLoadSliceName(t.name);
-                      setLoadingTemplate(t.name);
-                    }}
-                  >
-                    Load
-                  </button>
-                  <button
-                    className="template-btn-delete"
-                    onClick={() => setDeletingTemplate(t.name)}
-                  >
-                    Delete
-                  </button>
+                  <Tooltip text="Create a new draft slice from this template with pre-configured nodes and networks">
+                    <button
+                      className="template-btn-load"
+                      onClick={() => {
+                        setLoadSliceName(t.name);
+                        setLoadingTemplate(t.name);
+                      }}
+                      data-help-id="templates.load"
+                    >
+                      Load
+                    </button>
+                  </Tooltip>
+                  <Tooltip text="Permanently remove this template">
+                    <button
+                      className="template-btn-delete"
+                      onClick={() => setDeletingTemplate(t.name)}
+                      data-help-id="templates.delete"
+                    >
+                      Delete
+                    </button>
+                  </Tooltip>
                 </div>
               </div>
             ))}
