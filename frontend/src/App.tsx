@@ -14,6 +14,8 @@ import ConfigureView from './components/ConfigureView';
 import FileTransferView from './components/FileTransferView';
 import HelpView from './components/HelpView';
 import HelpContextMenu from './components/HelpContextMenu';
+import GuidedTour from './components/GuidedTour';
+import { tours } from './data/tourSteps';
 import * as api from './api/client';
 import type { SliceSummary, SliceData, SiteInfo, LinkInfo, ComponentModel, SiteMetrics, LinkMetrics, ValidationIssue, ProjectInfo, VMTemplateSummary, BootConfig } from './types/fabric';
 
@@ -175,6 +177,11 @@ export default function App() {
   const [componentModels, setComponentModels] = useState<ComponentModel[]>([]);
   const [vmTemplates, setVmTemplates] = useState<VMTemplateSummary[]>([]);
 
+  // --- Guided tour (multi-tour) ---
+  const [activeTourId, setActiveTourId] = useState<string | null>(null);
+  const [tourStep, setTourStep] = useState(0);
+  const [tourDismissed] = useState(() => localStorage.getItem('fabric-tour-dismissed') === 'true');
+
   // --- Global cache: metrics ---
   const [siteMetricsCache, setSiteMetricsCache] = useState<Record<string, SiteMetrics>>({});
   const [linkMetricsCache, setLinkMetricsCache] = useState<Record<string, LinkMetrics>>({});
@@ -226,6 +233,39 @@ export default function App() {
       setSettingsOpen(true);
       window.history.replaceState({}, '', '/');
     }
+  }, []);
+
+  // Auto-start guided tour on first visit
+  useEffect(() => {
+    if (isConfigured !== null && !tourDismissed) {
+      setActiveTourId('getting-started');
+    }
+  }, [isConfigured, tourDismissed]);
+
+  const activeTourSteps = activeTourId ? (tours[activeTourId]?.steps ?? []) : [];
+
+  const dismissTour = useCallback(() => {
+    // Only set localStorage dismiss for getting-started tour
+    if (activeTourId === 'getting-started') {
+      localStorage.setItem('fabric-tour-dismissed', 'true');
+    }
+    setActiveTourId(null);
+    setTourStep(0);
+  }, [activeTourId]);
+
+  const closeTour = useCallback(() => {
+    setActiveTourId(null);
+    setTourStep(0);
+  }, []);
+
+  const startTour = useCallback((tourId: string) => {
+    if (tourId === 'getting-started') {
+      localStorage.removeItem('fabric-tour-dismissed');
+    }
+    setTourStep(0);
+    setActiveTourId(tourId);
+    setHelpOpen(false);
+    setSettingsOpen(false);
   }, []);
 
   // --- Refresh infrastructure (sites + links) + metrics ---
@@ -775,6 +815,7 @@ export default function App() {
           <HelpView
             scrollToSection={helpSection}
             onClose={() => { setHelpOpen(false); setHelpSection(undefined); }}
+            onStartTour={(tourId: string) => startTour(tourId)}
           />
         </div>
       )}
@@ -1143,6 +1184,21 @@ export default function App() {
           </div>
         </div>
       )}
+
+      {/* Guided Tour */}
+      <GuidedTour
+        active={activeTourId !== null}
+        steps={activeTourSteps}
+        step={tourStep}
+        onStepChange={setTourStep}
+        onDismiss={dismissTour}
+        onClose={closeTour}
+        onOpenSettings={() => setSettingsOpen(true)}
+        onCloseSettings={() => setSettingsOpen(false)}
+        settingsOpen={settingsOpen}
+        onSwitchView={setCurrentView}
+        currentView={currentView}
+      />
     </>
   );
 }
