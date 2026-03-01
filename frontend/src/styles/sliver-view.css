@@ -1,4 +1,4 @@
-/* Sliver View — spreadsheet table of all slivers */
+/* Sliver View — two-panel layout: VMs on top, Networks below */
 
 .sliver-view {
   display: flex;
@@ -45,6 +45,82 @@
   font-size: 11px;
   color: #656d76;
   white-space: nowrap;
+}
+
+/* Two stacked panels */
+.sliver-panels {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.sliver-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* Vertical resize handle between panels */
+.sliver-resize-handle {
+  height: 6px;
+  flex-shrink: 0;
+  cursor: row-resize;
+  background: #d0d7de;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  z-index: 3;
+}
+.sliver-resize-handle:hover,
+.sliver-resize-handle:active {
+  background: #5798bc;
+  opacity: 0.6;
+}
+.sliver-resize-grip {
+  width: 32px;
+  height: 2px;
+  border-radius: 1px;
+  background: rgba(0, 0, 0, 0.25);
+}
+
+.sliver-panel-header {
+  display: flex;
+  align-items: center;
+  padding: 5px 10px;
+  background: #f6f8fa;
+  border-bottom: 1px solid #d0d7de;
+  flex-shrink: 0;
+}
+
+.sliver-panel-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #57606a;
+}
+
+.sliver-panel-count {
+  font-size: 10px;
+  font-weight: 400;
+  color: #8b949e;
+  margin-left: 2px;
+}
+
+.sliver-panel-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+  color: #8b949e;
+  font-size: 12px;
+  font-style: italic;
+  padding: 12px;
 }
 
 /* Scrollable table wrapper */
@@ -220,6 +296,34 @@
 
 [data-theme="dark"] .sliver-filter-count {
   color: #8888aa;
+}
+
+[data-theme="dark"] .sliver-resize-handle {
+  background: #3a3a5a;
+}
+[data-theme="dark"] .sliver-resize-handle:hover,
+[data-theme="dark"] .sliver-resize-handle:active {
+  background: #5798bc;
+}
+[data-theme="dark"] .sliver-resize-grip {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+[data-theme="dark"] .sliver-panel-header {
+  background: #1a1a2e;
+  border-bottom-color: #3a3a5a;
+}
+
+[data-theme="dark"] .sliver-panel-title {
+  color: #8888aa;
+}
+
+[data-theme="dark"] .sliver-panel-count {
+  color: #6a6a8a;
+}
+
+[data-theme="dark"] .sliver-panel-empty {
+  color: #6a6a8a;
 }
 
 [data-theme="dark"] .sliver-table th {
