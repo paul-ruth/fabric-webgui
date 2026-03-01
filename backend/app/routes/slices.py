@@ -181,6 +181,7 @@ class SliceModelImport(BaseModel):
 
 class UpdateNodeRequest(BaseModel):
     site: Optional[str] = None
+    host: Optional[str] = None
     cores: Optional[int] = None
     ram: Optional[int] = None
     disk: Optional[int] = None
@@ -570,6 +571,8 @@ def update_node(slice_name: str, node_name: str, req: UpdateNodeRequest) -> dict
         node = slice_obj.get_node(name=node_name)
         if req.site is not None:
             node.set_site(req.site)
+        if req.host is not None:
+            node.set_host(req.host if req.host else None)
         # Call set_capacities once with all provided values to avoid overwrites
         cap_kwargs: dict[str, Any] = {}
         if req.cores is not None:

@@ -72,7 +72,7 @@ export function removeNode(sliceName: string, nodeName: string): Promise<SliceDa
 export function updateNode(
   sliceName: string,
   nodeName: string,
-  updates: { site?: string; cores?: number; ram?: number; disk?: number; image?: string }
+  updates: { site?: string; host?: string; cores?: number; ram?: number; disk?: number; image?: string }
 ): Promise<SliceData> {
   return fetchJson(
     `/slices/${encodeURIComponent(sliceName)}/nodes/${encodeURIComponent(nodeName)}`,

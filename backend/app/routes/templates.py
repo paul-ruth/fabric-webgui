@@ -136,7 +136,7 @@ SEED_SLICE_TEMPLATES: list[dict[str, Any]] = [
     },
     {
         "name": "iPerf3 Bandwidth Test",
-        "description": "Two Docker nodes at different sites connected by FABNetv4. Server runs iperf3 -s, client has iperf3 pulled.",
+        "description": "Two Docker nodes at different sites, each with its own FABNetv4 network for routed L3 connectivity. Server runs iperf3 -s, client has iperf3 pulled.",
         "model": {
             "format": "fabric-slice-v1",
             "name": "iPerf3 Bandwidth Test",
@@ -173,9 +173,14 @@ SEED_SLICE_TEMPLATES: list[dict[str, Any]] = [
             ],
             "networks": [
                 {
-                    "name": "net",
+                    "name": "net-server",
                     "type": "FABNetv4",
-                    "interfaces": ["iperf-server-FABNET-p1", "iperf-client-FABNET-p1"],
+                    "interfaces": ["iperf-server-FABNET-p1"],
+                },
+                {
+                    "name": "net-client",
+                    "type": "FABNetv4",
+                    "interfaces": ["iperf-client-FABNET-p1"],
                 }
             ],
         },

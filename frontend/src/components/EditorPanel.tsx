@@ -1,5 +1,5 @@
-import { useState, useEffect, useCallback } from 'react';
-import type { SliceData, SiteInfo, ComponentModel, SliceNode, SliceNetwork, SliceFacilityPort, BootConfig, BootUpload, BootCommand, BootExecResult, FileEntry, SliceKeySet, VMTemplateSummary } from '../types/fabric';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import type { SliceData, SiteInfo, ComponentModel, SliceNode, SliceNetwork, SliceFacilityPort, BootConfig, BootUpload, BootCommand, BootExecResult, FileEntry, SliceKeySet, VMTemplateSummary, HostInfo } from '../types/fabric';
 import * as api from '../api/client';
 import Tooltip from './Tooltip';
 import SliverComboBox from './editor/SliverComboBox';
@@ -181,20 +181,21 @@ export default function EditorPanel({ sliceData, sliceName, onSliceUpdated, onCo
         )}
       </div>
 
-      {/* Re-map Sites button — available for any draft with nodes */}
+      {/* Auto-assign section — available for any draft with nodes */}
       {isDraft && sliceData && sliceData.nodes.length > 0 && (
-        <div style={{ padding: '4px 10px' }}>
-          <Tooltip text="Re-assign all nodes to sites with sufficient available resources (cores, RAM, disk, components). Uses live FABRIC resource data.">
-            <button
-              className="site-mapping-auto-btn"
-              style={{ width: '100%', fontSize: 11, padding: '5px 0' }}
-              onClick={handleRemapSites}
-              disabled={remapping || loading}
-              data-help-id="editor.remap-sites"
-            >
-              {remapping ? 'Resolving...' : '\u21BB Re-map Sites'}
-            </button>
-          </Tooltip>
+        <div className="auto-assign-section">
+          <div className="auto-assign-description">
+            Automatically place each node on a FABRIC site and host with enough resources for your VMs.
+          </div>
+          <button
+            className="site-mapping-auto-btn"
+            style={{ width: '100%', fontSize: 11, padding: '5px 0' }}
+            onClick={handleRemapSites}
+            disabled={remapping || loading}
+            data-help-id="editor.remap-sites"
+          >
+            {remapping ? 'Resolving...' : '\u21BB Auto-Assign Sites & Hosts'}
+          </button>
         </div>
       )}
 
@@ -540,6 +541,148 @@ function SiteMappingView({
 }
 
 
+// --- Feasibility helpers ---
+
+/** Sum cores/ram/disk of other nodes at the same site (excluding `excludeNodeName`). */
+function siblingUsageAtSite(sliceData: SliceData | null | undefined, siteName: string, excludeNodeName?: string): { cores: number; ram: number; disk: number } {
+  if (!sliceData) return { cores: 0, ram: 0, disk: 0 };
+  let cores = 0, ram = 0, disk = 0;
+  for (const n of sliceData.nodes) {
+    if (n.name === excludeNodeName) continue;
+    if (n.site === siteName) {
+      cores += n.cores; ram += n.ram; disk += n.disk;
+    }
+  }
+  return { cores, ram, disk };
+}
+
+/** Sum cores/ram/disk of other nodes at the same host (excluding `excludeNodeName`). */
+function siblingUsageAtHost(sliceData: SliceData | null | undefined, hostName: string, excludeNodeName?: string): { cores: number; ram: number; disk: number } {
+  if (!sliceData) return { cores: 0, ram: 0, disk: 0 };
+  let cores = 0, ram = 0, disk = 0;
+  for (const n of sliceData.nodes) {
+    if (n.name === excludeNodeName) continue;
+    if (n.host === hostName) {
+      cores += n.cores; ram += n.ram; disk += n.disk;
+    }
+  }
+  return { cores, ram, disk };
+}
+
+/** Check if a site can fit the given resource needs after subtracting sibling usage. */
+function siteCanFit(site: SiteInfo, cores: number, ram: number, disk: number, sibling: { cores: number; ram: number; disk: number }): boolean {
+  return (site.cores_available - sibling.cores) >= cores &&
+         (site.ram_available - sibling.ram) >= ram &&
+         (site.disk_available - sibling.disk) >= disk;
+}
+
+/** Check if a host can fit the given resource needs after subtracting sibling usage. */
+function hostCanFit(host: HostInfo, cores: number, ram: number, disk: number, sibling: { cores: number; ram: number; disk: number }): boolean {
+  return (host.cores_available - sibling.cores) >= cores &&
+         (host.ram_available - sibling.ram) >= ram &&
+         (host.disk_available - sibling.disk) >= disk;
+}
+
+// --- Host ComboBox ---
+
+function HostComboBox({ hosts, hostsLoading, value, onChange, disabled, cores, ram, disk, sliceData, excludeNodeName }: {
+  hosts: HostInfo[];
+  hostsLoading: boolean;
+  value: string;
+  onChange: (host: string) => void;
+  disabled?: boolean;
+  cores: number;
+  ram: number;
+  disk: number;
+  sliceData?: SliceData | null;
+  excludeNodeName?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [filter, setFilter] = useState('');
+  const ref = useRef<HTMLDivElement>(null);
+
+  // Close on outside click
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [open]);
+
+  const filtered = hosts.filter(h => !filter || h.name.toLowerCase().includes(filter.toLowerCase()));
+  const selectedHost = hosts.find(h => h.name === value);
+
+  return (
+    <div className="host-combo" ref={ref}>
+      <div
+        className={`host-combo-input${disabled ? ' disabled' : ''}`}
+        onClick={() => { if (!disabled) { setOpen(!open); setFilter(''); } }}
+      >
+        {open && !disabled ? (
+          <input
+            className="host-combo-filter"
+            autoFocus
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+            onClick={(e) => e.stopPropagation()}
+            placeholder="Filter hosts..."
+          />
+        ) : value ? (
+          <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {value}
+            {selectedHost && (() => {
+              const sib = siblingUsageAtHost(sliceData, value, excludeNodeName);
+              const fits = hostCanFit(selectedHost, cores, ram, disk, sib);
+              return <span className={fits ? 'feasibility-ok' : 'feasibility-warn'}> {fits ? '\u2713' : '\u26A0'}</span>;
+            })()}
+          </span>
+        ) : (
+          <span className="host-combo-placeholder">
+            {disabled ? 'Select a site first' : hostsLoading ? 'Loading...' : 'Any host (auto)'}
+          </span>
+        )}
+        <span className="host-combo-arrow">{'\u25BC'}</span>
+      </div>
+      {open && !disabled && (
+        <div className="host-combo-dropdown">
+          {/* Auto option */}
+          <div
+            className={`host-combo-option${!value ? ' selected' : ''}`}
+            onClick={() => { onChange(''); setOpen(false); }}
+          >
+            <span className="host-combo-opt-name" style={{ fontStyle: 'italic' }}>Any host (auto)</span>
+          </div>
+          {hostsLoading ? (
+            <div className="host-combo-empty">Loading hosts...</div>
+          ) : filtered.length === 0 ? (
+            <div className="host-combo-empty">No hosts found</div>
+          ) : filtered.map(h => {
+            const sib = siblingUsageAtHost(sliceData, h.name, excludeNodeName);
+            const adjCores = h.cores_available - sib.cores;
+            const adjRam = h.ram_available - sib.ram;
+            const adjDisk = h.disk_available - sib.disk;
+            const fits = adjCores >= cores && adjRam >= ram && adjDisk >= disk;
+            return (
+              <div
+                key={h.name}
+                className={`host-combo-option${h.name === value ? ' selected' : ''}`}
+                onClick={() => { onChange(h.name); setOpen(false); }}
+              >
+                <span className={fits ? 'feasibility-ok' : 'feasibility-warn'}>{fits ? '\u2713' : '\u26A0'}</span>
+                <span className="host-combo-opt-name">{h.name}</span>
+                <span className="host-combo-opt-resources">{adjCores}c / {adjRam}G / {adjDisk}G</span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+
 // --- Node Form (add + edit) ---
 function NodeForm({
   mode, node, sites, images, componentModels, sliceName, loading,
@@ -566,10 +709,30 @@ function NodeForm({
     : (node?.name ?? '');
   const [name, setName] = useState(defaultName);
   const [site, setSite] = useState(node?.site ?? 'auto');
+  const [host, setHost] = useState(node?.host ?? '');
+  const [hosts, setHosts] = useState<HostInfo[]>([]);
+  const [hostsLoading, setHostsLoading] = useState(false);
   const [cores, setCores] = useState(node?.cores ?? 2);
   const [ram, setRam] = useState(node?.ram ?? 8);
   const [disk, setDisk] = useState(node?.disk ?? 10);
   const [image, setImage] = useState(node?.image ?? 'default_ubuntu_22');
+
+  // Fetch hosts when site changes
+  useEffect(() => {
+    if (!site || site === 'auto') {
+      setHosts([]);
+      setHost('');
+      return;
+    }
+    let cancelled = false;
+    setHostsLoading(true);
+    api.listSiteHosts(site).then(h => {
+      if (!cancelled) { setHosts(h); setHostsLoading(false); }
+    }).catch(() => {
+      if (!cancelled) { setHosts([]); setHostsLoading(false); }
+    });
+    return () => { cancelled = true; };
+  }, [site]);
   const [pendingBootConfig, setPendingBootConfig] = useState<BootConfig | null>(null);
   const [appliedTemplateName, setAppliedTemplateName] = useState('');
 
@@ -614,6 +777,7 @@ function NodeForm({
     if (mode === 'edit' && node) {
       setName(node.name);
       setSite(node.site || 'auto');
+      setHost(node.host || '');
       setCores(node.cores);
       setRam(node.ram);
       setDisk(node.disk);
@@ -644,14 +808,35 @@ function NodeForm({
         <div className="form-group" data-help-id="editor.node.site">
           <label><Tooltip text="FABRIC site where the VM will be deployed">Site</Tooltip></label>
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <select value={site} onChange={(e) => setSite(e.target.value)} style={{ flex: 1 }}>
+            <select value={site} onChange={(e) => { setSite(e.target.value); setHost(''); }} style={{ flex: 1 }}>
               <option value="auto">auto</option>
-              {sites.map((s) => <option key={s.name} value={s.name}>{s.name}</option>)}
+              {sites.filter(s => s.state === 'Active').map((s) => {
+                const sib = siblingUsageAtSite(sliceData, s.name, node?.name);
+                const fits = siteCanFit(s, cores, ram, disk, sib);
+                const adjCores = s.cores_available - sib.cores;
+                const adjRam = s.ram_available - sib.ram;
+                return <option key={s.name} value={s.name}>{fits ? '\u2713' : '\u26A0'} {s.name} ({adjCores}c / {adjRam}G)</option>;
+              })}
             </select>
             {node?.site_group && (
               <span style={{ color: '#008e7a', fontSize: '0.85em', whiteSpace: 'nowrap' }} title="Co-location group from template">group: {node.site_group}</span>
             )}
           </div>
+        </div>
+        <div className="form-group" data-help-id="editor.node.host">
+          <label><Tooltip text="Pin VM to a specific physical host, or leave as auto">Host</Tooltip></label>
+          <HostComboBox
+            hosts={hosts}
+            hostsLoading={hostsLoading}
+            value={host}
+            onChange={setHost}
+            disabled={!site || site === 'auto'}
+            cores={cores}
+            ram={ram}
+            disk={disk}
+            sliceData={sliceData}
+            excludeNodeName={node?.name}
+          />
         </div>
         <div className="form-group" data-help-id="editor.node.cores">
           <label><Tooltip text="CPU cores (1-64)">Cores</Tooltip> <span className="range-value">{cores}</span></label>
@@ -742,7 +927,7 @@ function NodeForm({
           <button
             className="primary"
             disabled={loading || !name || !sliceName}
-            onClick={() => onSubmit({ name, site, cores, ram, disk, image, _pendingBootConfig: pendingBootConfig, _pendingComponents: pendingComponents })}
+            onClick={() => onSubmit({ name, site, host: host || undefined, cores, ram, disk, image, _pendingBootConfig: pendingBootConfig, _pendingComponents: pendingComponents })}
           >
             Add Node
           </button>
@@ -783,6 +968,12 @@ function NodeForm({
                 <span className="readonly-label">Site</span>
                 <span className="readonly-value">{node?.site || 'auto'}</span>
               </div>
+              {node?.host && (
+                <div className="readonly-field">
+                  <span className="readonly-label">Host</span>
+                  <span className="readonly-value">{node.host}</span>
+                </div>
+              )}
               <div className="readonly-field">
                 <span className="readonly-label">Cores</span>
                 <span className="readonly-value">{node?.cores}</span>
@@ -817,14 +1008,35 @@ function NodeForm({
               <div className="form-group" data-help-id="editor.node.site">
                 <label><Tooltip text="FABRIC site where the VM will be deployed">Site</Tooltip></label>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <select value={site} onChange={(e) => setSite(e.target.value)} style={{ flex: 1 }}>
+                  <select value={site} onChange={(e) => { setSite(e.target.value); setHost(''); }} style={{ flex: 1 }}>
                     <option value="auto">auto</option>
-                    {sites.map((s) => <option key={s.name} value={s.name}>{s.name}</option>)}
+                    {sites.filter(s => s.state === 'Active').map((s) => {
+                      const sib = siblingUsageAtSite(sliceData, s.name, node?.name);
+                      const fits = siteCanFit(s, cores, ram, disk, sib);
+                      const adjCores = s.cores_available - sib.cores;
+                      const adjRam = s.ram_available - sib.ram;
+                      return <option key={s.name} value={s.name}>{fits ? '\u2713' : '\u26A0'} {s.name} ({adjCores}c / {adjRam}G)</option>;
+                    })}
                   </select>
                   {node?.site_group && (
                     <span style={{ color: '#008e7a', fontSize: '0.85em', whiteSpace: 'nowrap' }} title="Co-location group from template">group: {node.site_group}</span>
                   )}
                 </div>
+              </div>
+              <div className="form-group" data-help-id="editor.node.host">
+                <label><Tooltip text="Pin VM to a specific physical host, or leave as auto">Host</Tooltip></label>
+                <HostComboBox
+                  hosts={hosts}
+                  hostsLoading={hostsLoading}
+                  value={host}
+                  onChange={setHost}
+                  disabled={!site || site === 'auto'}
+                  cores={cores}
+                  ram={ram}
+                  disk={disk}
+                  sliceData={sliceData}
+                  excludeNodeName={node?.name}
+                />
               </div>
               <div className="form-group" data-help-id="editor.node.cores">
                 <label><Tooltip text="CPU cores (1-64)">Cores</Tooltip> <span className="range-value">{cores}</span></label>
@@ -857,7 +1069,7 @@ function NodeForm({
                 <button
                   className="primary"
                   disabled={loading || !sliceName}
-                  onClick={() => onSubmit({ site, cores, ram, disk, image })}
+                  onClick={() => onSubmit({ site, host: host || '', cores, ram, disk, image })}
                 >
                   Update Node
                 </button>
