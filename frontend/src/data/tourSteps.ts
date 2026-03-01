@@ -1,4 +1,4 @@
-export type TourRequiredView = 'main' | 'settings' | 'map' | 'files';
+export type TourRequiredView = 'main' | 'settings' | 'map' | 'files' | 'slivers';
 
 export interface TourStep {
   id: string;
@@ -150,7 +150,7 @@ const topologyEditor: TourDef = {
       id: 'te-node-props',
       title: 'Node Properties',
       content:
-        'Select a node to edit its properties: site, cores, RAM, disk, and OS image. The Node tab shows all configurable settings for the selected VM.',
+        'Select a node to edit its properties: site, host, cores, RAM, disk, and OS image. The site dropdown shows feasibility indicators (\u2713/\u26A0) and adjusted resources for each site. Pick a host to pin the VM to a specific physical machine.',
       targetSelector: '.editor-panel',
       requiredView: 'main',
       tooltipPosition: 'right',
@@ -445,9 +445,93 @@ const fileManager: TourDef = {
   ],
 };
 
+const sliversPlacement: TourDef = {
+  id: 'slivers-placement',
+  title: 'Slivers & Resource Placement',
+  description: 'Explore the split-panel sliver view and learn how to use resource-aware site and host selection.',
+  icon: '\u{1F4CA}',
+  autoStart: false,
+  helpSections: ['sliver', 'editor'],
+  steps: [
+    {
+      id: 'sp-intro',
+      title: 'Slivers View',
+      content:
+        'The Slivers view gives you a data-centric spreadsheet of your slice. Switch to Slivers to see two panels: VM nodes on top and network services below, each with columns tailored to their type.',
+      targetSelector: '[data-help-id="titlebar.view"]',
+      requiredView: 'main',
+      tooltipPosition: 'bottom',
+    },
+    {
+      id: 'sp-vm-panel',
+      title: 'VM Nodes Panel',
+      content:
+        'The top panel lists all VM nodes with compute-specific columns: Site, Host, State, Cores, RAM, Disk, Image, Mgmt IP, and attached Components. Click any column header to sort, or click a row to select it in the editor.',
+      targetSelector: '.sliver-panels',
+      requiredView: 'slivers',
+      tooltipPosition: 'bottom',
+    },
+    {
+      id: 'sp-net-panel',
+      title: 'Network Services Panel',
+      content:
+        'The bottom panel lists networks and facility ports with network-specific columns: Layer/Type, Subnet, Gateway, and Connected Interfaces. Drag the resize handle between panels to adjust the split.',
+      targetSelector: '.sliver-resize-handle',
+      requiredView: 'slivers',
+      tooltipPosition: 'top',
+    },
+    {
+      id: 'sp-filter',
+      title: 'Filtering',
+      content:
+        'The search bar at the top filters both panels simultaneously. Type a site name, node name, or image to quickly narrow down what you see.',
+      targetSelector: '.sliver-filter',
+      requiredView: 'slivers',
+      tooltipPosition: 'bottom',
+    },
+    {
+      id: 'sp-site-feasibility',
+      title: 'Site Feasibility Indicators',
+      content:
+        'Back in the editor, the Site dropdown now shows a checkmark (\u2713) or warning (\u26A0) next to each site, with adjusted available cores and RAM. This accounts for other VMs in your draft already placed at that site.',
+      targetSelector: '.editor-panel',
+      requiredView: 'main',
+      tooltipPosition: 'right',
+    },
+    {
+      id: 'sp-host-pinning',
+      title: 'Host Pinning',
+      content:
+        'Below the site selector, the Host dropdown lets you pin a VM to a specific physical host. Each host shows its available resources and a feasibility badge. Leave it on "Any host (auto)" to let FABRIC choose.',
+      targetSelector: '.editor-panel',
+      requiredView: 'main',
+      tooltipPosition: 'right',
+    },
+    {
+      id: 'sp-auto-assign',
+      title: 'Auto-Assign Sites & Hosts',
+      content:
+        'The "Auto-Assign Sites & Hosts" button uses live FABRIC resource data to automatically place all nodes on sites with enough capacity. It checks per-host availability to ensure each VM actually fits.',
+      targetSelector: '[data-help-id="editor.remap-sites"]',
+      requiredView: 'main',
+      tooltipPosition: 'right',
+    },
+    {
+      id: 'sp-done',
+      title: 'Tour Complete!',
+      content:
+        'You now know how to use the split-panel sliver view, check site and host feasibility, and auto-assign resources. These tools help you build slices that will provision successfully on the first try.',
+      targetSelector: '[data-help-id="titlebar.view"]',
+      requiredView: 'main',
+      tooltipPosition: 'bottom',
+    },
+  ],
+};
+
 export const tours: Record<string, TourDef> = {
   'getting-started': gettingStarted,
   'topology-editor': topologyEditor,
+  'slivers-placement': sliversPlacement,
   'map-resources': mapResources,
   'templates-cloning': templatesCloning,
   'console-terminals': consoleTerminals,
@@ -457,6 +541,7 @@ export const tours: Record<string, TourDef> = {
 export const tourList: TourDef[] = [
   gettingStarted,
   topologyEditor,
+  sliversPlacement,
   mapResources,
   templatesCloning,
   consoleTerminals,

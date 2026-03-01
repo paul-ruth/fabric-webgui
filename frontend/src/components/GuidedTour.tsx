@@ -12,7 +12,7 @@ export interface GuidedTourProps {
   onOpenSettings: () => void;
   onCloseSettings: () => void;
   settingsOpen: boolean;
-  onSwitchView: (view: 'topology' | 'map' | 'files') => void;
+  onSwitchView: (view: 'topology' | 'sliver' | 'map' | 'files') => void;
   currentView: string;
 }
 
@@ -83,6 +83,9 @@ export default function GuidedTour({
     } else if (rv === 'files') {
       if (settingsOpen) onCloseSettings();
       if (currentView !== 'files') onSwitchView('files');
+    } else if (rv === 'slivers') {
+      if (settingsOpen) onCloseSettings();
+      if (currentView !== 'sliver') onSwitchView('sliver');
     } else {
       // 'main' → topology view
       if (settingsOpen) onCloseSettings();
