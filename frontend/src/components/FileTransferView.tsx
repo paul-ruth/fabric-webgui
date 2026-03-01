@@ -4,7 +4,7 @@ import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
 import * as api from '../api/client';
 import type { FileEntry, SliceData } from '../types/fabric';
-import FileEditor, { isTextFile } from './FileEditor';
+import FileEditor, { isTextFile, isLikelyBinary } from './FileEditor';
 import LogView from './LogView';
 import '../styles/file-browser.css';
 import '../styles/file-transfer.css';
@@ -87,6 +87,9 @@ export default function FileTransferView({ sliceName, sliceData }: FileTransferV
 
   // Remember per-node paths so switching nodes preserves where you were
   const vmPathsRef = useRef<Record<string, string>>({});
+
+  // Confirm-open prompt for unknown file types
+  const [confirmOpen, setConfirmOpen] = useState<{ path: string; side: 'left' | 'right' } | null>(null);
 
   // Bottom panel
   const [bottomExpanded, setBottomExpanded] = useState(false);
@@ -216,11 +219,22 @@ export default function FileTransferView({ sliceName, sliceData }: FileTransferV
       setLeftSelected(new Set([name]));
     }
   };
+  /** Try to open a file for editing. Known text files open directly; unknown files prompt. */
+  const tryOpenFile = (filePath: string, fileName: string, side: 'left' | 'right') => {
+    if (isTextFile(fileName)) {
+      if (side === 'left') setEditingFile(filePath);
+      else setEditingVmFile(filePath);
+    } else {
+      setConfirmOpen({ path: filePath, side });
+    }
+  };
+
   const leftHandleDoubleClick = (entry: FileEntry) => {
     if (entry.type === 'dir') {
       leftNavigate(entry.name);
-    } else if (isTextFile(entry.name)) {
-      setEditingFile(leftPath ? `${leftPath}/${entry.name}` : entry.name);
+    } else {
+      const filePath = leftPath ? `${leftPath}/${entry.name}` : entry.name;
+      tryOpenFile(filePath, entry.name, 'left');
     }
   };
   const handleUpload = async (fileList: FileList | File[]) => {
@@ -306,9 +320,9 @@ export default function FileTransferView({ sliceName, sliceData }: FileTransferV
   const rightHandleDoubleClick = (entry: FileEntry) => {
     if (entry.type === 'dir') {
       rightNavigate(entry.name);
-    } else if (isTextFile(entry.name)) {
+    } else {
       const fullPath = rightPath === '/' ? `/${entry.name}` : `${rightPath}/${entry.name}`;
-      setEditingVmFile(fullPath);
+      tryOpenFile(fullPath, entry.name, 'right');
     }
   };
 
@@ -526,21 +540,23 @@ export default function FileTransferView({ sliceName, sliceData }: FileTransferV
   const leftHasSelection = leftSelected.size > 0;
   const rightHasSelection = rightSelected.size > 0;
 
-  // Check if exactly one text file is selected (for Edit buttons)
+  // Check if exactly one file is selected (for Edit buttons — any file, not just known text)
   const leftEditableFile = (() => {
     if (leftSelected.size !== 1) return null;
     const name = Array.from(leftSelected)[0];
     const entry = leftEntries.find((e) => e.name === name);
-    if (!entry || entry.type !== 'file' || !isTextFile(name)) return null;
+    if (!entry || entry.type !== 'file') return null;
     return leftPath ? `${leftPath}/${name}` : name;
   })();
+  const leftEditableName = leftSelected.size === 1 ? Array.from(leftSelected)[0] : null;
   const rightEditableFile = (() => {
     if (rightSelected.size !== 1) return null;
     const name = Array.from(rightSelected)[0];
     const entry = rightEntries.find((e) => e.name === name);
-    if (!entry || entry.type !== 'file' || !isTextFile(name)) return null;
+    if (!entry || entry.type !== 'file') return null;
     return rightPath === '/' ? `/${name}` : `${rightPath}/${name}`;
   })();
+  const rightEditableName = rightSelected.size === 1 ? Array.from(rightSelected)[0] : null;
 
   return (
     <div className="ftv-outer">
@@ -576,7 +592,7 @@ export default function FileTransferView({ sliceName, sliceData }: FileTransferV
               )}
               <button onClick={handleDownloadLeft} disabled={leftSelected.size === 0}>Download</button>
               <button onClick={handleDeleteLeft} disabled={leftSelected.size === 0}>Delete</button>
-              <button onClick={() => leftEditableFile && setEditingFile(leftEditableFile)} disabled={!leftEditableFile}>Edit</button>
+              <button onClick={() => leftEditableFile && leftEditableName && tryOpenFile(leftEditableFile, leftEditableName, 'left')} disabled={!leftEditableFile}>Edit</button>
               <button onClick={refreshLeft} disabled={leftLoading} title="Refresh">↻</button>
             </div>
             {leftError && <div className="fb-error">{leftError}</div>}
@@ -692,7 +708,7 @@ export default function FileTransferView({ sliceName, sliceData }: FileTransferV
               )}
               <button onClick={handleDownloadRight} disabled={rightSelected.size === 0 || rightLoading || !vmNode}>Download</button>
               <button onClick={handleDeleteRight} disabled={rightSelected.size === 0 || rightLoading || !vmNode}>Delete</button>
-              <button onClick={() => rightEditableFile && setEditingVmFile(rightEditableFile)} disabled={!rightEditableFile}>Edit</button>
+              <button onClick={() => rightEditableFile && rightEditableName && tryOpenFile(rightEditableFile, rightEditableName, 'right')} disabled={!rightEditableFile}>Edit</button>
               <button onClick={refreshRight} disabled={rightLoading || !vmNode} title="Refresh">↻</button>
             </div>
             {rightError && <div className="fb-error">{rightError}</div>}
@@ -748,6 +764,32 @@ export default function FileTransferView({ sliceName, sliceData }: FileTransferV
     ) : (
       <div className="ftv-log-collapsed" onClick={() => setBottomExpanded(true)}>
         <span>&#x25B2; Console</span>
+      </div>
+    )}
+
+    {/* Confirm-open dialog for unknown file types */}
+    {confirmOpen && (
+      <div className="toolbar-modal-overlay" onClick={() => setConfirmOpen(null)}>
+        <div className="toolbar-modal" onClick={(e) => e.stopPropagation()}>
+          <h4>Open file as text?</h4>
+          <p>
+            <strong>{confirmOpen.path.split('/').pop()}</strong>
+            {isLikelyBinary(confirmOpen.path)
+              ? ' appears to be a binary file. Opening it in the text editor may show garbled content.'
+              : ' has an unrecognized file type. It may or may not be a text file.'}
+          </p>
+          <p>Open it anyway?</p>
+          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 12 }}>
+            <button onClick={() => setConfirmOpen(null)}>Cancel</button>
+            <button onClick={() => {
+              if (confirmOpen.side === 'left') setEditingFile(confirmOpen.path);
+              else setEditingVmFile(confirmOpen.path);
+              setConfirmOpen(null);
+            }} style={{ background: 'var(--fabric-primary, #5798bc)', color: '#fff', border: 'none', borderRadius: 4, padding: '5px 14px', cursor: 'pointer' }}>
+              Open
+            </button>
+          </div>
+        </div>
       </div>
     )}
     </div>

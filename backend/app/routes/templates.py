@@ -581,7 +581,7 @@ def _seed_if_needed() -> None:
     """
     tdir = _templates_dir()
     os.makedirs(tdir, exist_ok=True)
-    for tmpl in SEED_SLICE_TEMPLATES:
+    for idx, tmpl in enumerate(SEED_SLICE_TEMPLATES):
         safe = _sanitize_name(tmpl["name"])
         tmpl_dir = os.path.join(tdir, safe)
         model = tmpl["model"]
@@ -595,7 +595,7 @@ def _seed_if_needed() -> None:
                 try:
                     with open(meta_path) as f:
                         meta = json.load(f)
-                    if meta.get("model_hash") == code_hash:
+                    if meta.get("model_hash") == code_hash and "order" in meta:
                         needs_write = False  # up-to-date
                 except Exception:
                     pass  # corrupted metadata, re-write
@@ -615,6 +615,7 @@ def _seed_if_needed() -> None:
             "node_count": len(model.get("nodes", [])),
             "network_count": len(model.get("networks", [])),
             "model_hash": code_hash,
+            "order": idx,
         }
         with open(os.path.join(tmpl_dir, "metadata.json"), "w") as f:
             json.dump(metadata, f, indent=2)
@@ -670,6 +671,8 @@ def list_templates() -> list[dict[str, Any]]:
                 results.append(meta)
             except Exception:
                 pass
+    # Sort: built-in templates first (by order field), then user templates alphabetically
+    results.sort(key=lambda m: (0, m.get("order", 999)) if m.get("builtin") else (1, m.get("name", "").lower()))
     return results
 
 

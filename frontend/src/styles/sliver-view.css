@@ -1,0 +1,293 @@
+/* Sliver View — spreadsheet table of all slivers */
+
+.sliver-view {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  font-family: 'Montserrat', sans-serif;
+  /* Leave room for collapsed panel icon tabs (24px + small gap) */
+  margin-left: 28px;
+  margin-right: 28px;
+}
+
+/* Filter bar */
+.sliver-filter {
+  display: flex;
+  align-items: center;
+  padding: 6px 10px;
+  border-bottom: 1px solid #d0d7de;
+  background: #f6f8fa;
+  flex-shrink: 0;
+}
+
+.sliver-filter input {
+  flex: 1;
+  padding: 5px 10px;
+  border: 1px solid #d0d7de;
+  border-radius: 4px;
+  font-size: 12px;
+  font-family: 'Montserrat', sans-serif;
+  background: #fff;
+  color: #24292f;
+  outline: none;
+}
+
+.sliver-filter input:focus {
+  border-color: #5798bc;
+  box-shadow: 0 0 0 2px rgba(87, 152, 188, 0.2);
+}
+
+.sliver-filter-count {
+  margin-left: 8px;
+  font-size: 11px;
+  color: #656d76;
+  white-space: nowrap;
+}
+
+/* Scrollable table wrapper */
+.sliver-table-wrapper {
+  flex: 1;
+  overflow: auto;
+  min-height: 0;
+}
+
+/* Table */
+.sliver-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  table-layout: auto;
+}
+
+.sliver-table thead {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+
+.sliver-table th {
+  background: #f0f3f6;
+  border-bottom: 2px solid #d0d7de;
+  padding: 6px 10px;
+  text-align: left;
+  font-weight: 600;
+  font-size: 11px;
+  color: #57606a;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+  position: relative;
+}
+
+.sliver-table th:hover {
+  background: #e2e8f0;
+}
+
+.sliver-table th .sort-arrow {
+  margin-left: 4px;
+  font-size: 10px;
+  opacity: 0.5;
+}
+
+.sliver-table th .sort-arrow.active {
+  opacity: 1;
+  color: #5798bc;
+}
+
+.sliver-table td {
+  padding: 5px 10px;
+  border-bottom: 1px solid #e8ecf0;
+  color: #24292f;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 200px;
+}
+
+.sliver-table tbody tr {
+  cursor: pointer;
+  transition: background 0.1s;
+}
+
+.sliver-table tbody tr:hover {
+  background: #f0f6fc;
+}
+
+.sliver-table tbody tr.selected {
+  background: rgba(87, 152, 188, 0.12);
+  border-left: 3px solid #5798bc;
+}
+
+.sliver-table tbody tr.selected td:first-child {
+  padding-left: 7px; /* compensate for border */
+}
+
+/* Type badges */
+.sliver-type-badge {
+  display: inline-block;
+  padding: 1px 7px;
+  border-radius: 10px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+}
+
+.sliver-type-badge.node {
+  background: rgba(0, 142, 122, 0.15);
+  color: #008e7a;
+}
+
+.sliver-type-badge.network {
+  background: rgba(31, 106, 140, 0.15);
+  color: #1f6a8c;
+}
+
+.sliver-type-badge.facility-port {
+  background: rgba(255, 133, 66, 0.15);
+  color: #e06520;
+}
+
+/* State badges */
+.sliver-state-badge {
+  display: inline-block;
+  padding: 1px 7px;
+  border-radius: 10px;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.sliver-state-badge.active {
+  background: rgba(0, 142, 122, 0.15);
+  color: #008e7a;
+}
+
+.sliver-state-badge.configuring,
+.sliver-state-badge.nascent {
+  background: rgba(87, 152, 188, 0.15);
+  color: #1f6a8c;
+}
+
+.sliver-state-badge.closing,
+.sliver-state-badge.dead {
+  background: rgba(226, 82, 65, 0.15);
+  color: #e25241;
+}
+
+.sliver-state-badge.ticketed,
+.sliver-state-badge.allocating {
+  background: rgba(255, 133, 66, 0.15);
+  color: #e06520;
+}
+
+/* Muted cell for N/A values */
+.sliver-cell-muted {
+  color: #aab0b6;
+  font-style: italic;
+}
+
+/* Empty state */
+.sliver-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+  color: #656d76;
+  font-size: 14px;
+}
+
+/* ---- Dark theme ---- */
+[data-theme="dark"] .sliver-filter {
+  background: #1a1a2e;
+  border-bottom-color: #3a3a5a;
+}
+
+[data-theme="dark"] .sliver-filter input {
+  background: #16213e;
+  border-color: #3a3a5a;
+  color: #e0e0e0;
+}
+
+[data-theme="dark"] .sliver-filter input:focus {
+  border-color: #5798bc;
+  box-shadow: 0 0 0 2px rgba(87, 152, 188, 0.3);
+}
+
+[data-theme="dark"] .sliver-filter-count {
+  color: #8888aa;
+}
+
+[data-theme="dark"] .sliver-table th {
+  background: #16213e;
+  border-bottom-color: #3a3a5a;
+  color: #8888aa;
+}
+
+[data-theme="dark"] .sliver-table th:hover {
+  background: #1e2d4a;
+}
+
+[data-theme="dark"] .sliver-table td {
+  color: #e0e0e0;
+  border-bottom-color: #2a2a4a;
+}
+
+[data-theme="dark"] .sliver-table tbody tr:hover {
+  background: rgba(87, 152, 188, 0.08);
+}
+
+[data-theme="dark"] .sliver-table tbody tr.selected {
+  background: rgba(87, 152, 188, 0.18);
+  border-left-color: #5798bc;
+}
+
+[data-theme="dark"] .sliver-type-badge.node {
+  background: rgba(0, 142, 122, 0.2);
+  color: #2bb5a0;
+}
+
+[data-theme="dark"] .sliver-type-badge.network {
+  background: rgba(91, 184, 217, 0.15);
+  color: #5bb8d9;
+}
+
+[data-theme="dark"] .sliver-type-badge.facility-port {
+  background: rgba(255, 165, 98, 0.15);
+  color: #ffa562;
+}
+
+[data-theme="dark"] .sliver-state-badge.active {
+  background: rgba(0, 142, 122, 0.2);
+  color: #2bb5a0;
+}
+
+[data-theme="dark"] .sliver-state-badge.configuring,
+[data-theme="dark"] .sliver-state-badge.nascent {
+  background: rgba(91, 184, 217, 0.15);
+  color: #5bb8d9;
+}
+
+[data-theme="dark"] .sliver-state-badge.closing,
+[data-theme="dark"] .sliver-state-badge.dead {
+  background: rgba(226, 82, 65, 0.2);
+  color: #e87c6f;
+}
+
+[data-theme="dark"] .sliver-state-badge.ticketed,
+[data-theme="dark"] .sliver-state-badge.allocating {
+  background: rgba(255, 165, 98, 0.15);
+  color: #ffa562;
+}
+
+[data-theme="dark"] .sliver-cell-muted {
+  color: #5a5a7a;
+}
+
+[data-theme="dark"] .sliver-empty {
+  color: #8888aa;
+}

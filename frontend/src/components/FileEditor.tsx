@@ -46,6 +46,23 @@ export function isTextFile(name: string): boolean {
   return TEXT_EXTENSIONS.has(ext);
 }
 
+const BINARY_EXTENSIONS = new Set([
+  'png', 'jpg', 'jpeg', 'gif', 'bmp', 'ico', 'webp', 'svg', 'tiff', 'tif',
+  'mp3', 'mp4', 'wav', 'avi', 'mkv', 'mov', 'flac', 'ogg', 'webm',
+  'zip', 'gz', 'tar', 'bz2', 'xz', 'zst', '7z', 'rar',
+  'pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'odt',
+  'exe', 'dll', 'so', 'dylib', 'bin', 'o', 'a', 'class', 'pyc', 'pyo',
+  'whl', 'egg', 'deb', 'rpm', 'iso', 'img', 'dmg',
+  'sqlite', 'db', 'sqlite3',
+  'woff', 'woff2', 'ttf', 'otf', 'eot',
+]);
+
+export function isLikelyBinary(name: string): boolean {
+  const lower = name.toLowerCase();
+  const ext = lower.split('.').pop() || '';
+  return BINARY_EXTENSIONS.has(ext);
+}
+
 function getLanguageExtension(filename: string) {
   const ext = filename.toLowerCase().split('.').pop() || '';
   switch (ext) {

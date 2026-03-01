@@ -285,3 +285,57 @@
   font-size: 12px;
   padding: 5px 14px;
 }
+
+/* Loading Progress Modal */
+.template-loading-modal {
+  text-align: center;
+  width: 300px;
+}
+.template-loading-modal h4 {
+  margin: 8px 0 12px;
+}
+
+.template-loading-spinner {
+  width: 32px;
+  height: 32px;
+  border: 3px solid var(--fabric-border);
+  border-top-color: var(--fabric-primary);
+  border-radius: 50%;
+  margin: 0 auto;
+  animation: template-spin 0.8s linear infinite;
+}
+@keyframes template-spin {
+  to { transform: rotate(360deg); }
+}
+
+.template-loading-steps {
+  text-align: left;
+  margin-top: 12px;
+  font-size: 12px;
+}
+
+.template-loading-step {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 0;
+  color: var(--fabric-text-muted);
+  opacity: 0.4;
+  transition: opacity 0.3s, color 0.3s;
+}
+.template-loading-step.active {
+  opacity: 1;
+  color: var(--fabric-primary);
+  font-weight: 600;
+}
+.template-loading-step.done {
+  opacity: 0.7;
+  color: var(--fabric-teal, #008e7a);
+}
+
+.template-step-icon {
+  width: 14px;
+  text-align: center;
+  flex-shrink: 0;
+  font-size: 11px;
+}

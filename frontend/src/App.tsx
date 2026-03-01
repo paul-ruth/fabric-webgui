@@ -3,6 +3,7 @@ import TitleBar from './components/TitleBar';
 import Toolbar from './components/Toolbar';
 import CytoscapeGraph from './components/CytoscapeGraph';
 import type { ContextMenuAction } from './components/CytoscapeGraph';
+import SliverView from './components/SliverView';
 import EditorPanel from './components/EditorPanel';
 import TemplatePanel from './components/TemplatePanel';
 import VMTemplatePanel from './components/VMTemplatePanel';
@@ -25,7 +26,7 @@ export default function App() {
   const [sliceData, setSliceData] = useState<SliceData | null>(null);
   const [loading, setLoading] = useState(false);
   const [errors, setErrors] = useState<string[]>([]);
-  const [currentView, setCurrentView] = useState<'topology' | 'map' | 'files'>('topology');
+  const [currentView, setCurrentView] = useState<'topology' | 'sliver' | 'map' | 'files'>('topology');
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [isConfigured, setIsConfigured] = useState<boolean | null>(null);
   const [layout, setLayout] = useState('dagre');
@@ -45,9 +46,9 @@ export default function App() {
 
   const defaultLayout: PanelLayoutMap = {
     editor: { side: 'left', collapsed: false, width: DEFAULT_PANEL_WIDTH, order: 0 },
+    detail: { side: 'left', collapsed: true, width: DEFAULT_PANEL_WIDTH, order: 1 },
     template: { side: 'right', collapsed: false, width: DEFAULT_PANEL_WIDTH, order: 0 },
-    detail: { side: 'right', collapsed: false, width: DEFAULT_PANEL_WIDTH, order: 1 },
-    'vm-template': { side: 'right', collapsed: true, width: DEFAULT_PANEL_WIDTH, order: 2 },
+    'vm-template': { side: 'right', collapsed: true, width: DEFAULT_PANEL_WIDTH, order: 1 },
   };
 
   const [panelLayout, setPanelLayout] = useState<PanelLayoutMap>(() => {
@@ -70,6 +71,13 @@ export default function App() {
           if (parsed[id] && parsed[id].order === undefined) {
             parsed[id].order = defaultLayout[id].order;
           }
+        }
+        // Migrate: move detail panel to left side (v2 layout)
+        if (!parsed._layoutV2) {
+          parsed.detail = { ...defaultLayout.detail };
+          parsed.template = { ...defaultLayout.template };
+          parsed['vm-template'] = { ...defaultLayout['vm-template'] };
+          parsed._layoutV2 = true;
         }
         return parsed;
       }
@@ -208,9 +216,6 @@ export default function App() {
   useEffect(() => {
     api.getConfig().then((cfg) => {
       setIsConfigured(cfg.configured);
-      if (!cfg.configured) {
-        setSettingsOpen(true);
-      }
       // Populate projects list and current project
       if (cfg.token_info?.projects) {
         setProjects(cfg.token_info.projects);
@@ -221,6 +226,20 @@ export default function App() {
           const proj = cfg.token_info.projects.find((p) => p.uuid === cfg.project_id);
           if (proj) setProjectName(proj.name);
         }
+      }
+      // Check if token is valid and not expired
+      const tokenExpired = cfg.token_info?.exp
+        ? cfg.token_info.exp * 1000 < Date.now()
+        : !cfg.has_token;
+      if (!cfg.configured || tokenExpired) {
+        setSettingsOpen(true);
+        if (tokenExpired && cfg.has_token) {
+          setErrors(prev => [...prev, 'Your FABRIC token has expired. Please update it in Settings.']);
+        }
+      } else {
+        // Token is good — auto-load slices and resources
+        refreshSliceList();
+        refreshInfrastructureAndMark();
       }
     }).catch(() => {
       setIsConfigured(false);
@@ -828,6 +847,7 @@ export default function App() {
               setIsConfigured(true);
               setSettingsOpen(false);
               setListLoaded(false);
+              refreshInfrastructureAndMark();
               // Refresh project name and projects list
               api.getConfig().then((cfg) => {
                 if (cfg.token_info?.projects) {
@@ -842,7 +862,11 @@ export default function App() {
                 }
               }).catch(() => {});
             }}
-            onClose={() => setSettingsOpen(false)}
+            onClose={() => {
+              setSettingsOpen(false);
+              setListLoaded(false);
+              refreshInfrastructureAndMark();
+            }}
           />
         </div>
       )}
@@ -853,7 +877,7 @@ export default function App() {
             sliceName={selectedSliceName}
             sliceData={sliceData}
           />
-        ) : currentView === 'topology' ? (
+        ) : currentView === 'topology' || currentView === 'sliver' ? (
           (() => {
             const makeDragProps = (id: PanelId) => ({
               draggable: true,
@@ -1070,17 +1094,27 @@ export default function App() {
                       />
                     </>
                   )}
-                  <CytoscapeGraph
-                    graph={sliceData?.graph ?? null}
-                    layout={layout}
-                    dark={dark}
-                    sliceData={sliceData}
-                    onLayoutChange={setLayout}
-                    onNodeClick={handleNodeClick}
-                    onEdgeClick={handleEdgeClick}
-                    onBackgroundClick={handleBackgroundClick}
-                    onContextAction={handleContextAction}
-                  />
+                  {currentView === 'topology' ? (
+                    <CytoscapeGraph
+                      graph={sliceData?.graph ?? null}
+                      layout={layout}
+                      dark={dark}
+                      sliceData={sliceData}
+                      onLayoutChange={setLayout}
+                      onNodeClick={handleNodeClick}
+                      onEdgeClick={handleEdgeClick}
+                      onBackgroundClick={handleBackgroundClick}
+                      onContextAction={handleContextAction}
+                    />
+                  ) : (
+                    <SliverView
+                      sliceData={sliceData}
+                      selectedElement={selectedElement}
+                      onRowClick={handleNodeClick}
+                      onBackgroundClick={handleBackgroundClick}
+                      dark={dark}
+                    />
+                  )}
                   {!consoleFullWidth && !settingsOpen && !helpOpen && (
                     <BottomPanel
                       terminals={terminalTabs}
@@ -1093,7 +1127,7 @@ export default function App() {
                       onClearErrors={() => { setErrors([]); setValidationIssues([]); setValidationValid(false); }}
                       fullWidth={consoleFullWidth}
                       onToggleFullWidth={() => setConsoleFullWidth(fw => !fw)}
-                      showWidthToggle={currentView === 'topology'}
+                      showWidthToggle={currentView === 'topology' || currentView === 'sliver'}
                       expanded={consoleExpanded}
                       onExpandedChange={setConsoleExpanded}
                       panelHeight={consoleHeight}
@@ -1123,7 +1157,7 @@ export default function App() {
         )}
       </div>
 
-      {!settingsOpen && !helpOpen && (consoleFullWidth || currentView !== 'topology') && (
+      {!settingsOpen && !helpOpen && currentView !== 'files' && (consoleFullWidth || (currentView !== 'topology' && currentView !== 'sliver')) && (
         <BottomPanel
           terminals={terminalTabs}
           onCloseTerminal={handleCloseTerminal}
@@ -1135,7 +1169,7 @@ export default function App() {
           onClearErrors={() => { setErrors([]); setValidationIssues([]); setValidationValid(false); }}
           fullWidth={consoleFullWidth}
           onToggleFullWidth={() => setConsoleFullWidth(fw => !fw)}
-          showWidthToggle={currentView === 'topology'}
+          showWidthToggle={currentView === 'topology' || currentView === 'sliver'}
           expanded={consoleExpanded}
           onExpandedChange={setConsoleExpanded}
           panelHeight={consoleHeight}

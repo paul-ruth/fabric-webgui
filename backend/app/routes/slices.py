@@ -196,6 +196,7 @@ class CreateFacilityPortRequest(BaseModel):
 
 class ResolveSitesRequest(BaseModel):
     group_overrides: Dict[str, str] = {}  # "@group" -> "SITE_NAME"
+    resolve_all: bool = False  # When True, re-resolve ALL nodes (not just grouped ones)
 
 
 # --- Routes ---
@@ -336,17 +337,18 @@ async def refresh_slice(slice_name: str) -> dict[str, Any]:
 
 @router.post("/slices/{slice_name}/resolve-sites")
 async def resolve_sites_endpoint(slice_name: str, body: ResolveSitesRequest = ResolveSitesRequest()) -> dict[str, Any]:
-    """Re-resolve site groups for a draft slice.
+    """Re-resolve site assignments for a draft slice.
 
     Optionally accepts group_overrides to pin specific groups to sites.
     Groups not overridden are re-resolved using fresh resource data.
+    When resolve_all is True, all nodes (not just grouped ones) are re-resolved.
     """
     draft = _get_draft(slice_name)
     if draft is None:
         raise HTTPException(status_code=404, detail=f"No draft found for slice '{slice_name}'")
 
     site_groups = _get_site_groups(slice_name)
-    if not site_groups:
+    if not site_groups and not body.resolve_all:
         raise HTTPException(status_code=400, detail="Slice has no site groups to resolve")
 
     def _do():
@@ -356,13 +358,15 @@ async def resolve_sites_endpoint(slice_name: str, body: ResolveSitesRequest = Re
         # Build node defs for the resolver
         node_defs = []
         for node in nodes:
-            grp = site_groups.get(node["name"])
+            grp = (site_groups or {}).get(node["name"])
             if grp:
                 # Check if this group is overridden
                 if grp in body.group_overrides:
                     site = body.group_overrides[grp]
                 else:
                     site = grp  # Pass @group tag for re-resolution
+            elif body.resolve_all:
+                site = "auto"  # Force re-resolution for all non-grouped nodes
             else:
                 site = node.get("site", "")
             node_defs.append({

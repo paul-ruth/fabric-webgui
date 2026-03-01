@@ -117,6 +117,21 @@ export default function EditorPanel({ sliceData, sliceName, onSliceUpdated, onCo
   const hasSiteGroups = sliceData?.nodes.some(n => n.site_group) ?? false;
   const isDraft = sliceData?.state === 'Draft';
 
+  const [remapping, setRemapping] = useState(false);
+
+  const handleRemapSites = async () => {
+    setRemapping(true);
+    setError('');
+    try {
+      const result = await api.resolveSites(sliceName, {}, true);
+      onSliceUpdated(result);
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setRemapping(false);
+    }
+  };
+
   const apiCall = async (fn: () => Promise<SliceData>) => {
     setLoading(true);
     setError('');
@@ -165,6 +180,23 @@ export default function EditorPanel({ sliceData, sliceName, onSliceUpdated, onCo
           </Tooltip>
         )}
       </div>
+
+      {/* Re-map Sites button — available for any draft with nodes */}
+      {isDraft && sliceData && sliceData.nodes.length > 0 && (
+        <div style={{ padding: '4px 10px' }}>
+          <Tooltip text="Re-assign all nodes to sites with sufficient available resources (cores, RAM, disk, components). Uses live FABRIC resource data.">
+            <button
+              className="site-mapping-auto-btn"
+              style={{ width: '100%', fontSize: 11, padding: '5px 0' }}
+              onClick={handleRemapSites}
+              disabled={remapping || loading}
+              data-help-id="editor.remap-sites"
+            >
+              {remapping ? 'Resolving...' : '\u21BB Re-map Sites'}
+            </button>
+          </Tooltip>
+        </div>
+      )}
 
       {/* Per-slice SSH key selector */}
       {sliceName && keySets.length > 0 && (

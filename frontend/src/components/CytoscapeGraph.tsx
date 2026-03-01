@@ -213,7 +213,7 @@ export default function CytoscapeGraph({
   const containerRef = useRef<HTMLDivElement>(null);
   const cyRef = useRef<Core | null>(null);
   const [menu, setMenu] = useState<MenuState | null>(null);
-  const [showComponents, setShowComponents] = useState(true);
+  const [showComponents, setShowComponents] = useState(false);
   const showComponentsRef = useRef(showComponents);
   showComponentsRef.current = showComponents;
   const [showSliceBox, setShowSliceBox] = useState(true);

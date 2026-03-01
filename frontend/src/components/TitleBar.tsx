@@ -10,7 +10,7 @@ interface TitleBarProps {
   dark: boolean;
   currentView: string;
   onToggleDark: () => void;
-  onViewChange: (view: 'topology' | 'map' | 'files') => void;
+  onViewChange: (view: 'topology' | 'sliver' | 'map' | 'files') => void;
   onOpenSettings: () => void;
   onOpenHelp: () => void;
   projectName?: string;
@@ -18,8 +18,9 @@ interface TitleBarProps {
   onProjectChange?: (uuid: string) => void;
 }
 
-const VIEWS: Array<{ key: 'topology' | 'map' | 'files'; label: string; icon: string }> = [
+const VIEWS: Array<{ key: 'topology' | 'sliver' | 'map' | 'files'; label: string; icon: string }> = [
   { key: 'topology', label: 'Topology', icon: '\u25A6' },
+  { key: 'sliver', label: 'Slivers', icon: '\u2261' },
   { key: 'map', label: 'Map', icon: '\u25C9' },
   { key: 'files', label: 'Files', icon: '\u2630' },
 ];

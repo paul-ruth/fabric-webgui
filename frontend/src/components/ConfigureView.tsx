@@ -328,7 +328,7 @@ export default function ConfigureView({ onConfigured, onClose }: ConfigureViewPr
         )}
 
         {/* Identity & Project Section */}
-        <div className="configure-section">
+        <div className="configure-section" data-tour-id="token">
           <h3>Identity and Project</h3>
           <p>Upload a token file, or login with FABRIC to get a token from Credential Manager.</p>
           <div className="btn-row">
@@ -413,7 +413,7 @@ export default function ConfigureView({ onConfigured, onClose }: ConfigureViewPr
           <h3>SSH Keys</h3>
 
           {/* Bastion Key */}
-          <p><strong>Bastion Key</strong> — Upload your FABRIC bastion private key (from the portal).</p>
+          <p data-tour-id="bastion-key"><strong>Bastion Key</strong> — Upload your FABRIC bastion private key (from the portal).</p>
           <div className="btn-row">
             <input
               ref={bastionKeyRef}
@@ -440,7 +440,7 @@ export default function ConfigureView({ onConfigured, onClose }: ConfigureViewPr
           )}
 
           {/* Slice Key Sets */}
-          <p style={{ marginTop: 16 }}><strong>Slice Key Sets</strong> — Manage named SSH key pairs for slice access.</p>
+          <p style={{ marginTop: 16 }} data-tour-id="slice-keys"><strong>Slice Key Sets</strong> — Manage named SSH key pairs for slice access.</p>
 
           {/* Key Set List */}
           {keySets.length > 0 && (

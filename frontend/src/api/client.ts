@@ -307,10 +307,10 @@ export function listSiteHosts(siteName: string): Promise<HostInfo[]> {
   return fetchJson(`/sites/${encodeURIComponent(siteName)}/hosts`);
 }
 
-export function resolveSites(sliceName: string, overrides?: Record<string, string>): Promise<SliceData> {
+export function resolveSites(sliceName: string, overrides?: Record<string, string>, resolveAll?: boolean): Promise<SliceData> {
   return fetchJson(`/slices/${encodeURIComponent(sliceName)}/resolve-sites`, {
     method: 'POST',
-    body: JSON.stringify({ group_overrides: overrides || {} }),
+    body: JSON.stringify({ group_overrides: overrides || {}, resolve_all: resolveAll || false }),
   });
 }
 

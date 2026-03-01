@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import type { SliceData } from '../types/fabric';
 import type { TemplateSummary } from '../api/client';
 import * as api from '../api/client';
@@ -30,6 +30,20 @@ export default function TemplatePanel({ onSliceImported, onCollapse, dragHandleP
   // Delete confirmation
   const [deletingTemplate, setDeletingTemplate] = useState<string | null>(null);
 
+  // Loading progress indicator
+  const [loadProgress, setLoadProgress] = useState<{ active: boolean; step: number } | null>(null);
+  const loadStepTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const LOAD_STEPS = [
+    'Reading template...',
+    'Creating draft slice...',
+    'Adding nodes...',
+    'Configuring components...',
+    'Setting up networks...',
+    'Resolving site assignments...',
+    'Checking resource availability...',
+    'Finalizing topology...',
+  ];
+
   // Search filter
   const [searchFilter, setSearchFilter] = useState('');
 
@@ -53,13 +67,25 @@ export default function TemplatePanel({ onSliceImported, onCollapse, dragHandleP
   const handleLoad = async (templateName: string) => {
     const name = loadSliceName.trim() || templateName;
     setError('');
+    setLoadingTemplate(null);
+    setLoadProgress({ active: true, step: 0 });
+
+    // Cycle through progress steps every 2 seconds
+    let step = 0;
+    loadStepTimerRef.current = setInterval(() => {
+      step = Math.min(step + 1, LOAD_STEPS.length - 1);
+      setLoadProgress({ active: true, step });
+    }, 2000);
+
     try {
       const data = await api.loadTemplate(templateName, name);
       onSliceImported(data);
-      setLoadingTemplate(null);
       setLoadSliceName('');
     } catch (e: any) {
       setError(e.message);
+    } finally {
+      if (loadStepTimerRef.current) clearInterval(loadStepTimerRef.current);
+      setLoadProgress(null);
     }
   };
 
@@ -188,6 +214,29 @@ export default function TemplatePanel({ onSliceImported, onCollapse, dragHandleP
                 <div className="template-modal-actions">
                   <button onClick={() => setLoadingTemplate(null)}>Cancel</button>
                   <button className="primary" onClick={() => handleLoad(loadingTemplate)}>Load</button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Loading Progress Overlay */}
+          {loadProgress && (
+            <div className="template-modal-overlay">
+              <div className="template-modal template-loading-modal">
+                <div className="template-loading-spinner" />
+                <h4>Loading Template</h4>
+                <div className="template-loading-steps">
+                  {LOAD_STEPS.map((msg, i) => (
+                    <div
+                      key={i}
+                      className={`template-loading-step${i < loadProgress.step ? ' done' : i === loadProgress.step ? ' active' : ''}`}
+                    >
+                      <span className="template-step-icon">
+                        {i < loadProgress.step ? '\u2713' : i === loadProgress.step ? '\u25CF' : '\u25CB'}
+                      </span>
+                      {msg}
+                    </div>
+                  ))}
                 </div>
               </div>
             </div>

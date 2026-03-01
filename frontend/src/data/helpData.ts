@@ -14,8 +14,8 @@ export interface HelpSection {
 
 const entries: HelpEntry[] = [
   // --- Title Bar ---
-  { id: 'titlebar.view', label: 'View Selector', tooltip: 'Switch between Topology, Map, and Files views', section: 'titlebar',
-    description: 'The View selector lets you switch between three main views:\n\n**Topology** — Interactive Cytoscape.js graph showing your slice nodes, components, networks, and their connections. Click elements to inspect, right-click for actions.\n\n**Map** — Geographic Leaflet map showing all FABRIC sites worldwide, backbone links, and resource availability. Click sites to view metrics and capacity.\n\n**Files** — Dual-panel file manager for transferring files between container storage and slice VMs via SFTP.' },
+  { id: 'titlebar.view', label: 'View Selector', tooltip: 'Switch between Topology, Slivers, Map, and Files views', section: 'titlebar',
+    description: 'The View selector lets you switch between four main views:\n\n**Topology** — Interactive Cytoscape.js graph showing your slice nodes, components, networks, and their connections. Click elements to inspect, right-click for actions.\n\n**Slivers** — Spreadsheet table showing every sliver (node, network, facility port) as a row with sortable columns. Shares the same side panels as the topology view.\n\n**Map** — Geographic Leaflet map showing all FABRIC sites worldwide, backbone links, and resource availability. Click sites to view metrics and capacity.\n\n**Files** — Dual-panel file manager for transferring files between container storage and slice VMs via SFTP.' },
   { id: 'titlebar.project', label: 'Project Selector', tooltip: 'Switch active FABRIC project', section: 'titlebar',
     description: 'Select which FABRIC project to work with. Changing the project resets the current slice and reloads the slice list for the new project. Projects are determined by your FABRIC token and membership. Each project has its own resource quotas and permissions.' },
   { id: 'titlebar.settings', label: 'Settings', tooltip: 'Open configuration panel', section: 'titlebar',
@@ -60,6 +60,9 @@ const entries: HelpEntry[] = [
     description: 'The Site Mapping view appears when a slice has site groups (from loading a template with @group co-location tags). It shows:\n\n- **Group list** — Each @group with its member nodes, total resource requirements (cores, RAM, disk), and currently assigned site\n- **Site dropdown** — Change a group\'s site assignment; shows available resources per site (e.g., "RENC (48c / 128G)")\n- **Resource warnings** — Orange warning icon when a group\'s requirements may exceed the selected site\'s capacity\n- **PINNED badge** — Indicates manually overridden groups that won\'t be changed by Auto-Assign\n\nSite groups ensure that nodes needing to be co-located (e.g., for low-latency L2 networking) are placed at the same physical site.' },
   { id: 'editor.auto-assign', label: 'Auto-Assign Sites', tooltip: 'Re-resolve all site assignments using live FABRIC resource data', section: 'editor',
     description: 'Re-runs the site resolver against current FABRIC resource availability. The resolver:\n\n1. Fetches fresh site and host-level resource data\n2. For each group, finds sites with enough aggregate resources (cores + RAM + disk) AND where each individual node fits on at least one physical host\n3. Prefers assigning different groups to different sites (for multi-site topologies)\n4. Resolves heaviest groups first for best placement\n5. Preserves manually pinned overrides — only un-pinned groups are re-resolved\n\nUse **Reset** to clear all manual overrides and let the resolver assign everything fresh.\n\nThe submit button also performs this resolution automatically with force-refreshed data right before provisioning.' },
+
+  { id: 'editor.remap-sites', label: 'Re-map Sites', tooltip: 'Re-assign all nodes to sites with available resources', section: 'editor',
+    description: 'Re-maps all nodes in the slice to sites that currently have sufficient resources. Uses live FABRIC resource availability data to find the best placement.\n\nThe resolver:\n1. Fetches fresh site and host-level resource data\n2. Treats all non-grouped nodes as needing re-assignment\n3. Preserves @group co-location constraints (grouped nodes stay together)\n4. Validates that each node fits on at least one physical host at the chosen site\n5. Assigns heaviest nodes first for optimal placement\n\nUse this when sites have run out of resources or when you want to find better placement for your slice.' },
 
   // --- Editor Panel: Tabs ---
   { id: 'editor.node-tab', label: 'Node Tab', tooltip: 'Configure VM node properties', section: 'editor',
@@ -129,6 +132,10 @@ const entries: HelpEntry[] = [
   { id: 'topology.context-menu', label: 'Context Menu', tooltip: 'Right-click nodes for quick actions', section: 'topology',
     description: 'Right-click any node in the topology graph to access quick actions:\n\n- **Open Terminal** — SSH into the VM (requires management IP, i.e., the node must be provisioned and running)\n- **View Components** — See attached hardware components\n- **Delete Component** — Remove a specific component\n- **Delete Node** — Remove the node from the slice\n\nThe context menu adapts based on the node\'s state and available actions.' },
 
+  // --- Sliver View ---
+  { id: 'sliver.table', label: 'Sliver Table', tooltip: 'Spreadsheet view of all slivers in the current slice', section: 'sliver',
+    description: 'A data-centric table showing every sliver (node, network, facility port) in the current slice as a row.\n\n**Features:**\n- **Type badges** — Color-coded pills: VM (teal), Net (blue), FP (orange)\n- **Sortable columns** — Click any column header to sort ascending/descending\n- **Filter** — Type in the search bar to filter by name, site, state, image, or type\n- **Selection** — Click a row to select it; the Editor and Detail panels update just like in the topology view\n\n**Columns:** Type, Name, Site, State, Cores, RAM, Disk, Image, Layer/Type, Mgmt IP, Components count, Interfaces count.\n\nThis view shares the same side panels (Editor, Templates, Detail) as the Topology view.' },
+
   // --- Detail Panel ---
   { id: 'detail.panel', label: 'Detail Panel', tooltip: 'View detailed properties of the selected element', section: 'detail',
     description: 'Shows detailed properties for the currently selected graph element:\n\n**For nodes:** Site, state, cores, RAM, disk, image, management IP, reservation state, username, SSH command, and all attached components with their interfaces.\n\n**For networks:** Type, layer, subnet, gateway, connected interfaces with VLANs and IPs.\n\n**For sites (in Map view):** Location, state, resource capacity and availability, component inventory, and live metrics (load averages, network throughput).\n\n**For links (in Map view):** Connected sites and bandwidth metrics.\n\nUse the tabs at the top to switch between Properties and Metrics views. The collapse button hides the panel to reclaim screen space.' },
@@ -183,6 +190,7 @@ export const helpSections: HelpSection[] = [
   { id: 'toolbar', title: 'Toolbar', entries: entries.filter(e => e.section === 'toolbar') },
   { id: 'editor', title: 'Editor Panel', entries: entries.filter(e => e.section === 'editor') },
   { id: 'topology', title: 'Topology View', entries: entries.filter(e => e.section === 'topology') },
+  { id: 'sliver', title: 'Sliver View', entries: entries.filter(e => e.section === 'sliver') },
   { id: 'detail', title: 'Detail Panel', entries: entries.filter(e => e.section === 'detail') },
   { id: 'map', title: 'Map View', entries: entries.filter(e => e.section === 'map') },
   { id: 'templates', title: 'Slice Templates', entries: entries.filter(e => e.section === 'templates') },
