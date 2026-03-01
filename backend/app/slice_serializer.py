@@ -122,6 +122,15 @@ def serialize_node(node) -> dict[str, Any]:
     except Exception:
         pass
 
+    # Error message (available on failed/closed slivers)
+    error_message = ""
+    try:
+        em = node.get_error_message()
+        if em:
+            error_message = str(em)
+    except Exception:
+        pass
+
     return {
         "name": _safe(node.get_name),
         "site": _safe(node.get_site),
@@ -133,6 +142,7 @@ def serialize_node(node) -> dict[str, Any]:
         "image_type": _safe(node.get_image_type),
         "management_ip": _safe(node.get_management_ip),
         "reservation_state": _safe(lambda: str(node.get_reservation_state())),
+        "error_message": error_message,
         "username": _safe(node.get_username),
         "user_data": user_data,
         "components": components,
@@ -185,11 +195,32 @@ def slice_to_dict(slice_obj) -> dict[str, Any]:
     except Exception:
         pass
 
+    # Collect slice-level error messages and notices
+    error_messages: list[dict[str, str]] = []
+    try:
+        for err in (slice_obj.get_error_messages() or []):
+            notice = err.get("notice", "")
+            if notice:
+                sliver = err.get("sliver")
+                sliver_name = ""
+                try:
+                    sliver_name = sliver.get_name() if sliver else ""
+                except Exception:
+                    pass
+                error_messages.append({
+                    "sliver": sliver_name,
+                    "message": str(notice),
+                })
+    except Exception:
+        pass
+
     return {
         "name": _safe(slice_obj.get_name),
         "id": _safe(slice_obj.get_slice_id),
         "state": _safe(lambda: str(slice_obj.get_state())),
+        "lease_start": _safe(lambda: str(slice_obj.get_lease_start()) if slice_obj.get_lease_start() else ""),
         "lease_end": _safe(lambda: str(slice_obj.get_lease_end()) if slice_obj.get_lease_end() else ""),
+        "error_messages": error_messages,
         "nodes": nodes,
         "networks": networks,
         "facility_ports": facility_ports,
@@ -197,9 +228,24 @@ def slice_to_dict(slice_obj) -> dict[str, Any]:
 
 
 def slice_summary(slice_obj) -> dict[str, Any]:
-    """Convert a FABlib Slice into a summary dict (for list view)."""
+    """Convert a FABlib Slice into a summary dict (for list view).
+
+    Note: has_errors is NOT included here (too expensive for large lists).
+    The caller should populate it from the slice registry instead.
+    """
     return {
         "name": _safe(slice_obj.get_name),
         "id": _safe(slice_obj.get_slice_id),
         "state": _safe(lambda: str(slice_obj.get_state())),
     }
+
+
+def check_has_errors(slice_obj) -> bool:
+    """Check whether a FABlib Slice has error messages."""
+    try:
+        errors = slice_obj.get_error_messages()
+        if errors:
+            return any(e.get("notice", "") for e in errors)
+    except Exception:
+        pass
+    return False

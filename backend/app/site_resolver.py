@@ -307,8 +307,8 @@ def resolve_sites(node_defs: list[dict], sites: list[dict]) -> tuple[list[dict],
         ]
 
         if candidates:
-            # Prefer site with most headroom
-            chosen = max(candidates, key=lambda s: availability[s]["cores"])
+            # Random choice among validated candidates to spread VMs across sites
+            chosen = random.choice(candidates)
         else:
             # Best-effort fallback
             chosen = max(availability, key=lambda s: availability[s]["cores"])

@@ -116,6 +116,7 @@ export default function EditorPanel({ sliceData, sliceName, onSliceUpdated, onCo
   // Determine if slice has site groups (from template)
   const hasSiteGroups = sliceData?.nodes.some(n => n.site_group) ?? false;
   const isDraft = sliceData?.state === 'Draft';
+  const isTerminal = sliceData?.state !== undefined && ['Dead', 'Closing', 'StableError'].includes(sliceData.state);
 
   const [remapping, setRemapping] = useState(false);
 
@@ -159,6 +160,17 @@ export default function EditorPanel({ sliceData, sliceName, onSliceUpdated, onCo
         </button>
       </div>
 
+      {/* Slice info bar — name, UUID, state, dates */}
+      {sliceData && (
+        <div className="editor-slice-info">
+          <span className="slice-info-name" title={sliceData.name}>{sliceData.name}</span>
+          <span className={`slice-info-state state-${sliceData.state?.toLowerCase() || 'unknown'}`}>{sliceData.state || '—'}</span>
+          {sliceData.id && <span className="slice-info-field" title={sliceData.id}>UUID: {sliceData.id.slice(0, 8)}...</span>}
+          {sliceData.lease_start && <span className="slice-info-field">Start: {new Date(sliceData.lease_start).toLocaleString()}</span>}
+          {sliceData.lease_end && <span className="slice-info-field">Expires: {new Date(sliceData.lease_end).toLocaleString()}</span>}
+        </div>
+      )}
+
       <>
       {/* Sliver selector + Add button + Site Mapping toggle */}
       <div className="editor-sliver-bar" data-help-id="editor.sliver-selector">
@@ -166,8 +178,9 @@ export default function EditorPanel({ sliceData, sliceName, onSliceUpdated, onCo
           sliceData={sliceData}
           selectedSliverKey={selectedSliverKey}
           onSelect={(key) => { handleSliverSelect(key); setShowSiteMapping(false); }}
+          errorMessages={sliceData?.error_messages}
         />
-        <AddSliverMenu onSelect={(type) => { handleAddSelect(type); setShowSiteMapping(false); }} />
+        {!isTerminal && <AddSliverMenu onSelect={(type) => { handleAddSelect(type); setShowSiteMapping(false); }} />}
         {hasSiteGroups && isDraft && (
           <Tooltip text="View and manage site group assignments from template. See which sites are assigned to each @group and reassign them.">
             <button

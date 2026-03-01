@@ -573,6 +573,54 @@ export default function App() {
     }
   }, [selectedSliceName]);
 
+  const handleArchiveSlice = useCallback(async () => {
+    if (!selectedSliceName) return;
+    setLoading(true);
+    setStatusMessage('Archiving slice...');
+    try {
+      await api.archiveSlice(selectedSliceName);
+      setSliceData(null);
+      setSelectedSliceName('');
+      setSelectedElement(null);
+      setValidationIssues([]);
+      setValidationValid(false);
+      try {
+        const list = await api.listSlices();
+        setSlices(list);
+        setListLoaded(true);
+      } catch {}
+    } catch (e: any) {
+      setErrors(prev => [...prev, e.message]);
+    } finally {
+      setLoading(false);
+      setStatusMessage('');
+    }
+  }, [selectedSliceName]);
+
+  const handleArchiveAllTerminal = useCallback(async () => {
+    setLoading(true);
+    setStatusMessage('Archiving terminal slices...');
+    try {
+      await api.archiveAllTerminal();
+      // If current slice was archived, clear it
+      const list = await api.listSlices();
+      setSlices(list);
+      setListLoaded(true);
+      if (selectedSliceName && !list.find(s => s.name === selectedSliceName)) {
+        setSliceData(null);
+        setSelectedSliceName('');
+        setSelectedElement(null);
+        setValidationIssues([]);
+        setValidationValid(false);
+      }
+    } catch (e: any) {
+      setErrors(prev => [...prev, e.message]);
+    } finally {
+      setLoading(false);
+      setStatusMessage('');
+    }
+  }, [selectedSliceName]);
+
   const handleNodeClick = useCallback((data: Record<string, string>) => {
     setSelectedElement(data);
   }, []);
@@ -824,6 +872,9 @@ export default function App() {
         infraLoaded={infraLoaded}
         statusMessage={statusMessage}
         onSaveSliceTemplate={handleSaveSliceTemplate}
+        onArchiveSlice={handleArchiveSlice}
+        onArchiveAllTerminal={handleArchiveAllTerminal}
+        hasErrors={sliceData?.error_messages != null && sliceData.error_messages.length > 0}
       />
 
       <HelpContextMenu onOpenHelp={handleOpenHelp} />
@@ -1125,6 +1176,7 @@ export default function App() {
                       dirty={sliceData?.dirty ?? false}
                       errors={errors}
                       onClearErrors={() => { setErrors([]); setValidationIssues([]); setValidationValid(false); }}
+                      sliceErrors={sliceData?.error_messages ?? []}
                       fullWidth={consoleFullWidth}
                       onToggleFullWidth={() => setConsoleFullWidth(fw => !fw)}
                       showWidthToggle={currentView === 'topology' || currentView === 'sliver'}
@@ -1167,6 +1219,7 @@ export default function App() {
           dirty={sliceData?.dirty ?? false}
           errors={errors}
           onClearErrors={() => { setErrors([]); setValidationIssues([]); setValidationValid(false); }}
+          sliceErrors={sliceData?.error_messages ?? []}
           fullWidth={consoleFullWidth}
           onToggleFullWidth={() => setConsoleFullWidth(fw => !fw)}
           showWidthToggle={currentView === 'topology' || currentView === 'sliver'}

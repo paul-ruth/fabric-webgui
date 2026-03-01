@@ -15,10 +15,16 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from app.fablib_manager import get_fablib
-from app.slice_serializer import slice_to_dict, slice_summary
+from app.slice_serializer import slice_to_dict, slice_summary, check_has_errors
 from app.graph_builder import build_graph
 from app.site_resolver import resolve_sites
 from app.routes.resources import get_cached_sites, get_fresh_sites
+from app.slice_registry import (
+    register_slice, update_slice_state, get_slice_uuid,
+    archive_slice as registry_archive_slice,
+    archive_all_terminal as registry_archive_all_terminal,
+    unregister_slice, get_all_entries, bulk_register, TERMINAL_STATES,
+)
 
 router = APIRouter(tags=["slices"])
 
@@ -59,6 +65,9 @@ def _resolve_vm_template(name: str) -> dict | None:
 # For new slices: created with new_slice() but not yet submitted.
 # For existing slices: loaded from FABRIC and being modified locally.
 # Keyed by slice name.
+#
+# New drafts are also persisted to disk so they survive container restarts.
+# Disk path: FABRIC_STORAGE_DIR/.drafts/<safe_name>/topology.graphml
 # ---------------------------------------------------------------------------
 _draft_lock = threading.Lock()
 _draft_slices: dict[str, Any] = {}
@@ -68,10 +77,112 @@ _draft_is_new: dict[str, bool] = {}
 _draft_site_groups: dict[str, dict[str, str]] = {}
 
 
+def _drafts_dir() -> str:
+    storage = os.environ.get("FABRIC_STORAGE_DIR", "/fabric_storage")
+    d = os.path.join(storage, ".drafts")
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def _safe_dir_name(name: str) -> str:
+    """Convert a slice name to a safe directory name."""
+    import re
+    return re.sub(r'[^\w\-. ]', '_', name).strip()
+
+
+def _persist_draft(name: str, slice_obj: Any) -> None:
+    """Save a new draft to disk so it survives restarts."""
+    try:
+        safe = _safe_dir_name(name)
+        d = os.path.join(_drafts_dir(), safe)
+        os.makedirs(d, exist_ok=True)
+        # Save topology
+        topo_path = os.path.join(d, "topology.graphml")
+        slice_obj.save(topo_path)
+        # Save metadata (original name, site groups)
+        meta = {"name": name}
+        groups = _draft_site_groups.get(name, {})
+        if groups:
+            meta["site_groups"] = groups
+        meta_path = os.path.join(d, "meta.json")
+        with open(meta_path, "w") as f:
+            json.dump(meta, f)
+        logger.debug("Persisted draft '%s' to disk", name)
+    except Exception:
+        logger.warning("Could not persist draft '%s' to disk", name, exc_info=True)
+
+
+def _delete_persistent_draft(name: str) -> None:
+    """Remove a draft's persistent files from disk."""
+    try:
+        import shutil
+        safe = _safe_dir_name(name)
+        d = os.path.join(_drafts_dir(), safe)
+        if os.path.isdir(d):
+            shutil.rmtree(d)
+            logger.debug("Deleted persistent draft '%s'", name)
+    except Exception:
+        logger.warning("Could not delete persistent draft '%s'", name, exc_info=True)
+
+
+def _load_persistent_drafts() -> None:
+    """Load all persisted drafts from disk into memory on startup."""
+    try:
+        fablib = get_fablib()
+    except Exception:
+        logger.warning("Cannot load persistent drafts: fablib not available yet")
+        return
+    drafts_root = _drafts_dir()
+    if not os.path.isdir(drafts_root):
+        return
+    for entry in os.listdir(drafts_root):
+        d = os.path.join(drafts_root, entry)
+        if not os.path.isdir(d):
+            continue
+        topo_path = os.path.join(d, "topology.graphml")
+        meta_path = os.path.join(d, "meta.json")
+        if not os.path.isfile(topo_path):
+            continue
+        # Read metadata
+        name = entry  # fallback to dir name
+        groups: dict[str, str] = {}
+        if os.path.isfile(meta_path):
+            try:
+                with open(meta_path) as f:
+                    meta = json.load(f)
+                name = meta.get("name", entry)
+                groups = meta.get("site_groups", {})
+            except Exception:
+                pass
+        # Skip if already in memory
+        if name in _draft_slices:
+            continue
+        # Skip if registry already has a UUID — this draft was submitted
+        existing_uuid = get_slice_uuid(name)
+        if existing_uuid:
+            logger.info("Skipping persistent draft '%s' — already submitted (uuid=%s), cleaning up", name, existing_uuid)
+            _delete_persistent_draft(name)
+            continue
+        try:
+            slice_obj = fablib.new_slice(name=name)
+            slice_obj.load(topo_path)
+            _draft_slices[name] = slice_obj
+            _draft_is_new[name] = True
+            if groups:
+                _draft_site_groups[name] = groups
+            register_slice(name, state="Draft")
+            logger.info("Restored persistent draft '%s' from disk", name)
+        except Exception:
+            logger.warning("Could not restore draft '%s' from disk", name, exc_info=True)
+
+
 def _store_draft(name: str, slice_obj: Any, is_new: bool = True) -> None:
     with _draft_lock:
         _draft_slices[name] = slice_obj
         _draft_is_new[name] = is_new
+    # Persist new drafts to disk
+    if is_new:
+        _persist_draft(name, slice_obj)
 
 
 def _pop_draft(name: str) -> tuple[Any | None, bool]:
@@ -115,11 +226,17 @@ def _get_site_groups(name: str) -> dict[str, str]:
 
 
 def _get_slice_obj(name: str):
-    """Return the slice object — draft first, then from FABRIC."""
+    """Return the slice object — draft first, then UUID lookup, then name."""
     draft = _get_draft(name)
     if draft is not None:
         return draft
     fablib = get_fablib()
+    uuid = get_slice_uuid(name)
+    if uuid:
+        try:
+            return fablib.get_slice(slice_id=uuid)
+        except Exception:
+            logger.debug("UUID lookup failed for '%s' (uuid=%s), falling back to name", name, uuid)
     return fablib.get_slice(name=name)
 
 
@@ -127,7 +244,9 @@ def _serialize(slice_obj, dirty: bool = False) -> dict[str, Any]:
     data = slice_to_dict(slice_obj)
     name = data.get("name", "")
     is_new = _is_new_draft(name) if _is_draft(name) else False
-    if is_new:
+    # Only mark as "Draft" if it's a genuinely new local slice with no UUID.
+    # A slice that has a UUID was submitted to FABRIC and must show its real state.
+    if is_new and not data.get("id"):
         data["state"] = "Draft"
     # Keep real state for loaded slices
     data["dirty"] = dirty
@@ -138,6 +257,9 @@ def _serialize(slice_obj, dirty: bool = False) -> dict[str, Any]:
             grp = site_groups.get(node["name"])
             if grp:
                 node["site_group"] = grp
+    # Re-persist new drafts to disk when modified
+    if dirty and is_new:
+        _persist_draft(name, slice_obj)
     graph = build_graph(data)
     return {**data, "graph": graph}
 
@@ -204,27 +326,152 @@ class ResolveSitesRequest(BaseModel):
 # Heavy FABlib calls use async + asyncio.to_thread() so they don't block
 # the event loop or exhaust the default threadpool for other requests.
 
+_persistent_drafts_loaded = False
+
 @router.get("/slices")
 async def list_slices() -> list[dict[str, Any]]:
-    """List all slices visible to the current user."""
-    def _do():
+    """List all slices visible to the current user.
+
+    1. Fast ``fablib.get_slices()`` — returns only active/non-terminal slices.
+    2. Bulk-register results into the registry.
+    3. For each non-archived registry entry with a UUID that was NOT in the
+       fast results, individually query by UUID to get its current state and
+       ``has_errors``.  This catches slices that transitioned to terminal
+       states (Dead, Closing, StableError) since the last list.
+    4. Append new (never-submitted) draft slices.
+    """
+    # Lazy-load persistent drafts on first list call
+    global _persistent_drafts_loaded
+    if not _persistent_drafts_loaded:
+        _persistent_drafts_loaded = True
+        try:
+            await asyncio.to_thread(_load_persistent_drafts)
+        except Exception:
+            logger.warning("Failed to load persistent drafts", exc_info=True)
+
+    def _fast_query():
         fablib = get_fablib()
         slices = fablib.get_slices()
         return [slice_summary(s) for s in slices]
     try:
-        results = await asyncio.to_thread(_do)
+        fabric_results = await asyncio.to_thread(_fast_query)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-    # Append only NEW (never-submitted) draft slices.
-    # Loaded slices (is_new=False) already appear from the FABRIC API;
-    # if they went Dead/Closing they are intentionally excluded.
-    existing_names = {r["name"] for r in results}
+    # Bulk-register all FABRIC results into registry (single write)
+    bulk_entries = []
+    for r in fabric_results:
+        bulk_entries.append({
+            "name": r["name"],
+            "uuid": r.get("id", ""),
+            "state": r.get("state", ""),
+            "has_errors": False,
+        })
+    if bulk_entries:
+        bulk_register(bulk_entries)
+
+    # Build set of names returned by the fast query
+    fast_names: set[str] = {r["name"] for r in fabric_results}
+
+    # Load non-archived registry entries
+    registry = get_all_entries(include_archived=False)
+
+    # Individually query registry entries NOT in fast results (by UUID)
+    stale_entries: list[tuple[str, dict]] = []
+    for name, entry in registry.items():
+        if name in fast_names:
+            continue
+        if entry.get("uuid"):
+            stale_entries.append((name, entry))
+
+    def _query_stale():
+        """Query each stale registry entry individually by UUID."""
+        fablib = get_fablib()
+        updated: list[dict[str, Any]] = []
+        for name, entry in stale_entries:
+            uuid = entry["uuid"]
+            try:
+                s = fablib.get_slice(slice_id=uuid)
+                state = str(s.get_state()) if s.get_state() else "Dead"
+                has_errors = check_has_errors(s)
+                sid = str(s.get_slice_id()) if s.get_slice_id() else uuid
+                update_slice_state(name, state, uuid=sid, has_errors=has_errors)
+                updated.append({
+                    "name": name,
+                    "id": sid,
+                    "state": state,
+                    "has_errors": has_errors,
+                })
+            except Exception:
+                # Slice purged or inaccessible — mark as Dead
+                update_slice_state(name, "Dead", uuid=uuid, has_errors=False)
+                updated.append({
+                    "name": name,
+                    "id": uuid,
+                    "state": "Dead",
+                    "has_errors": False,
+                })
+        return updated
+
+    stale_results: list[dict[str, Any]] = []
+    if stale_entries:
+        try:
+            stale_results = await asyncio.to_thread(_query_stale)
+        except Exception:
+            # Fall back to registry state if individual queries fail entirely
+            for name, entry in stale_entries:
+                stale_results.append({
+                    "name": name,
+                    "id": entry["uuid"],
+                    "state": entry.get("state", "Dead"),
+                    "has_errors": entry.get("has_errors", False),
+                })
+
+    results: list[dict[str, Any]] = []
+    seen_names: set[str] = set()
+
+    # Add all FABRIC results (active slices)
+    for r in fabric_results:
+        name = r["name"]
+        seen_names.add(name)
+        entry = registry.get(name)
+        r["has_errors"] = entry.get("has_errors", False) if entry else False
+        results.append(r)
+
+    # Add individually-queried stale results
+    for r in stale_results:
+        name = r["name"]
+        if name not in seen_names:
+            results.append(r)
+            seen_names.add(name)
+
+    # Append new (never-submitted) draft slices.
+    # A draft with a UUID in the registry was already submitted — skip it
+    # (the stale query above should have picked it up with its real state).
+    # Check ALL registry entries (including archived) to avoid resurrecting
+    # archived slices as drafts.
+    all_registry = get_all_entries(include_archived=True)
     with _draft_lock:
-        for name in _draft_slices:
-            if name not in existing_names and _draft_is_new.get(name, True):
-                results.append({"name": name, "id": "", "state": "Draft"})
+        for name in list(_draft_slices.keys()):
+            if name not in seen_names and _draft_is_new.get(name, True):
+                # Double-check: if registry has a UUID, this was submitted
+                reg_entry = all_registry.get(name)
+                if reg_entry and reg_entry.get("uuid"):
+                    # Submitted slice stuck in draft store — clean it up
+                    _draft_slices.pop(name, None)
+                    _draft_is_new.pop(name, None)
+                    _delete_persistent_draft(name)
+                    continue
+                results.append({"name": name, "id": "", "state": "Draft", "has_errors": False})
     return results
+
+
+@router.post("/slices/archive-terminal")
+async def archive_terminal_slices() -> dict[str, Any]:
+    """Archive all slices in terminal states (Dead, Closing, StableError)."""
+    archived = registry_archive_all_terminal()
+    return {"archived": archived, "count": len(archived)}
+
 
 
 @router.get("/slices/{slice_name}")
@@ -232,11 +479,24 @@ async def get_slice(slice_name: str) -> dict[str, Any]:
     """Get full slice data including topology graph."""
     def _do():
         slice_obj = _get_slice_obj(slice_name)
-        # When loading an existing (non-draft) slice, store it in drafts
-        # so subsequent edits are local until Submit
-        if not _is_draft(slice_name):
+        # Determine state before deciding whether to store as draft
+        state = str(slice_obj.get_state()) if slice_obj.get_state() else ""
+        # Only store as draft if NOT in a terminal state — terminal slices
+        # are read-only (viewable/clonable but not editable)
+        if not _is_draft(slice_name) and state not in TERMINAL_STATES:
             _store_draft(slice_name, slice_obj, is_new=False)
-        return _serialize(slice_obj)
+        data = _serialize(slice_obj)
+        # Update registry for non-draft slices (including has_errors)
+        if not _is_new_draft(slice_name):
+            try:
+                sid = str(slice_obj.get_slice_id()) if hasattr(slice_obj, 'get_slice_id') else ""
+                st = data.get("state", "")
+                has_errors = bool(data.get("error_messages"))
+                if sid or st:
+                    update_slice_state(slice_name, st, uuid=sid, has_errors=has_errors)
+            except Exception:
+                pass
+        return data
     try:
         return await asyncio.to_thread(_do)
     except Exception as e:
@@ -250,6 +510,7 @@ async def create_slice(name: str) -> dict[str, Any]:
         fablib = get_fablib()
         slice_obj = fablib.new_slice(name=name)
         _store_draft(name, slice_obj, is_new=True)
+        register_slice(name, state="Draft")
         return _serialize(slice_obj)
     try:
         return await asyncio.to_thread(_do)
@@ -264,7 +525,14 @@ async def submit_slice(slice_name: str) -> dict[str, Any]:
     site_groups = _get_site_groups(slice_name)
     draft, is_new = _pop_draft(slice_name)
     if draft is not None:
+        # Track whether submit() actually succeeded so we know whether
+        # to restore the draft on error or not.
+        submit_succeeded = False
+        submitted_uuid = ""
+        submitted_state = ""
+
         def _do():
+            nonlocal submit_succeeded, submitted_uuid, submitted_state
             if is_new:
                 # Force-refresh resource availability (including host-level)
                 # and re-resolve all node site assignments before submitting.
@@ -302,14 +570,92 @@ async def submit_slice(slice_name: str) -> dict[str, Any]:
                     except Exception as ex:
                         logger.warning("Submit re-resolve: could not set site for %s: %s", nd["name"], ex)
 
-                draft.submit()
+                submit_error = None
+                try:
+                    draft.submit()
+                except Exception as e:
+                    submit_error = e
+                    logger.warning("Submit: draft.submit() threw for '%s': %s", slice_name, e)
             else:
-                draft.submit(wait=False)
+                submit_error = None
+                try:
+                    draft.submit(wait=False)
+                except Exception as e:
+                    submit_error = e
+                    logger.warning("Submit: draft.submit() threw for '%s': %s", slice_name, e)
+
+            # Once submit() has been called (even if it threw), the slice
+            # may exist on FABRIC. Try to capture the UUID, retrying a few
+            # times since it may not be immediately available.
+            _capture_uuid_with_retry(draft, slice_name)
+
+            if submit_succeeded:
+                _delete_persistent_draft(slice_name)
+                if submit_error:
+                    # submit() threw but the slice exists on FABRIC (we got UUID).
+                    # Return what we have — the slice will show as terminal.
+                    return _serialize(draft)
+                return _serialize(draft)
+
+            # If we still don't have a UUID, re-raise the original error
+            # so the draft gets restored.
+            if submit_error:
+                raise submit_error
+
+            # submit() returned normally but we couldn't get a UUID (unlikely)
+            submit_succeeded = True
             return _serialize(draft)
+
+        def _capture_uuid_with_retry(d, name):
+            """Try to capture UUID from the draft object, retrying with delays.
+
+            FABlib may not populate the slice_id immediately after submit().
+            We retry a few times with short delays to give it time."""
+            nonlocal submit_succeeded, submitted_uuid, submitted_state
+            import time
+            for attempt in range(6):  # try up to 6 times (~15s total)
+                try:
+                    sid = str(d.get_slice_id()) if d.get_slice_id() else ""
+                    if sid:
+                        submitted_uuid = sid
+                        try:
+                            submitted_state = str(d.get_state()) if d.get_state() else "Configuring"
+                        except Exception:
+                            submitted_state = "Configuring"
+                        submit_succeeded = True
+                        update_slice_state(name, submitted_state, uuid=submitted_uuid)
+                        logger.info("Submit: slice '%s' uuid=%s, state=%s (attempt %d)",
+                                    name, submitted_uuid, submitted_state, attempt + 1)
+                        return
+                except Exception:
+                    pass
+                if attempt < 5:
+                    logger.info("Submit: no UUID yet for '%s', retrying in %ds (attempt %d/6)",
+                                name, (attempt + 1), attempt + 1)
+                    time.sleep(attempt + 1)  # 1, 2, 3, 4, 5 seconds
+            logger.warning("Submit: could not capture UUID for '%s' after retries", name)
         try:
             return await asyncio.to_thread(_do)
         except Exception as e:
-            # Put draft back so user can retry
+            if submit_succeeded:
+                # Submit worked but post-submit serialization failed.
+                # Do NOT restore the draft — the slice is on FABRIC now.
+                logger.warning("Submit succeeded for '%s' but post-submit failed: %s", slice_name, e)
+                # Return minimal data so frontend knows it worked
+                return {
+                    "name": slice_name,
+                    "id": submitted_uuid,
+                    "state": submitted_state or "Configuring",
+                    "dirty": False,
+                    "lease_start": "",
+                    "lease_end": "",
+                    "error_messages": [],
+                    "nodes": [],
+                    "networks": [],
+                    "facility_ports": [],
+                    "graph": {"nodes": [], "edges": []},
+                }
+            # Submit itself failed — restore draft so user can retry
             _store_draft(slice_name, draft, is_new=is_new)
             if site_groups:
                 _store_site_groups(slice_name, site_groups)
@@ -320,19 +666,55 @@ async def submit_slice(slice_name: str) -> dict[str, Any]:
 
 @router.post("/slices/{slice_name}/refresh")
 async def refresh_slice(slice_name: str) -> dict[str, Any]:
-    """Refresh slice state from FABRIC (discards local edits)."""
+    """Refresh slice state from FABRIC (discards local edits).
+
+    For new drafts (never submitted, no UUID on FABRIC), just return the
+    current draft without hitting FABRIC — there is nothing to refresh.
+    """
+    # Check if this is a new draft with no UUID — nothing to refresh from FABRIC
+    if _is_draft(slice_name) and _is_new_draft(slice_name):
+        uuid = get_slice_uuid(slice_name)
+        if not uuid:
+            draft = _get_draft(slice_name)
+            if draft is not None:
+                return _serialize(draft)
+
     # Drop any draft — reload fresh from FABRIC
-    _pop_draft(slice_name)
+    draft_backup, is_new_backup = _pop_draft(slice_name)
+    site_groups_backup = _get_site_groups(slice_name)
+
     def _do():
         fablib = get_fablib()
-        slice_obj = fablib.get_slice(name=slice_name)
+        # Use UUID if available for reliable lookup
+        uuid = get_slice_uuid(slice_name)
+        if uuid:
+            try:
+                slice_obj = fablib.get_slice(slice_id=uuid)
+            except Exception:
+                slice_obj = fablib.get_slice(name=slice_name)
+        else:
+            slice_obj = fablib.get_slice(name=slice_name)
         slice_obj.update()
-        # Store fresh copy as draft for further editing
-        _store_draft(slice_name, slice_obj, is_new=False)
+        # Update registry with current state (including has_errors)
+        try:
+            sid = str(slice_obj.get_slice_id())
+            state = str(slice_obj.get_state())
+            has_errors = check_has_errors(slice_obj)
+            update_slice_state(slice_name, state, uuid=sid, has_errors=has_errors)
+        except Exception:
+            state = ""
+        # Only store as draft if NOT terminal — terminal slices are read-only
+        if state not in TERMINAL_STATES:
+            _store_draft(slice_name, slice_obj, is_new=False)
         return _serialize(slice_obj)
     try:
         return await asyncio.to_thread(_do)
     except Exception as e:
+        # Restore draft so user doesn't lose their work
+        if draft_backup is not None:
+            _store_draft(slice_name, draft_backup, is_new=is_new_backup)
+            if site_groups_backup:
+                _store_site_groups(slice_name, site_groups_backup)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -415,17 +797,35 @@ async def delete_slice(slice_name: str) -> dict[str, str]:
     draft, is_new = _pop_draft(slice_name)
     if draft is not None and is_new:
         # Just a draft that was never submitted — discard it
+        _delete_persistent_draft(slice_name)
+        unregister_slice(slice_name)
         return {"status": "deleted", "name": slice_name}
     # Delete the actual slice from FABRIC
     def _do():
         fablib = get_fablib()
-        slice_obj = fablib.get_slice(name=slice_name)
+        # Use UUID if available for reliable lookup
+        uuid = get_slice_uuid(slice_name)
+        if uuid:
+            try:
+                slice_obj = fablib.get_slice(slice_id=uuid)
+            except Exception:
+                slice_obj = fablib.get_slice(name=slice_name)
+        else:
+            slice_obj = fablib.get_slice(name=slice_name)
         slice_obj.delete()
+        update_slice_state(slice_name, "Dead")
         return {"status": "deleted", "name": slice_name}
     try:
         return await asyncio.to_thread(_do)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/slices/{slice_name}/archive")
+async def archive_slice_endpoint(slice_name: str) -> dict[str, str]:
+    """Archive a slice (hide from list without deleting)."""
+    registry_archive_slice(slice_name)
+    return {"status": "archived", "name": slice_name}
 
 
 @router.get("/slices/{slice_name}/validate")

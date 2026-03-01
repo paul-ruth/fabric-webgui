@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import type { SliceData, SliceNode, SliceNetwork, SiteDetail, SiteMetrics, LinkMetrics } from '../types/fabric';
+import type { SliceData, SliceNode, SliceNetwork, SliceErrorMessage, SiteDetail, SiteMetrics, LinkMetrics } from '../types/fabric';
 import { getSiteDetail } from '../api/client';
 import '../styles/editor.css';
 
@@ -116,6 +116,7 @@ function PropTable({ rows }: { rows: [string, string | number | undefined][] }) 
 }
 
 function NodeDetail({ node, data }: { node: SliceNode | null; data: Record<string, string> }) {
+  const errorMessage = node?.error_message || '';
   return (
     <>
       <PropTable rows={[
@@ -130,6 +131,8 @@ function NodeDetail({ node, data }: { node: SliceNode | null; data: Record<strin
         ['Mgmt IP', data.management_ip || '—'],
         ['Username', data.username || '—'],
       ]} />
+
+      {errorMessage && <NodeErrorBadge message={errorMessage} />}
 
       {node?.components && node.components.length > 0 && (
         <>
@@ -221,7 +224,108 @@ function InterfaceDetail({ data }: { data: Record<string, string> }) {
   );
 }
 
+const TERMINAL_STATES = new Set(['Dead', 'Closing', 'StableError']);
+
+interface ErrorDiagnosis {
+  category: string;
+  summary: string;
+  remedy: string;
+}
+
+function diagnoseError(message: string): ErrorDiagnosis {
+  const msg = message.toLowerCase();
+  if (msg.includes('could not find image') || msg.includes('image not found')) {
+    const match = message.match(/image\s+([\w_]+)/i);
+    const imageName = match?.[1] || 'the requested image';
+    return {
+      category: 'Image Not Found',
+      summary: `The image "${imageName}" is not available on the target site.`,
+      remedy: 'Change the node image to one available on the target site (e.g. default_ubuntu_22, default_centos_9), or try a different site.',
+    };
+  }
+  if (msg.includes('insufficient resources') || msg.includes('no hosts available')) {
+    return {
+      category: 'Insufficient Resources',
+      summary: 'The target site does not have enough resources to provision this node.',
+      remedy: 'Try a different site with more available resources, reduce the node size (cores/RAM/disk), or remove specialized components (GPUs, SmartNICs) that may have limited availability.',
+    };
+  }
+  if (msg.includes('closing reservation due to failure in slice')) {
+    return {
+      category: 'Cascade Failure',
+      summary: 'This resource was closed because another resource in the slice failed.',
+      remedy: 'Fix the root-cause failure on the other node/network first, then resubmit.',
+    };
+  }
+  if (msg.includes('predecessor reservation') && msg.includes('terminal state')) {
+    return {
+      category: 'Dependency Failure',
+      summary: 'A network or dependent resource failed because its parent node failed first.',
+      remedy: 'Fix the root-cause failure on the parent node, then resubmit.',
+    };
+  }
+  if (msg.includes('expired') || msg.includes('lease')) {
+    return {
+      category: 'Lease Expired',
+      summary: 'The slice lease expired and the resources were reclaimed.',
+      remedy: 'Create a new slice. Use a longer lease period or renew the lease before it expires.',
+    };
+  }
+  return {
+    category: 'Error',
+    summary: message.length > 200 ? message.slice(0, 200) + '...' : message,
+    remedy: 'Review the error message for details. You may need to adjust the slice configuration and resubmit.',
+  };
+}
+
+function SliceErrorPanel({ errors }: { errors: SliceErrorMessage[] }) {
+  if (!errors || errors.length === 0) return null;
+
+  // Deduplicate and diagnose
+  const seen = new Set<string>();
+  const diagnosed: Array<{ sliver: string; diagnosis: ErrorDiagnosis; raw: string }> = [];
+  for (const err of errors) {
+    const key = err.message;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    diagnosed.push({ sliver: err.sliver, diagnosis: diagnoseError(err.message), raw: err.message });
+  }
+
+  return (
+    <div className="slice-error-panel">
+      <div className="slice-error-header">Slice Failed</div>
+      {diagnosed.map((d, i) => (
+        <div key={i} className="slice-error-entry">
+          <div className="slice-error-category">
+            {d.diagnosis.category}
+            {d.sliver && <span className="slice-error-sliver"> — {d.sliver}</span>}
+          </div>
+          <div className="slice-error-summary">{d.diagnosis.summary}</div>
+          <div className="slice-error-remedy">
+            <strong>Suggested fix:</strong> {d.diagnosis.remedy}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function NodeErrorBadge({ message }: { message: string }) {
+  if (!message) return null;
+  const diagnosis = diagnoseError(message);
+  return (
+    <div className="node-error-badge">
+      <div className="node-error-category">{diagnosis.category}</div>
+      <div className="node-error-summary">{diagnosis.summary}</div>
+      <div className="node-error-remedy"><strong>Fix:</strong> {diagnosis.remedy}</div>
+    </div>
+  );
+}
+
 function SliceDetailView({ data, sliceData }: { data: Record<string, string>; sliceData: SliceData }) {
+  const isTerminal = TERMINAL_STATES.has(sliceData.state);
+  const hasErrors = sliceData.error_messages && sliceData.error_messages.length > 0;
+
   return (
     <>
       <PropTable rows={[
@@ -232,6 +336,18 @@ function SliceDetailView({ data, sliceData }: { data: Record<string, string>; sl
         ['Nodes', String(sliceData.nodes.length)],
         ['Networks', String(sliceData.networks.length)],
       ]} />
+
+      {isTerminal && !hasErrors && (
+        <div className="slice-terminal-notice">
+          This slice is <strong>{sliceData.state}</strong> — it has been shut down and resources have been released. No errors were reported.
+        </div>
+      )}
+
+      {isTerminal && hasErrors && (
+        <div className="slice-terminal-notice" style={{ borderLeftColor: '#e25241', color: '#e25241' }}>
+          This slice has failed — see <strong>Slice Errors</strong> tab in the console for details.
+        </div>
+      )}
     </>
   );
 }

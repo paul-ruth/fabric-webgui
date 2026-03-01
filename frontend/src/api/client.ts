@@ -46,6 +46,14 @@ export function deleteSlice(name: string): Promise<{ status: string }> {
   return fetchJson(`/slices/${encodeURIComponent(name)}`, { method: 'DELETE' });
 }
 
+export function archiveSlice(name: string): Promise<{ status: string; name: string }> {
+  return fetchJson(`/slices/${encodeURIComponent(name)}/archive`, { method: 'POST' });
+}
+
+export function archiveAllTerminal(): Promise<{ archived: string[]; count: number }> {
+  return fetchJson('/slices/archive-terminal', { method: 'POST' });
+}
+
 export function cloneSlice(name: string, newName: string): Promise<SliceData> {
   return fetchJson(`/slices/${encodeURIComponent(name)}/clone?new_name=${encodeURIComponent(newName)}`, { method: 'POST' });
 }

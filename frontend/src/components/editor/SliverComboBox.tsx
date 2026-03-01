@@ -1,21 +1,29 @@
 import { useState, useRef, useEffect } from 'react';
-import type { SliceData } from '../../types/fabric';
+import type { SliceData, SliceErrorMessage } from '../../types/fabric';
 
 export interface SliverOption {
   key: string;       // e.g. "node:node1", "net:net1", "fp:port1"
   name: string;
   type: string;      // display badge: "VM", "L2Bridge", "IPv4", "FP"
   group: string;     // "Nodes (VMs)" | "Networks" | "Facility Ports"
+  hasFailed: boolean;
 }
 
 interface SliverComboBoxProps {
   sliceData: SliceData | null;
   selectedSliverKey: string;
   onSelect: (key: string) => void;
+  errorMessages?: SliceErrorMessage[];
 }
 
-function buildOptions(sliceData: SliceData | null): SliverOption[] {
+function buildOptions(sliceData: SliceData | null, errorMessages?: SliceErrorMessage[]): SliverOption[] {
   if (!sliceData) return [];
+  const failedNames = new Set<string>();
+  if (errorMessages) {
+    for (const err of errorMessages) {
+      if (err.sliver) failedNames.add(err.sliver);
+    }
+  }
   const options: SliverOption[] = [];
 
   for (const node of sliceData.nodes) {
@@ -24,6 +32,7 @@ function buildOptions(sliceData: SliceData | null): SliverOption[] {
       name: node.name,
       type: 'VM',
       group: 'Nodes (VMs)',
+      hasFailed: failedNames.has(node.name),
     });
   }
   for (const net of sliceData.networks) {
@@ -32,6 +41,7 @@ function buildOptions(sliceData: SliceData | null): SliverOption[] {
       name: net.name,
       type: net.type,
       group: 'Networks',
+      hasFailed: failedNames.has(net.name),
     });
   }
   for (const fp of (sliceData.facility_ports ?? [])) {
@@ -40,18 +50,19 @@ function buildOptions(sliceData: SliceData | null): SliverOption[] {
       name: fp.name,
       type: 'FP',
       group: 'Facility Ports',
+      hasFailed: failedNames.has(fp.name),
     });
   }
   return options;
 }
 
-export default function SliverComboBox({ sliceData, selectedSliverKey, onSelect }: SliverComboBoxProps) {
+export default function SliverComboBox({ sliceData, selectedSliverKey, onSelect, errorMessages }: SliverComboBoxProps) {
   const [open, setOpen] = useState(false);
   const [filter, setFilter] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
-  const allOptions = buildOptions(sliceData);
+  const allOptions = buildOptions(sliceData, errorMessages);
   const filtered = filter
     ? allOptions.filter((o) => o.name.toLowerCase().includes(filter.toLowerCase()))
     : allOptions;
@@ -106,6 +117,7 @@ export default function SliverComboBox({ sliceData, selectedSliverKey, onSelect 
             {selectedOption ? (
               <>
                 <span className="sliver-combo-name">{selectedOption.name}</span>
+                {selectedOption.hasFailed && <span className="sliver-badge sliver-badge-failed">Failed</span>}
                 <span className={`sliver-badge sliver-badge-${selectedOption.type === 'VM' ? 'vm' : selectedOption.type === 'FP' ? 'fp' : 'net'}`}>
                   {selectedOption.type}
                 </span>
@@ -131,7 +143,7 @@ export default function SliverComboBox({ sliceData, selectedSliverKey, onSelect 
                 {opts.map((opt) => (
                   <div
                     key={opt.key}
-                    className={`sliver-combo-option ${opt.key === selectedSliverKey ? 'selected' : ''}`}
+                    className={`sliver-combo-option ${opt.key === selectedSliverKey ? 'selected' : ''} ${opt.hasFailed ? 'failed' : ''}`}
                     onClick={() => {
                       onSelect(opt.key);
                       setOpen(false);
@@ -139,6 +151,7 @@ export default function SliverComboBox({ sliceData, selectedSliverKey, onSelect 
                     }}
                   >
                     <span className="sliver-combo-opt-name">{opt.name}</span>
+                    {opt.hasFailed && <span className="sliver-badge sliver-badge-failed">Failed</span>}
                     <span className={`sliver-badge sliver-badge-${opt.type === 'VM' ? 'vm' : opt.type === 'FP' ? 'fp' : 'net'}`}>
                       {opt.type}
                     </span>

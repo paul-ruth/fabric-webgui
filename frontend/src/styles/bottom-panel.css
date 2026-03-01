@@ -365,3 +365,37 @@
 .bp-error-message {
   color: #e0e0e0;
 }
+
+/* Slice Errors tab */
+.bp-slice-error-entry {
+  padding: 8px 12px;
+  border-left: 3px solid #ef5350;
+  margin-bottom: 8px;
+  background: rgba(226, 82, 65, 0.06);
+  border-radius: 0 4px 4px 0;
+}
+
+.bp-slice-error-category {
+  font-weight: 700;
+  font-size: 13px;
+  color: #ef5350;
+  margin-bottom: 4px;
+}
+
+.bp-slice-error-sliver {
+  font-weight: 400;
+  color: #ffb74d;
+}
+
+.bp-slice-error-summary {
+  font-size: 13px;
+  color: #e0e0e0;
+  margin-bottom: 4px;
+  line-height: 1.4;
+}
+
+.bp-slice-error-remedy {
+  font-size: 12px;
+  color: #8ac9ef;
+  line-height: 1.4;
+}

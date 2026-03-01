@@ -261,6 +261,34 @@
 .slice-combo-state.Dead { background: var(--state-dead-bg); color: var(--state-dead); }
 .slice-combo-state.Draft { background: rgba(87, 152, 188, 0.15); color: #5798bc; }
 
+/* Terminal slice options — muted styling for clean deaths */
+.slice-combo-option-terminal {
+  opacity: 0.6;
+}
+.slice-combo-option-terminal:hover {
+  opacity: 0.85;
+}
+/* Terminal with errors — prominent red tint */
+.slice-combo-option-terminal.has-errors {
+  opacity: 1;
+  background: rgba(226, 82, 65, 0.06);
+}
+.slice-combo-option-terminal.has-errors:hover {
+  background: rgba(226, 82, 65, 0.12);
+}
+
+/* Red dot for slices with errors */
+.slice-combo-error-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--state-error, #e25241);
+  margin-right: 5px;
+  vertical-align: middle;
+  flex-shrink: 0;
+}
+
 .slice-combo-empty {
   padding: 12px;
   font-size: 12px;
@@ -329,4 +357,30 @@
   display: flex;
   gap: 8px;
   justify-content: flex-end;
+}
+
+/* Slice UUID display */
+.toolbar-slice-uuid {
+  font-family: monospace;
+  font-size: 11px;
+  color: var(--fabric-text-muted);
+  background: rgba(87, 152, 188, 0.1);
+  padding: 2px 6px;
+  border-radius: 4px;
+  cursor: default;
+  user-select: all;
+}
+
+/* Archive buttons */
+.toolbar-btn-archive,
+.toolbar-btn-archive-all {
+  background: var(--state-dead-bg, rgba(120, 120, 120, 0.15));
+  color: var(--state-dead, #888);
+  border: 1px solid var(--state-dead, #888);
+  font-size: 11px;
+}
+.toolbar-btn-archive:hover:not(:disabled),
+.toolbar-btn-archive-all:hover:not(:disabled) {
+  background: var(--state-dead, #888);
+  color: #fff;
 }

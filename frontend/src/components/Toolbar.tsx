@@ -3,6 +3,8 @@ import type { SliceSummary } from '../types/fabric';
 import Tooltip from './Tooltip';
 import '../styles/toolbar.css';
 
+const TERMINAL_STATES = new Set(['Dead', 'Closing', 'StableError']);
+
 interface ToolbarProps {
   slices: SliceSummary[];
   selectedSlice: string;
@@ -24,6 +26,9 @@ interface ToolbarProps {
   infraLoaded: boolean;
   statusMessage?: string;
   onSaveSliceTemplate?: () => void;
+  onArchiveSlice?: () => void;
+  onArchiveAllTerminal?: () => void;
+  hasErrors?: boolean;
 }
 
 export default function Toolbar(props: ToolbarProps) {
@@ -89,6 +94,8 @@ export default function Toolbar(props: ToolbarProps) {
   const isDraft = props.sliceState === 'Draft';
   const canSubmit = isDraft || props.dirty;
   const hasSlice = !!props.selectedSlice && !!props.sliceState;
+  const isTerminal = TERMINAL_STATES.has(props.sliceState);
+  const hasTerminalSlices = props.slices.some(s => TERMINAL_STATES.has(s.state));
 
   const loadLabel = hasSlice ? 'Reload' : 'Load';
   const loadTitle = hasSlice
@@ -133,18 +140,19 @@ export default function Toolbar(props: ToolbarProps) {
           </button>
           {sliceDropOpen && (() => {
             const q = sliceFilter.toLowerCase();
-            const fabricSlices = props.slices.filter((s) => s.state !== 'Draft' && s.name.toLowerCase().includes(q));
+            const activeSlices = props.slices.filter((s) => s.state !== 'Draft' && !TERMINAL_STATES.has(s.state) && s.name.toLowerCase().includes(q));
+            const terminalSlices = props.slices.filter((s) => TERMINAL_STATES.has(s.state) && s.name.toLowerCase().includes(q));
             const draftSlices = props.slices.filter((s) => s.state === 'Draft' && s.name.toLowerCase().includes(q));
-            const hasResults = fabricSlices.length > 0 || draftSlices.length > 0;
+            const hasResults = activeSlices.length > 0 || terminalSlices.length > 0 || draftSlices.length > 0;
             return (
               <div className="slice-combo-dropdown">
                 {!hasResults && (
                   <div className="slice-combo-empty">No matching slices</div>
                 )}
-                {fabricSlices.length > 0 && (
+                {activeSlices.length > 0 && (
                   <>
                     <div className="slice-combo-group-label">FABRIC Slices</div>
-                    {fabricSlices.map((s) => {
+                    {activeSlices.map((s) => {
                       const isSelected = s.name === props.selectedSlice;
                       const dirtyMark = isSelected && props.dirty ? ' *' : '';
                       return (
@@ -162,6 +170,30 @@ export default function Toolbar(props: ToolbarProps) {
                         </button>
                       );
                     })}
+                  </>
+                )}
+                {terminalSlices.length > 0 && (
+                  <>
+                    <div className="slice-combo-group-label">Terminal Slices</div>
+                    {terminalSlices.map((s) => (
+                      <button
+                        key={`${s.name}-${s.id}`}
+                        className={`slice-combo-option slice-combo-option-terminal ${s.has_errors ? 'has-errors' : ''} ${s.name === props.selectedSlice ? 'active' : ''}`}
+                        onClick={() => {
+                          props.onSelectSlice(s.name);
+                          setSliceDropOpen(false);
+                          setSliceFilter('');
+                        }}
+                      >
+                        <span className="slice-combo-name">
+                          {s.has_errors && <span className="slice-combo-error-dot" title="This slice has errors" />}
+                          {s.name}
+                        </span>
+                        <span className={`slice-combo-state ${s.has_errors ? 'StableError' : s.state}`}>
+                          {s.has_errors ? 'Failed' : s.state}
+                        </span>
+                      </button>
+                    ))}
                   </>
                 )}
                 {draftSlices.length > 0 && (
@@ -252,11 +284,35 @@ export default function Toolbar(props: ToolbarProps) {
             Save as Template
           </button>
         </Tooltip>
+
+        {hasSlice && isTerminal && (
+          <Tooltip text="Archive this slice (hide from list)">
+            <button
+              className="toolbar-btn toolbar-btn-archive"
+              onClick={() => props.onArchiveSlice?.()}
+              disabled={props.loading}
+            >
+              Archive
+            </button>
+          </Tooltip>
+        )}
+
+        {hasTerminalSlices && (
+          <Tooltip text="Archive all Dead/Closing/Error slices">
+            <button
+              className="toolbar-btn toolbar-btn-archive-all"
+              onClick={() => props.onArchiveAllTerminal?.()}
+              disabled={props.loading}
+            >
+              Archive All Terminal
+            </button>
+          </Tooltip>
+        )}
       </div>
 
       {props.sliceState && (
-        <span className={`status-badge ${props.sliceState}`}>
-          {props.sliceState}{props.dirty ? ' *' : ''}
+        <span className={`status-badge ${props.hasErrors && isTerminal ? 'StableError' : props.sliceState}`}>
+          {props.hasErrors && isTerminal ? 'Failed' : props.sliceState}{props.dirty ? ' *' : ''}
         </span>
       )}
 

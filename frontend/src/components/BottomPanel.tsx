@@ -3,7 +3,7 @@ import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
 import '../styles/bottom-panel.css';
-import type { ValidationIssue } from '../types/fabric';
+import type { ValidationIssue, SliceErrorMessage } from '../types/fabric';
 import LogView from './LogView';
 
 export interface TerminalTab {
@@ -23,6 +23,7 @@ interface BottomPanelProps {
   dirty: boolean;
   errors: string[];
   onClearErrors: () => void;
+  sliceErrors: SliceErrorMessage[];
   fullWidth?: boolean;
   onToggleFullWidth?: () => void;
   showWidthToggle?: boolean;
@@ -55,7 +56,7 @@ const TERM_THEME = {
   brightWhite: '#ffffff',
 };
 
-export default function BottomPanel({ terminals, onCloseTerminal, validationIssues, validationValid, sliceState, dirty, errors, onClearErrors, fullWidth = true, onToggleFullWidth, showWidthToggle = false, expanded, onExpandedChange, panelHeight, onPanelHeightChange }: BottomPanelProps) {
+export default function BottomPanel({ terminals, onCloseTerminal, validationIssues, validationValid, sliceState, dirty, errors, onClearErrors, sliceErrors, fullWidth = true, onToggleFullWidth, showWidthToggle = false, expanded, onExpandedChange, panelHeight, onPanelHeightChange }: BottomPanelProps) {
   const setExpanded = onExpandedChange;
   const setPanelHeight = onPanelHeightChange;
   const [activeTab, setActiveTab] = useState('validation');
@@ -80,6 +81,16 @@ export default function BottomPanel({ terminals, onCloseTerminal, validationIssu
     prevErrorCount.current = errors.length;
   }, [errors.length]);
 
+  // Auto-switch to slice errors tab when slice errors arrive
+  const prevSliceErrorCount = useRef(sliceErrors.length);
+  useEffect(() => {
+    if (sliceErrors.length > 0 && prevSliceErrorCount.current === 0) {
+      setActiveTab('slice-errors');
+      setExpanded(true);
+    }
+    prevSliceErrorCount.current = sliceErrors.length;
+  }, [sliceErrors.length, setExpanded]);
+
   // If active tab was closed, switch to validation
   useEffect(() => {
     if (
@@ -87,6 +98,7 @@ export default function BottomPanel({ terminals, onCloseTerminal, validationIssu
       activeTab !== 'log' &&
       activeTab !== 'validation' &&
       activeTab !== 'local-terminal' &&
+      activeTab !== 'slice-errors' &&
       !terminals.find((t) => t.id === activeTab)
     ) {
       setActiveTab('validation');
@@ -127,12 +139,14 @@ export default function BottomPanel({ terminals, onCloseTerminal, validationIssu
   const validationErrorCount = validationIssues.filter((i) => i.severity === 'error').length;
   const warnCount = validationIssues.filter((i) => i.severity === 'warning').length;
   const apiErrorCount = errors.length;
+  const sliceErrorCount = sliceErrors.length;
 
   if (!expanded) {
     return (
       <div className="bottom-panel-collapsed">
         <span className="bottom-panel-collapsed-label" onClick={() => setExpanded(true)}>
           ▲ Console
+          {sliceErrorCount > 0 && <span className="bottom-panel-badge error">{sliceErrorCount} slice error{sliceErrorCount !== 1 ? 's' : ''}</span>}
           {apiErrorCount > 0 && <span className="bottom-panel-badge error">{apiErrorCount} error{apiErrorCount !== 1 ? 's' : ''}</span>}
           <span className={`bottom-panel-badge ${validationErrorCount > 0 ? 'warn' : 'ok'}`}>{validationErrorCount} validation</span>
           {warnCount > 0 && <span className="bottom-panel-badge warn">{warnCount} warning{warnCount !== 1 ? 's' : ''}</span>}
@@ -158,6 +172,15 @@ export default function BottomPanel({ terminals, onCloseTerminal, validationIssu
     <div className="bottom-panel" style={{ height: panelHeight }}>
       <div className="bp-resize-handle" onMouseDown={handleDragStart} />
       <div className="bottom-panel-tabs">
+        {sliceErrorCount > 0 && (
+          <button
+            className={`bp-tab ${activeTab === 'slice-errors' ? 'active' : ''}`}
+            onClick={() => setActiveTab('slice-errors')}
+          >
+            Slice Errors
+            <span className="bp-tab-badge error">{sliceErrorCount}</span>
+          </button>
+        )}
         <button
           className={`bp-tab ${activeTab === 'errors' ? 'active' : ''}`}
           onClick={() => setActiveTab('errors')}
@@ -218,6 +241,9 @@ export default function BottomPanel({ terminals, onCloseTerminal, validationIssu
         <button className="bp-collapse-btn" onClick={() => setExpanded(false)} title="Collapse panel">▼</button>
       </div>
       <div className="bottom-panel-content">
+        <div style={{ display: activeTab === 'slice-errors' ? 'flex' : 'none', flex: 1, overflow: 'hidden' }}>
+          <SliceErrorsView errors={sliceErrors} />
+        </div>
         <div style={{ display: activeTab === 'errors' ? 'flex' : 'none', flex: 1, overflow: 'hidden' }}>
           <div className="bp-errors-list">
             <div className="bp-errors-header">
@@ -251,6 +277,99 @@ export default function BottomPanel({ terminals, onCloseTerminal, validationIssu
           </div>
         ))}
       </div>
+    </div>
+  );
+}
+
+// --- Slice Errors View ---
+
+interface ErrorDiagnosis {
+  category: string;
+  summary: string;
+  remedy: string;
+}
+
+function diagnoseError(message: string): ErrorDiagnosis {
+  const msg = message.toLowerCase();
+  if (msg.includes('could not find image') || msg.includes('image not found')) {
+    const match = message.match(/image\s+([\w_]+)/i);
+    const imageName = match?.[1] || 'the requested image';
+    return {
+      category: 'Image Not Found',
+      summary: `The image "${imageName}" is not available on the target site.`,
+      remedy: 'Change the node image to one available on the target site (e.g. default_ubuntu_22, default_centos_9), or try a different site.',
+    };
+  }
+  if (msg.includes('insufficient resources') || msg.includes('no hosts available')) {
+    return {
+      category: 'Insufficient Resources',
+      summary: 'The target site does not have enough resources to provision this node.',
+      remedy: 'Try a different site with more available resources, reduce the node size (cores/RAM/disk), or remove specialized components (GPUs, SmartNICs) that may have limited availability.',
+    };
+  }
+  if (msg.includes('closing reservation due to failure in slice')) {
+    return {
+      category: 'Cascade Failure',
+      summary: 'This resource was closed because another resource in the slice failed.',
+      remedy: 'Fix the root-cause failure on the other node/network first, then resubmit.',
+    };
+  }
+  if (msg.includes('predecessor reservation') && msg.includes('terminal state')) {
+    return {
+      category: 'Dependency Failure',
+      summary: 'A network or dependent resource failed because its parent node failed first.',
+      remedy: 'Fix the root-cause failure on the parent node, then resubmit.',
+    };
+  }
+  if (msg.includes('expired') || msg.includes('lease')) {
+    return {
+      category: 'Lease Expired',
+      summary: 'The slice lease expired and the resources were reclaimed.',
+      remedy: 'Create a new slice. Use a longer lease period or renew the lease before it expires.',
+    };
+  }
+  return {
+    category: 'Error',
+    summary: message.length > 200 ? message.slice(0, 200) + '...' : message,
+    remedy: 'Review the error message for details. You may need to adjust the slice configuration and resubmit.',
+  };
+}
+
+function SliceErrorsView({ errors }: { errors: SliceErrorMessage[] }) {
+  if (!errors || errors.length === 0) {
+    return (
+      <div className="bp-validation-container">
+        <div className="bp-validation-empty">No slice errors.</div>
+      </div>
+    );
+  }
+
+  const seen = new Set<string>();
+  const diagnosed: Array<{ sliver: string; diagnosis: ErrorDiagnosis; raw: string }> = [];
+  for (const err of errors) {
+    const key = err.message;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    diagnosed.push({ sliver: err.sliver, diagnosis: diagnoseError(err.message), raw: err.message });
+  }
+
+  return (
+    <div className="bp-validation-container">
+      <div className="bp-validation-header error">
+        Slice Failed — {diagnosed.length} error{diagnosed.length !== 1 ? 's' : ''}
+      </div>
+      {diagnosed.map((d, i) => (
+        <div key={i} className="bp-slice-error-entry">
+          <div className="bp-slice-error-category">
+            {d.diagnosis.category}
+            {d.sliver && <span className="bp-slice-error-sliver"> — {d.sliver}</span>}
+          </div>
+          <div className="bp-slice-error-summary">{d.diagnosis.summary}</div>
+          <div className="bp-slice-error-remedy">
+            <strong>Suggested fix:</strong> {d.diagnosis.remedy}
+          </div>
+        </div>
+      ))}
     </div>
   );
 }

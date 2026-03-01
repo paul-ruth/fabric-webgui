@@ -4,6 +4,8 @@ export interface SliceSummary {
   name: string;
   id: string;
   state: string;
+  archived?: boolean;
+  has_errors?: boolean;
 }
 
 export interface SliceInterface {
@@ -35,6 +37,7 @@ export interface SliceNode {
   image_type: string;
   management_ip: string;
   reservation_state: string;
+  error_message: string;
   username: string;
   components: SliceComponent[];
   interfaces: SliceInterface[];
@@ -72,12 +75,19 @@ export interface SliceFacilityPort {
   interfaces: SliceInterface[];
 }
 
+export interface SliceErrorMessage {
+  sliver: string;
+  message: string;
+}
+
 export interface SliceData {
   name: string;
   id: string;
   state: string;
   dirty: boolean;
+  lease_start: string;
   lease_end: string;
+  error_messages: SliceErrorMessage[];
   nodes: SliceNode[];
   networks: SliceNetwork[];
   facility_ports: SliceFacilityPort[];
