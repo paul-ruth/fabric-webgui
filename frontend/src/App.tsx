@@ -26,6 +26,7 @@ export default function App() {
   const [sliceData, setSliceData] = useState<SliceData | null>(null);
   const [loading, setLoading] = useState(false);
   const [errors, setErrors] = useState<string[]>([]);
+  const [bootConfigErrors, setBootConfigErrors] = useState<Array<{ node: string; type: string; id: string; detail: string }>>([]);
   const [currentView, setCurrentView] = useState<'topology' | 'sliver' | 'map' | 'files'>('topology');
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [isConfigured, setIsConfigured] = useState<boolean | null>(null);
@@ -170,6 +171,10 @@ export default function App() {
   const [helpOpen, setHelpOpen] = useState(false);
   const [helpSection, setHelpSection] = useState<string | undefined>(undefined);
   const [statusMessage, setStatusMessage] = useState('');
+  const [autoRefresh, setAutoRefresh] = useState(() => localStorage.getItem('auto-refresh') !== 'off');
+  const autoRefreshRef = useRef(autoRefresh);
+  autoRefreshRef.current = autoRefresh;
+  const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [consoleFullWidth, setConsoleFullWidth] = useState(true);
   const [consoleExpanded, setConsoleExpanded] = useState(false);
   const [consoleHeight, setConsoleHeight] = useState(260);
@@ -402,6 +407,121 @@ export default function App() {
     }
   }, []);
 
+  // Helper: after receiving a fresh slice list from FABRIC, update sliceData.state
+  // if the current slice's state in the list differs. Ensures the toolbar badge
+  // stays current even when only the list is refreshed (not the full slice).
+  const syncStateFromList = useCallback((list: SliceSummary[]) => {
+    setSliceData(prev => {
+      if (!prev?.name) return prev;
+      const entry = list.find(s => s.name === prev.name);
+      if (!entry || !entry.state || entry.state === prev.state) return prev;
+      return { ...prev, state: entry.state };
+    });
+  }, []);
+
+  // --- Auto-refresh polling — refreshes list until all slices are stable/terminal ---
+  const POLL_STATES = new Set(['Configuring', 'Ticketed', 'Nascent', 'ModifyOK', 'ModifyError']);
+  const STABLE_STATES = new Set(['StableOK', 'Active']);
+  const TERMINAL_STATES_SET = new Set(['Dead', 'Closing', 'StableError']);
+  const POLL_INTERVAL = 15000; // 15 seconds
+
+  // Track which slices have already had boot configs auto-executed
+  const bootConfigRanRef = useRef<Set<string>>(new Set());
+
+  const stopPolling = useCallback(() => {
+    if (pollingRef.current) {
+      clearInterval(pollingRef.current);
+      pollingRef.current = null;
+    }
+  }, []);
+
+  const selectedSliceRef = useRef(selectedSliceName);
+  selectedSliceRef.current = selectedSliceName;
+
+  const startPolling = useCallback(() => {
+    stopPolling();
+    if (!autoRefreshRef.current) return;
+
+    pollingRef.current = setInterval(async () => {
+      if (!autoRefreshRef.current) { stopPolling(); return; }
+
+      try {
+        // Refresh slice list
+        const list = await api.listSlices();
+        setSlices(list);
+        setListLoaded(true);
+        syncStateFromList(list);
+
+        // Also refresh the currently selected slice if it's in a transitional state
+        const currentName = selectedSliceRef.current;
+        const currentEntry = currentName ? list.find(s => s.name === currentName) : null;
+        if (currentName && currentEntry && POLL_STATES.has(currentEntry.state)) {
+          try {
+            const data = await api.getSlice(currentName);
+            setSliceData(data);
+          } catch { /* next poll will retry */ }
+        }
+
+        // Auto-run boot configs for slices that just reached StableOK
+        // Runs for any slice the webui sees transition to stable for the first time
+        for (const entry of list) {
+          if ((entry.state === 'StableOK' || entry.state === 'Active') && !bootConfigRanRef.current.has(entry.name)) {
+            bootConfigRanRef.current.add(entry.name);
+            // Refresh slice data if it's the currently selected slice
+            if (entry.name === currentName) {
+              try {
+                const data = await api.getSlice(currentName);
+                setSliceData(data);
+              } catch { /* ignore */ }
+            }
+            // Run boot configs — backend skips nodes with no config
+            setStatusMessage(`Running post-boot config on ${entry.name}...`);
+            try {
+              const bootResults = await api.executeAllBootConfigs(entry.name);
+              const bootErrors: Array<{ node: string; type: string; id: string; detail: string }> = [];
+              for (const [nodeName, nodeResults] of Object.entries(bootResults)) {
+                for (const r of nodeResults) {
+                  if (r.status === 'error') {
+                    bootErrors.push({ node: nodeName, type: r.type, id: r.id, detail: r.detail || 'Unknown error' });
+                  }
+                }
+              }
+              if (bootErrors.length > 0) {
+                setBootConfigErrors(bootErrors);
+              }
+            } catch (e: any) {
+              setErrors(prev => [...prev, `Post-boot config failed for ${entry.name}: ${e.message}`]);
+            }
+            setStatusMessage('');
+          }
+        }
+
+        // Check if ALL slices are in a stable or terminal state — if so, stop polling
+        const allSettled = list.every(s => {
+          const st = s.state || '';
+          return st === 'Draft' || STABLE_STATES.has(st) || TERMINAL_STATES_SET.has(st);
+        });
+        if (allSettled) {
+          stopPolling();
+        }
+      } catch {
+        // Silently ignore polling errors — next poll will retry
+      }
+    }, POLL_INTERVAL);
+  }, [stopPolling, syncStateFromList]);
+
+  // Clean up polling on unmount
+  useEffect(() => { return () => stopPolling(); }, [stopPolling]);
+
+  const toggleAutoRefresh = useCallback(() => {
+    setAutoRefresh(prev => {
+      const next = !prev;
+      localStorage.setItem('auto-refresh', next ? 'on' : 'off');
+      if (!next) stopPolling();
+      return next;
+    });
+  }, [stopPolling]);
+
   // Load slice list on first interaction or mount
   const refreshSliceList = useCallback(async () => {
     setLoading(true);
@@ -411,13 +531,37 @@ export default function App() {
       const list = await api.listSlices();
       setSlices(list);
       setListLoaded(true);
+
+      // If the currently selected slice changed state, reload it
+      const currentName = selectedSliceRef.current;
+      if (currentName) {
+        const entry = list.find(s => s.name === currentName);
+        if (entry) {
+          syncStateFromList(list);
+          // Reload slice data if it's not yet stable/terminal (state may have changed)
+          if (POLL_STATES.has(entry.state)) {
+            try {
+              const data = await api.getSlice(currentName);
+              setSliceData(data);
+            } catch { /* ignore */ }
+          }
+        }
+      } else {
+        syncStateFromList(list);
+      }
+
+      // Start polling if any slices are in transitional states
+      const hasTransitional = list.some(s => POLL_STATES.has(s.state));
+      if (hasTransitional && autoRefreshRef.current) {
+        startPolling();
+      }
     } catch (e: any) {
       setErrors(prev => [...prev, e.message]);
     } finally {
       setLoading(false);
       setStatusMessage('');
     }
-  }, []);
+  }, [syncStateFromList, startPolling]);
 
   const handleProjectChange = useCallback(async (uuid: string) => {
     const proj = projects.find((p) => p.uuid === uuid);
@@ -470,6 +614,23 @@ export default function App() {
     }
   }, [selectedSliceName, runValidation]);
 
+  // When sliceData updates, push its state into the matching slices list entry
+  // so the dropdown stays in sync with the loaded slice's current state.
+  useEffect(() => {
+    if (!sliceData?.name || !sliceData.state) return;
+    const name = sliceData.name;
+    const state = sliceData.state;
+    const hasErrors = (sliceData.error_messages?.length ?? 0) > 0;
+    setSlices(prev => {
+      const idx = prev.findIndex(s => s.name === name);
+      if (idx === -1) return prev;
+      if (prev[idx].state === state && prev[idx].has_errors === hasErrors) return prev;
+      const updated = [...prev];
+      updated[idx] = { ...updated[idx], state, has_errors: hasErrors };
+      return updated;
+    });
+  }, [sliceData?.name, sliceData?.state, sliceData?.error_messages]);
+
   // Helper: update slice data and re-validate
   const updateSliceAndValidate = useCallback((data: SliceData) => {
     setSliceData(data);
@@ -477,6 +638,7 @@ export default function App() {
       runValidation(data.name);
     }
   }, [runValidation]);
+
 
   // Submit handles both new slice creation and modifications to existing slices
   const handleSubmit = useCallback(async () => {
@@ -489,9 +651,11 @@ export default function App() {
       setValidationIssues([]);
       setValidationValid(true);
       setStatusMessage('Submitted. Refreshing slice state...');
+      let refreshedData = data;
       try {
         // Reload slice data to get updated state from FABRIC
         const refreshed = await api.refreshSlice(selectedSliceName);
+        refreshedData = refreshed;
         setSliceData(refreshed);
         runValidation(selectedSliceName);
       } catch {}
@@ -501,29 +665,64 @@ export default function App() {
         setSlices(list);
         setListLoaded(true);
       } catch {}
+      // If slice reached StableOK immediately, run boot configs now
+      if (refreshedData.state === 'StableOK') {
+        bootConfigRanRef.current.add(selectedSliceName);
+        setStatusMessage('Running post-boot configuration on all nodes...');
+        try {
+          const bootResults = await api.executeAllBootConfigs(selectedSliceName);
+          const bootErrors: Array<{ node: string; type: string; id: string; detail: string }> = [];
+          for (const [nodeName, nodeResults] of Object.entries(bootResults)) {
+            for (const r of nodeResults) {
+              if (r.status === 'error') {
+                bootErrors.push({ node: nodeName, type: r.type, id: r.id, detail: r.detail || 'Unknown error' });
+              }
+            }
+          }
+          if (bootErrors.length > 0) {
+            setBootConfigErrors(bootErrors);
+          }
+        } catch (e: any) {
+          setErrors(prev => [...prev, `Post-boot config failed: ${e.message}`]);
+        }
+      } else if (POLL_STATES.has(refreshedData.state || '')) {
+        // Slice is still provisioning — start auto-refresh polling
+        startPolling();
+      }
     } catch (e: any) {
       setErrors(prev => [...prev, e.message]);
     } finally {
       setLoading(false);
       setStatusMessage('');
     }
-  }, [selectedSliceName, runValidation]);
+  }, [selectedSliceName, runValidation, startPolling]);
 
-  const handleRefreshSlice = useCallback(async () => {
-    if (!selectedSliceName) return;
+  const handleRefreshSlices = useCallback(async () => {
     setLoading(true);
-    setStatusMessage('Reloading slice...');
+    setStatusMessage('Refreshing slices...');
     try {
-      const data = await api.refreshSlice(selectedSliceName);
-      setSliceData(data);
-      runValidation(selectedSliceName);
+      // Refresh the slice list
+      const list = await api.listSlices();
+      setSlices(list);
+      setListLoaded(true);
+      syncStateFromList(list);
+
+      // Also refresh the currently loaded slice if any
+      const currentName = selectedSliceRef.current;
+      if (currentName) {
+        try {
+          const data = await api.refreshSlice(currentName);
+          setSliceData(data);
+          runValidation(currentName);
+        } catch { /* slice may no longer exist */ }
+      }
     } catch (e: any) {
       setErrors(prev => [...prev, e.message]);
     } finally {
       setLoading(false);
       setStatusMessage('');
     }
-  }, [selectedSliceName, runValidation]);
+  }, [runValidation, syncStateFromList]);
 
   const handleDeleteElements = useCallback(async (elements: Record<string, string>[]) => {
     if (!sliceData || elements.length === 0) return;
@@ -550,28 +749,60 @@ export default function App() {
 
   const handleDeleteSlice = useCallback(async () => {
     if (!selectedSliceName) return;
+    const deletedName = selectedSliceName;
+    const wasDraft = sliceData?.state === 'Draft';
     setLoading(true);
     setStatusMessage('Deleting slice...');
     try {
-      await api.deleteSlice(selectedSliceName);
+      await api.deleteSlice(deletedName);
       setSliceData(null);
       setSelectedSliceName('');
       setSelectedElement(null);
       setValidationIssues([]);
       setValidationValid(false);
-      setStatusMessage('Deleted. Refreshing slice list...');
-      try {
-        const list = await api.listSlices();
-        setSlices(list);
-        setListLoaded(true);
-      } catch {}
+      if (wasDraft) {
+        // Drafts are fully removed — take them out of the list immediately
+        setSlices(prev => prev.filter(s => s.name !== deletedName));
+      } else {
+        // Submitted slices become "Dead" — mark locally for instant feedback
+        setSlices(prev => prev.map(s => s.name === deletedName ? { ...s, state: 'Dead' } : s));
+      }
+      // Refresh the list to confirm the backend state
+      setStatusMessage('Confirming deletion...');
+      const MAX_RETRIES = 4;
+      for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+        try {
+          const list = await api.listSlices();
+          if (wasDraft) {
+            setSlices(list);
+            setListLoaded(true);
+            if (!list.some(s => s.name === deletedName)) break;
+          } else {
+            // Ensure the deleted slice stays in the list as Dead until archived
+            const entry = list.find(s => s.name === deletedName);
+            if (!entry) {
+              // Backend didn't return it yet — inject it as Dead
+              list.push({ name: deletedName, id: '', state: 'Dead', has_errors: false });
+            }
+            setSlices(list);
+            setListLoaded(true);
+            const finalEntry = list.find(s => s.name === deletedName);
+            if (finalEntry && (finalEntry.state === 'Dead' || finalEntry.state === 'Closing')) break;
+          }
+        } catch {
+          // Ignore and retry
+        }
+        if (attempt < MAX_RETRIES - 1) {
+          await new Promise(r => setTimeout(r, 3000));
+        }
+      }
     } catch (e: any) {
       setErrors(prev => [...prev, e.message]);
     } finally {
       setLoading(false);
       setStatusMessage('');
     }
-  }, [selectedSliceName]);
+  }, [selectedSliceName, sliceData?.state]);
 
   const handleArchiveSlice = useCallback(async () => {
     if (!selectedSliceName) return;
@@ -853,16 +1084,29 @@ export default function App() {
         loading={loading}
         onSelectSlice={(name) => {
           setSelectedSliceName(name);
-          // Clear canvas whenever selection changes (data reloads on Load)
           setSliceData(null);
           setSelectedElement(null);
           setValidationIssues([]);
           setValidationValid(false);
+          // Auto-load the slice data
+          if (name) {
+            setLoading(true);
+            setStatusMessage('Loading slice...');
+            api.getSlice(name).then(data => {
+              setSliceData(data);
+              runValidation(name);
+            }).catch(e => {
+              setErrors(prev => [...prev, e.message]);
+            }).finally(() => {
+              setLoading(false);
+              setStatusMessage('');
+            });
+          }
         }}
         onLoad={loadSlice}
         onCreateSlice={handleCreateSlice}
         onSubmit={handleSubmit}
-        onReload={handleRefreshSlice}
+        onRefreshSlices={handleRefreshSlices}
         onDeleteSlice={handleDeleteSlice}
         onRefreshTopology={refreshInfrastructureAndMark}
         infraLoading={infraLoading}
@@ -875,6 +1119,8 @@ export default function App() {
         onArchiveSlice={handleArchiveSlice}
         onArchiveAllTerminal={handleArchiveAllTerminal}
         hasErrors={sliceData?.error_messages != null && sliceData.error_messages.length > 0}
+        autoRefresh={autoRefresh}
+        onToggleAutoRefresh={toggleAutoRefresh}
       />
 
       <HelpContextMenu onOpenHelp={handleOpenHelp} />
@@ -959,6 +1205,7 @@ export default function App() {
                       panelIcon={icon}
                       vmTemplates={vmTemplates}
                       onSaveVmTemplate={handleSaveVmTemplate}
+                      onBootConfigErrors={setBootConfigErrors}
                     />
                   );
                 case 'template':
@@ -1177,6 +1424,8 @@ export default function App() {
                       errors={errors}
                       onClearErrors={() => { setErrors([]); setValidationIssues([]); setValidationValid(false); }}
                       sliceErrors={sliceData?.error_messages ?? []}
+                      bootConfigErrors={bootConfigErrors}
+                      onClearBootConfigErrors={() => setBootConfigErrors([])}
                       fullWidth={consoleFullWidth}
                       onToggleFullWidth={() => setConsoleFullWidth(fw => !fw)}
                       showWidthToggle={currentView === 'topology' || currentView === 'sliver'}
@@ -1184,6 +1433,8 @@ export default function App() {
                       onExpandedChange={setConsoleExpanded}
                       panelHeight={consoleHeight}
                       onPanelHeightChange={setConsoleHeight}
+                      statusMessage={statusMessage}
+                      loading={loading}
                     />
                   )}
                 </div>
@@ -1220,6 +1471,8 @@ export default function App() {
           errors={errors}
           onClearErrors={() => { setErrors([]); setValidationIssues([]); setValidationValid(false); }}
           sliceErrors={sliceData?.error_messages ?? []}
+          bootConfigErrors={bootConfigErrors}
+          onClearBootConfigErrors={() => setBootConfigErrors([])}
           fullWidth={consoleFullWidth}
           onToggleFullWidth={() => setConsoleFullWidth(fw => !fw)}
           showWidthToggle={currentView === 'topology' || currentView === 'sliver'}
@@ -1227,6 +1480,8 @@ export default function App() {
           onExpandedChange={setConsoleExpanded}
           panelHeight={consoleHeight}
           onPanelHeightChange={setConsoleHeight}
+          statusMessage={statusMessage}
+          loading={loading}
         />
       )}
 

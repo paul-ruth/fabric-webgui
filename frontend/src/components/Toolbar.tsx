@@ -16,7 +16,7 @@ interface ToolbarProps {
   onLoad: () => void;
   onCreateSlice: (name: string) => void;
   onSubmit: () => void;
-  onReload: () => void;
+  onRefreshSlices: () => void;
   onDeleteSlice: () => void;
   onRefreshTopology: () => void;
   infraLoading: boolean;
@@ -29,6 +29,8 @@ interface ToolbarProps {
   onArchiveSlice?: () => void;
   onArchiveAllTerminal?: () => void;
   hasErrors?: boolean;
+  autoRefresh?: boolean;
+  onToggleAutoRefresh?: () => void;
 }
 
 export default function Toolbar(props: ToolbarProps) {
@@ -63,7 +65,7 @@ export default function Toolbar(props: ToolbarProps) {
   };
 
   const handleRevertConfirm = () => {
-    props.onReload();
+    props.onRefreshSlices();
     setConfirmingRevert(false);
   };
 
@@ -108,14 +110,14 @@ export default function Toolbar(props: ToolbarProps) {
       <div className="toolbar-group">
         <span className="toolbar-group-label">Slice</span>
 
-        {/* Load / Refresh slice list */}
-        <Tooltip text={props.listLoaded ? 'Refresh the slice list from FABRIC' : 'Fetch your slices from FABRIC'}>
+        {/* Refresh all slices (list + current) */}
+        <Tooltip text={props.listLoaded ? 'Refresh all slices from FABRIC (list and current slice)' : 'Fetch your slices from FABRIC'}>
           <button
             className="toolbar-btn toolbar-btn-list"
-            onClick={props.onLoadSlices}
+            onClick={props.listLoaded ? props.onRefreshSlices : props.onLoadSlices}
             disabled={props.loading}
           >
-            {props.listLoaded ? '\u21BB Refresh Slice List' : 'Load Slice List'}
+            {props.listLoaded ? '\u21BB Refresh Slices' : 'Load Slices'}
           </button>
         </Tooltip>
 
@@ -253,14 +255,14 @@ export default function Toolbar(props: ToolbarProps) {
           </button>
         </Tooltip>
 
-        <Tooltip text="Delete this slice from FABRIC">
+        <Tooltip text={isDraft ? "Discard this draft" : "Delete this slice from FABRIC"}>
           <button
             className="toolbar-btn toolbar-btn-delete danger"
             onClick={() => setConfirmingDelete(true)}
             disabled={!hasSlice || props.loading}
             data-help-id="toolbar.delete"
           >
-            Delete
+            {isDraft ? 'Discard' : 'Delete'}
           </button>
         </Tooltip>
 
@@ -316,12 +318,14 @@ export default function Toolbar(props: ToolbarProps) {
         </span>
       )}
 
-      {props.statusMessage && (
-        <span className="toolbar-status">
-          <span className="toolbar-spinner" />
-          <span className="toolbar-status-text">{props.statusMessage}</span>
-        </span>
-      )}
+      <Tooltip text={props.autoRefresh ? 'Auto-refresh is on — slice list and state update automatically while provisioning' : 'Auto-refresh is off — click to enable automatic updates while provisioning'}>
+        <button
+          className={`toolbar-btn toolbar-btn-auto-refresh ${props.autoRefresh ? 'active' : ''}`}
+          onClick={props.onToggleAutoRefresh}
+        >
+          {props.autoRefresh ? '\u21BB Auto' : '\u21BB Auto'}
+        </button>
+      </Tooltip>
 
       <div className="toolbar-spacer" />
 
@@ -340,11 +344,14 @@ export default function Toolbar(props: ToolbarProps) {
       {confirmingDelete && (
         <div className="toolbar-modal-overlay" onClick={() => setConfirmingDelete(false)}>
           <div className="toolbar-modal" onClick={(e) => e.stopPropagation()}>
-            <h4>Delete Slice</h4>
-            <p>Are you sure you want to delete <strong>{props.selectedSlice}</strong>? This cannot be undone.</p>
+            <h4>{isDraft ? 'Discard Draft' : 'Delete Slice'}</h4>
+            <p>{isDraft
+              ? <>Discard draft <strong>{props.selectedSlice}</strong>? This only removes the local draft — nothing has been submitted to FABRIC.</>
+              : <>Are you sure you want to delete <strong>{props.selectedSlice}</strong>? This cannot be undone.</>
+            }</p>
             <div className="toolbar-modal-actions">
               <button onClick={() => setConfirmingDelete(false)}>Cancel</button>
-              <button className="danger" onClick={handleDeleteConfirm}>Delete</button>
+              <button className="danger" onClick={handleDeleteConfirm}>{isDraft ? 'Discard' : 'Delete'}</button>
             </div>
           </div>
         </div>

@@ -35,14 +35,15 @@ interface EditorPanelProps {
   panelIcon?: string;
   vmTemplates?: VMTemplateSummary[];
   onSaveVmTemplate?: (nodeName: string) => void;
+  onBootConfigErrors?: (errors: Array<{ node: string; type: string; id: string; detail: string }>) => void;
 }
 
-export default function EditorPanel({ sliceData, sliceName, onSliceUpdated, onCollapse, sites, images, componentModels, selectedElement, dragHandleProps, panelIcon, vmTemplates = [], onSaveVmTemplate }: EditorPanelProps) {
+export default function EditorPanel({ sliceData, sliceName, onSliceUpdated, onCollapse, sites, images, componentModels, selectedElement, dragHandleProps, panelIcon, vmTemplates = [], onSaveVmTemplate, onBootConfigErrors }: EditorPanelProps) {
   const [selectedSliverKey, setSelectedSliverKey] = useState('');
   const [addMode, setAddMode] = useState<AddSliverType | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [showSiteMapping, setShowSiteMapping] = useState(false);
+  const [editorTab, setEditorTab] = useState<'slice' | 'slivers'>('slice');
 
   // Per-slice key assignment
   const [keySets, setKeySets] = useState<SliceKeySet[]>([]);
@@ -73,12 +74,15 @@ export default function EditorPanel({ sliceData, sliceName, onSliceUpdated, onCo
     if (type === 'node') {
       setSelectedSliverKey(`node:${name}`);
       setAddMode(null);
+      setEditorTab('slivers');
     } else if (type === 'network') {
       setSelectedSliverKey(`net:${name}`);
       setAddMode(null);
+      setEditorTab('slivers');
     } else if (type === 'facility-port') {
       setSelectedSliverKey(`fp:${name}`);
       setAddMode(null);
+      setEditorTab('slivers');
     }
   }, [selectedElement]);
 
@@ -117,6 +121,31 @@ export default function EditorPanel({ sliceData, sliceName, onSliceUpdated, onCo
   const hasSiteGroups = sliceData?.nodes.some(n => n.site_group) ?? false;
   const isDraft = sliceData?.state === 'Draft';
   const isTerminal = sliceData?.state !== undefined && ['Dead', 'Closing', 'StableError'].includes(sliceData.state);
+  const isActive = sliceData?.state !== undefined && ['StableOK', 'Active', 'ModifyOK'].includes(sliceData.state);
+  const [runningBootConfig, setRunningBootConfig] = useState(false);
+
+  const handleRunBootConfig = async () => {
+    if (!sliceName) return;
+    setRunningBootConfig(true);
+    setError('');
+    try {
+      const results = await api.executeAllBootConfigs(sliceName);
+      // Collect errors and report to parent
+      const bootErrors: Array<{ node: string; type: string; id: string; detail: string }> = [];
+      for (const [nodeName, nodeResults] of Object.entries(results)) {
+        for (const r of nodeResults) {
+          if (r.status === 'error') {
+            bootErrors.push({ node: nodeName, type: r.type, id: r.id, detail: r.detail || 'Unknown error' });
+          }
+        }
+      }
+      onBootConfigErrors?.(bootErrors);
+    } catch (e: any) {
+      setError(`Boot config failed: ${e.message}`);
+    } finally {
+      setRunningBootConfig(false);
+    }
+  };
 
   const [remapping, setRemapping] = useState(false);
 
@@ -160,232 +189,325 @@ export default function EditorPanel({ sliceData, sliceName, onSliceUpdated, onCo
         </button>
       </div>
 
-      {/* Slice info bar — name, UUID, state, dates */}
-      {sliceData && (
-        <div className="editor-slice-info">
-          <span className="slice-info-name" title={sliceData.name}>{sliceData.name}</span>
-          <span className={`slice-info-state state-${sliceData.state?.toLowerCase() || 'unknown'}`}>{sliceData.state || '—'}</span>
-          {sliceData.id && <span className="slice-info-field" title={sliceData.id}>UUID: {sliceData.id.slice(0, 8)}...</span>}
-          {sliceData.lease_start && <span className="slice-info-field">Start: {new Date(sliceData.lease_start).toLocaleString()}</span>}
-          {sliceData.lease_end && <span className="slice-info-field">Expires: {new Date(sliceData.lease_end).toLocaleString()}</span>}
-        </div>
-      )}
-
-      <>
-      {/* Sliver selector + Add button + Site Mapping toggle */}
-      <div className="editor-sliver-bar" data-help-id="editor.sliver-selector">
-        <SliverComboBox
-          sliceData={sliceData}
-          selectedSliverKey={selectedSliverKey}
-          onSelect={(key) => { handleSliverSelect(key); setShowSiteMapping(false); }}
-          errorMessages={sliceData?.error_messages}
-        />
-        {!isTerminal && <AddSliverMenu onSelect={(type) => { handleAddSelect(type); setShowSiteMapping(false); }} />}
-        {hasSiteGroups && isDraft && (
-          <Tooltip text="View and manage site group assignments from template. See which sites are assigned to each @group and reassign them.">
-            <button
-              className={`site-mapping-toggle${showSiteMapping ? ' active' : ''}`}
-              onClick={() => { setShowSiteMapping(!showSiteMapping); if (!showSiteMapping) { setAddMode(null); setSelectedSliverKey(''); } }}
-              data-help-id="editor.site-mapping"
-            >
-              {'\u2316'} Sites
-            </button>
-          </Tooltip>
-        )}
+      {/* Top-level Slice / Slivers tab bar */}
+      <div className="editor-top-tabs">
+        <button className={editorTab === 'slice' ? 'active' : ''} onClick={() => setEditorTab('slice')}>Slice</button>
+        <button className={editorTab === 'slivers' ? 'active' : ''} onClick={() => setEditorTab('slivers')}>Slivers</button>
       </div>
 
-      {/* Auto-assign section — available for any draft with nodes */}
-      {isDraft && sliceData && sliceData.nodes.length > 0 && (
-        <div className="auto-assign-section">
-          <div className="auto-assign-description">
-            Automatically place each node on a FABRIC site and host with enough resources for your VMs.
+      {/* ── Slice tab ── */}
+      {editorTab === 'slice' && (
+        <div className="tab-content">
+          {error && <div style={{ color: 'var(--fabric-coral)', fontSize: 12, marginBottom: 8 }}>{error}</div>}
+
+          {/* Slice info — name, UUID, state, dates */}
+          {sliceData && (
+            <div className="editor-slice-info" style={{ border: 'none', background: 'transparent', padding: '0 0 8px' }}>
+              <span className="slice-info-name" title={sliceData.name}>{sliceData.name}</span>
+              <span className={`slice-info-state state-${sliceData.state?.toLowerCase() || 'unknown'}`}>{sliceData.state || '\u2014'}</span>
+              {sliceData.id && <span className="slice-info-field" title={sliceData.id}>UUID: {sliceData.id.slice(0, 8)}...</span>}
+              {sliceData.lease_start && <span className="slice-info-field">Start: {new Date(sliceData.lease_start).toLocaleString()}</span>}
+              {sliceData.lease_end && <span className="slice-info-field">Expires: {new Date(sliceData.lease_end).toLocaleString()}</span>}
+            </div>
+          )}
+
+          {/* Lease renew (active slices) */}
+          {isActive && sliceData && (
+            <LeaseRenewSection sliceName={sliceName} leaseEnd={sliceData.lease_end} onSliceUpdated={onSliceUpdated} />
+          )}
+
+          {/* Run Boot Config (active slices) */}
+          {isActive && (
+            <div style={{ marginBottom: 12 }}>
+              <Tooltip text="Run boot configuration (uploads, network config, commands) on all nodes">
+                <button
+                  className="site-mapping-auto-btn"
+                  style={{ width: '100%', fontSize: 11, padding: '5px 0' }}
+                  onClick={handleRunBootConfig}
+                  disabled={runningBootConfig}
+                >
+                  {runningBootConfig ? '\u21BB Running...' : '\u25B6 Run Boot Config'}
+                </button>
+              </Tooltip>
+            </div>
+          )}
+
+          {/* Auto-assign section — available for any draft with nodes */}
+          {isDraft && sliceData && sliceData.nodes.length > 0 && (
+            <div style={{ marginBottom: 12 }}>
+              <div className="auto-assign-description">
+                Automatically place each node on a FABRIC site and host with enough resources for your VMs.
+              </div>
+              <button
+                className="site-mapping-auto-btn"
+                style={{ width: '100%', fontSize: 11, padding: '5px 0' }}
+                onClick={handleRemapSites}
+                disabled={remapping || loading}
+                data-help-id="editor.remap-sites"
+              >
+                {remapping ? 'Resolving...' : '\u21BB Auto-Assign Sites & Hosts'}
+              </button>
+            </div>
+          )}
+
+          {/* Per-slice SSH key selector */}
+          {sliceName && keySets.length > 0 && (
+            <div className="slice-key-select" style={{ border: 'none', padding: '0 0 8px' }}>
+              <label>SSH Key:</label>
+              <select value={sliceKeyId} onChange={(e) => handleSliceKeyChange(e.target.value)}>
+                <option value="">(default{keySets.find(k => k.is_default) ? `: ${keySets.find(k => k.is_default)!.name}` : ''})</option>
+                {keySets.filter(k => !k.is_default).map((ks) => (
+                  <option key={ks.name} value={ks.name}>{ks.name}</option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          {/* Site Mapping (draft slices with @group tags) */}
+          {hasSiteGroups && isDraft && sliceData && (
+            <SiteMappingView
+              sliceData={sliceData}
+              sliceName={sliceName}
+              sites={sites}
+              loading={loading}
+              onSliceUpdated={onSliceUpdated}
+              setLoading={setLoading}
+              setError={setError}
+            />
+          )}
+
+          {/* Empty state when no slice loaded */}
+          {!sliceData && (
+            <div className="editor-empty">
+              No slice loaded.
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── Slivers tab ── */}
+      {editorTab === 'slivers' && (
+        <>
+          {/* Sliver selector + Add button */}
+          <div className="editor-sliver-bar" data-help-id="editor.sliver-selector">
+            <SliverComboBox
+              sliceData={sliceData}
+              selectedSliverKey={selectedSliverKey}
+              onSelect={handleSliverSelect}
+              errorMessages={sliceData?.error_messages}
+            />
+            {!isTerminal && <AddSliverMenu onSelect={handleAddSelect} />}
           </div>
-          <button
-            className="site-mapping-auto-btn"
-            style={{ width: '100%', fontSize: 11, padding: '5px 0' }}
-            onClick={handleRemapSites}
-            disabled={remapping || loading}
-            data-help-id="editor.remap-sites"
-          >
-            {remapping ? 'Resolving...' : '\u21BB Auto-Assign Sites & Hosts'}
-          </button>
-        </div>
-      )}
 
-      {/* Per-slice SSH key selector */}
-      {sliceName && keySets.length > 0 && (
-        <div className="slice-key-select">
-          <label>SSH Key:</label>
-          <select value={sliceKeyId} onChange={(e) => handleSliceKeyChange(e.target.value)}>
-            <option value="">(default{keySets.find(k => k.is_default) ? `: ${keySets.find(k => k.is_default)!.name}` : ''})</option>
-            {keySets.filter(k => !k.is_default).map((ks) => (
-              <option key={ks.name} value={ks.name}>{ks.name}</option>
-            ))}
-          </select>
-        </div>
-      )}
+          <div className="tab-content">
+            {error && <div style={{ color: 'var(--fabric-coral)', fontSize: 12, marginBottom: 8 }}>{error}</div>}
 
-      <div className="tab-content">
-        {error && <div style={{ color: 'var(--fabric-coral)', fontSize: 12, marginBottom: 8 }}>{error}</div>}
-
-        {/* Site Mapping view */}
-        {showSiteMapping && sliceData && (
-          <SiteMappingView
-            sliceData={sliceData}
-            sliceName={sliceName}
-            sites={sites}
-            loading={loading}
-            onSliceUpdated={onSliceUpdated}
-            setLoading={setLoading}
-            setError={setError}
-          />
-        )}
-
-        {/* Add mode forms */}
-        {!showSiteMapping && addMode === 'node' && (
-          <NodeForm
-            mode="add"
-            sites={sites}
-            images={images}
-            componentModels={componentModels}
-            sliceName={sliceName}
-            loading={loading}
-            sliceData={sliceData}
-            vmTemplates={vmTemplates}
-            onSubmit={async (data) => {
-              let result = await apiCall(() => api.addNode(sliceName, data));
-              if (result) {
-                // Add pending components
-                if (data._pendingComponents?.length) {
-                  for (const comp of data._pendingComponents) {
-                    try {
-                      result = await apiCall(() => api.addComponent(sliceName, data.name, comp)) || result;
-                    } catch { /* ignore */ }
+            {/* Add mode forms */}
+            {addMode === 'node' && (
+              <NodeForm
+                mode="add"
+                sites={sites}
+                images={images}
+                componentModels={componentModels}
+                sliceName={sliceName}
+                loading={loading}
+                sliceData={sliceData}
+                vmTemplates={vmTemplates}
+                onSubmit={async (data) => {
+                  let result = await apiCall(() => api.addNode(sliceName, data));
+                  if (result) {
+                    if (data._pendingComponents?.length) {
+                      for (const comp of data._pendingComponents) {
+                        try {
+                          result = await apiCall(() => api.addComponent(sliceName, data.name, comp)) || result;
+                        } catch { /* ignore */ }
+                      }
+                    }
+                    if (data._pendingBootConfig) {
+                      try {
+                        await api.saveBootConfig(sliceName, data.name, data._pendingBootConfig);
+                      } catch { /* ignore */ }
+                    }
+                    setSelectedSliverKey(`node:${data.name}`);
+                    setAddMode(null);
                   }
-                }
-                // Apply pending boot config from VM template
-                if (data._pendingBootConfig) {
-                  try {
-                    await api.saveBootConfig(sliceName, data.name, data._pendingBootConfig);
-                  } catch { /* ignore */ }
-                }
-                setSelectedSliverKey(`node:${data.name}`);
-                setAddMode(null);
-              }
-            }}
-          />
-        )}
-        {!showSiteMapping && addMode === 'l2network' && (
-          <NetworkForm
-            mode="add"
-            defaultLayer="L2"
-            sliceData={sliceData}
-            sliceName={sliceName}
-            loading={loading}
-            onSubmit={async (data) => {
-              const result = await apiCall(() => api.addNetwork(sliceName, data));
-              if (result) {
-                setSelectedSliverKey(`net:${data.name}`);
-                setAddMode(null);
-              }
-            }}
-          />
-        )}
-        {!showSiteMapping && addMode === 'l3network' && (
-          <NetworkForm
-            mode="add"
-            defaultLayer="L3"
-            sliceData={sliceData}
-            sliceName={sliceName}
-            loading={loading}
-            onSubmit={async (data) => {
-              const result = await apiCall(() => api.addNetwork(sliceName, data));
-              if (result) {
-                setSelectedSliverKey(`net:${data.name}`);
-                setAddMode(null);
-              }
-            }}
-          />
-        )}
-        {!showSiteMapping && addMode === 'facility-port' && (
-          <FacilityPortForm
-            mode="add"
-            sites={sites}
-            sliceName={sliceName}
-            loading={loading}
-            sliceData={sliceData}
-            onSubmit={async (data) => {
-              const result = await apiCall(() => api.addFacilityPort(sliceName, data));
-              if (result) {
-                setSelectedSliverKey(`fp:${data.name}`);
-                setAddMode(null);
-              }
-            }}
-          />
-        )}
+                }}
+              />
+            )}
+            {addMode === 'l2network' && (
+              <NetworkForm
+                mode="add"
+                defaultLayer="L2"
+                sliceData={sliceData}
+                sliceName={sliceName}
+                loading={loading}
+                onSubmit={async (data) => {
+                  const result = await apiCall(() => api.addNetwork(sliceName, data));
+                  if (result) {
+                    setSelectedSliverKey(`net:${data.name}`);
+                    setAddMode(null);
+                  }
+                }}
+              />
+            )}
+            {addMode === 'l3network' && (
+              <NetworkForm
+                mode="add"
+                defaultLayer="L3"
+                sliceData={sliceData}
+                sliceName={sliceName}
+                loading={loading}
+                onSubmit={async (data) => {
+                  const result = await apiCall(() => api.addNetwork(sliceName, data));
+                  if (result) {
+                    setSelectedSliverKey(`net:${data.name}`);
+                    setAddMode(null);
+                  }
+                }}
+              />
+            )}
+            {addMode === 'facility-port' && (
+              <FacilityPortForm
+                mode="add"
+                sites={sites}
+                sliceName={sliceName}
+                loading={loading}
+                sliceData={sliceData}
+                onSubmit={async (data) => {
+                  const result = await apiCall(() => api.addFacilityPort(sliceName, data));
+                  if (result) {
+                    setSelectedSliverKey(`fp:${data.name}`);
+                    setAddMode(null);
+                  }
+                }}
+              />
+            )}
 
-        {/* Edit mode: selected node */}
-        {!showSiteMapping && !addMode && selectedNode && (
-          <NodeForm
-            key={`edit-node-${selectedNode.name}`}
-            mode="edit"
-            node={selectedNode}
-            sites={sites}
-            images={images}
-            componentModels={componentModels}
-            sliceName={sliceName}
-            loading={loading}
-            sliceData={sliceData}
-            vmTemplates={vmTemplates}
-            onSubmit={async (data) => {
-              await apiCall(() => api.updateNode(sliceName, selectedNode.name, data));
-            }}
-            onDelete={async () => {
-              await apiCall(() => api.removeNode(sliceName, selectedNode.name));
-              setSelectedSliverKey('');
-            }}
-            onAddComponent={async (compData) => {
-              await apiCall(() => api.addComponent(sliceName, selectedNode.name, compData));
-            }}
-            onDeleteComponent={async (compName) => {
-              await apiCall(() => api.removeComponent(sliceName, selectedNode.name, compName));
-            }}
-            onSaveVmTemplate={onSaveVmTemplate ? (nodeName) => onSaveVmTemplate(nodeName) : undefined}
-          />
-        )}
+            {/* Edit mode: selected node */}
+            {!addMode && selectedNode && (
+              <NodeForm
+                key={`edit-node-${selectedNode.name}`}
+                mode="edit"
+                node={selectedNode}
+                sites={sites}
+                images={images}
+                componentModels={componentModels}
+                sliceName={sliceName}
+                loading={loading}
+                sliceData={sliceData}
+                vmTemplates={vmTemplates}
+                onSubmit={async (data) => {
+                  await apiCall(() => api.updateNode(sliceName, selectedNode.name, data));
+                }}
+                onDelete={async () => {
+                  await apiCall(() => api.removeNode(sliceName, selectedNode.name));
+                  setSelectedSliverKey('');
+                }}
+                onAddComponent={async (compData) => {
+                  await apiCall(() => api.addComponent(sliceName, selectedNode.name, compData));
+                }}
+                onDeleteComponent={async (compName) => {
+                  await apiCall(() => api.removeComponent(sliceName, selectedNode.name, compName));
+                }}
+                onSaveVmTemplate={onSaveVmTemplate ? (nodeName) => onSaveVmTemplate(nodeName) : undefined}
+              />
+            )}
 
-        {/* Edit mode: selected network (read-only) */}
-        {!showSiteMapping && !addMode && selectedNetwork && (
-          <NetworkReadOnlyView
-            network={selectedNetwork}
-            loading={loading}
-            onDelete={async () => {
-              await apiCall(() => api.removeNetwork(sliceName, selectedNetwork.name));
-              setSelectedSliverKey('');
-            }}
-          />
-        )}
+            {/* Edit mode: selected network */}
+            {!addMode && selectedNetwork && (
+              <NetworkReadOnlyView
+                network={selectedNetwork}
+                loading={loading}
+                isDraft={isDraft}
+                sliceName={sliceName}
+                onSliceUpdated={onSliceUpdated}
+                onDelete={async () => {
+                  await apiCall(() => api.removeNetwork(sliceName, selectedNetwork.name));
+                  setSelectedSliverKey('');
+                }}
+              />
+            )}
 
-        {/* Edit mode: selected facility port (read-only) */}
-        {!showSiteMapping && !addMode && selectedFP && (
-          <FacilityPortReadOnlyView
-            fp={selectedFP}
-            loading={loading}
-            onDelete={async () => {
-              await apiCall(() => api.removeFacilityPort(sliceName, selectedFP.name));
-              setSelectedSliverKey('');
-            }}
-          />
-        )}
+            {/* Edit mode: selected facility port (read-only) */}
+            {!addMode && selectedFP && (
+              <FacilityPortReadOnlyView
+                fp={selectedFP}
+                loading={loading}
+                onDelete={async () => {
+                  await apiCall(() => api.removeFacilityPort(sliceName, selectedFP.name));
+                  setSelectedSliverKey('');
+                }}
+              />
+            )}
 
-        {/* Nothing selected, no add mode */}
-        {!showSiteMapping && !addMode && !selectedNode && !selectedNetwork && !selectedFP && (
-          <div className="editor-empty">
-            Select a sliver to edit, or click <strong>+</strong> to add one.
+            {/* Nothing selected, no add mode */}
+            {!addMode && !selectedNode && !selectedNetwork && !selectedFP && (
+              <div className="editor-empty">
+                Select a sliver to edit, or click <strong>+</strong> to add one.
+              </div>
+            )}
           </div>
-        )}
+        </>
+      )}
+    </div>
+  );
+}
+
+
+// --- Lease Renew Section ---
+function LeaseRenewSection({ sliceName, leaseEnd, onSliceUpdated }: { sliceName: string; leaseEnd: string; onSliceUpdated: (data: SliceData) => void }) {
+  const defaultDate = (() => {
+    try {
+      const d = new Date(leaseEnd);
+      d.setDate(d.getDate() + 1);
+      return d.toISOString().slice(0, 16);
+    } catch {
+      return '';
+    }
+  })();
+  const [renewDate, setRenewDate] = useState(defaultDate);
+  const [renewLoading, setRenewLoading] = useState(false);
+  const [renewError, setRenewError] = useState('');
+  const [renewSuccess, setRenewSuccess] = useState('');
+
+  const handleRenew = async () => {
+    if (!renewDate) return;
+    setRenewLoading(true);
+    setRenewError('');
+    setRenewSuccess('');
+    try {
+      const result = await api.renewLease(sliceName, renewDate);
+      onSliceUpdated(result);
+      setRenewSuccess('Lease renewed successfully');
+    } catch (e: any) {
+      setRenewError(e.message);
+    } finally {
+      setRenewLoading(false);
+    }
+  };
+
+  return (
+    <div className="lease-renew-section">
+      <div className="editor-section-label">Renew Lease</div>
+      <div className="form-group" style={{ marginBottom: 8 }}>
+        <label style={{ fontSize: 11, color: 'var(--fabric-text-muted)' }}>New end date:</label>
+        <input
+          type="datetime-local"
+          value={renewDate}
+          onChange={(e) => setRenewDate(e.target.value)}
+          style={{ width: '100%', fontSize: 12, padding: '4px 6px' }}
+        />
       </div>
-      </>
+      <button
+        className="site-mapping-auto-btn"
+        style={{ width: '100%', fontSize: 11, padding: '5px 0' }}
+        onClick={handleRenew}
+        disabled={renewLoading || !renewDate}
+      >
+        {renewLoading ? 'Renewing...' : 'Renew Lease'}
+      </button>
+      {renewError && <div style={{ color: 'var(--fabric-coral)', fontSize: 11, marginTop: 4 }}>{renewError}</div>}
+      {renewSuccess && <div style={{ color: 'var(--fabric-teal)', fontSize: 11, marginTop: 4 }}>{renewSuccess}</div>}
     </div>
   );
 }
@@ -1904,7 +2026,7 @@ function NetworkForm({
   const [selectedIfaces, setSelectedIfaces] = useState<string[]>([]);
   const [subnet, setSubnet] = useState('');
   const [gateway, setGateway] = useState('');
-  const [ipMode, setIpMode] = useState<'none' | 'auto' | 'manual'>('none');
+  const [ipMode, setIpMode] = useState<'none' | 'auto' | 'config'>('none');
   const [interfaceIps, setInterfaceIps] = useState<Record<string, string>>({});
 
   const l2Types = ['L2Bridge', 'L2STS', 'L2PTP'];
@@ -1991,13 +2113,13 @@ function NetworkForm({
               </div>
               <div className="form-group" data-help-id="editor.net.ip-mode">
                 <label><Tooltip text="How IPs are assigned">IP Assignment</Tooltip></label>
-                <select value={ipMode} onChange={(e) => setIpMode(e.target.value as 'none' | 'auto' | 'manual')}>
-                  <option value="none">None</option>
-                  <option value="auto">Auto-assign</option>
-                  <option value="manual">Manual</option>
+                <select value={ipMode} onChange={(e) => setIpMode(e.target.value as 'none' | 'auto' | 'config')}>
+                  <option value="none">None (configure after boot)</option>
+                  <option value="auto">Auto (FABlib assigns)</option>
+                  <option value="config">User-Defined (specify per interface)</option>
                 </select>
               </div>
-              {ipMode === 'manual' && selectedIfaces.length > 0 && (
+              {ipMode === 'config' && selectedIfaces.length > 0 && (
                 <div className="form-group" data-help-id="editor.net.interface-ips">
                   <label><Tooltip text="Assign IP to each interface">Interface IPs</Tooltip></label>
                   {selectedIfaces.map((ifName) => (
@@ -2028,7 +2150,7 @@ function NetworkForm({
             type: netType,
             interfaces: selectedIfaces,
             ...(layer === 'L2' && subnet ? { subnet, gateway: gateway || undefined, ip_mode: ipMode } : {}),
-            ...(layer === 'L2' && ipMode === 'manual' ? { interface_ips: interfaceIps } : {}),
+            ...(layer === 'L2' && ipMode === 'config' ? { interface_ips: interfaceIps } : {}),
           })}
         >
           Add Network
@@ -2098,12 +2220,78 @@ function FacilityPortForm({
 
 // --- Network read-only view (existing networks) ---
 function NetworkReadOnlyView({
-  network, loading, onDelete,
+  network, loading, isDraft, sliceName, onSliceUpdated, onDelete,
 }: {
   network: SliceNetwork;
   loading: boolean;
+  isDraft: boolean;
+  sliceName: string;
+  onSliceUpdated: (data: SliceData) => void;
   onDelete: () => void;
 }) {
+  // Derive current IP mode from interface modes
+  const modes = network.interfaces.map(i => i.mode).filter(Boolean);
+  const derivedMode: 'none' | 'auto' | 'config' =
+    modes.length === 0 ? 'none'
+    : modes.every(m => m === 'auto') ? 'auto'
+    : modes.some(m => m === 'config') ? 'config'
+    : 'none';
+
+  const [ipMode, setIpMode] = useState<'none' | 'auto' | 'config'>(derivedMode);
+  const [subnet, setSubnet] = useState(network.subnet || '');
+  const [gateway, setGateway] = useState(network.gateway || '');
+  const [interfaceIps, setInterfaceIps] = useState<Record<string, string>>(() => {
+    const ips: Record<string, string> = {};
+    for (const iface of network.interfaces) {
+      if (iface.ip_addr) ips[iface.name] = iface.ip_addr;
+    }
+    return ips;
+  });
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+
+  // Reset local state when selected network changes
+  useEffect(() => {
+    const m = network.interfaces.map(i => i.mode).filter(Boolean);
+    const dm: 'none' | 'auto' | 'config' =
+      m.length === 0 ? 'none'
+      : m.every(v => v === 'auto') ? 'auto'
+      : m.some(v => v === 'config') ? 'config'
+      : 'none';
+    setIpMode(dm);
+    setSubnet(network.subnet || '');
+    setGateway(network.gateway || '');
+    const ips: Record<string, string> = {};
+    for (const iface of network.interfaces) {
+      if (iface.ip_addr) ips[iface.name] = iface.ip_addr;
+    }
+    setInterfaceIps(ips);
+    setError('');
+  }, [network.name, network.subnet, network.gateway, network.interfaces]);
+
+  const hasChanges = ipMode !== derivedMode || subnet !== (network.subnet || '') || gateway !== (network.gateway || '');
+
+  const handleSave = async () => {
+    setSaving(true);
+    setError('');
+    try {
+      const result = await api.updateNetwork(sliceName, network.name, {
+        subnet: subnet || undefined,
+        gateway: gateway || undefined,
+        ip_mode: ipMode,
+        ...(ipMode === 'config' ? { interface_ips: interfaceIps } : {}),
+      });
+      onSliceUpdated(result);
+    } catch (e: any) {
+      setError(e.message || 'Failed to update network');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const isL2 = network.layer === 'L2';
+  const canEdit = isDraft && isL2;
+
   return (
     <>
       <div className="editor-section-label">Network: {network.name}</div>
@@ -2116,17 +2304,94 @@ function NetworkReadOnlyView({
         <span className="readonly-label">Layer</span>
         <span className="readonly-value">{network.layer}</span>
       </div>
-      {network.subnet && (
-        <div className="readonly-field">
-          <span className="readonly-label">Subnet</span>
-          <span className="readonly-value">{network.subnet}</span>
-        </div>
-      )}
-      {network.gateway && (
-        <div className="readonly-field">
-          <span className="readonly-label">Gateway</span>
-          <span className="readonly-value">{network.gateway}</span>
-        </div>
+
+      {isL2 && canEdit ? (
+        <>
+          <div className="form-group" data-help-id="editor.net.ip-mode">
+            <label><Tooltip text="How IPs are assigned to interfaces">IP Mode</Tooltip></label>
+            <select value={ipMode} onChange={(e) => setIpMode(e.target.value as 'none' | 'auto' | 'config')}>
+              <option value="none">None (configure after boot)</option>
+              <option value="auto">Auto (FABlib assigns)</option>
+              <option value="config">User-Defined (specify per interface)</option>
+            </select>
+          </div>
+
+          {(ipMode === 'auto' || ipMode === 'config') && (
+            <>
+              <div className="form-group">
+                <label><Tooltip text="CIDR subnet for the network">Subnet</Tooltip></label>
+                <input type="text" value={subnet} onChange={(e) => setSubnet(e.target.value)} placeholder="e.g. 192.168.1.0/24" />
+              </div>
+              <div className="form-group">
+                <label><Tooltip text="Optional gateway address">Gateway</Tooltip></label>
+                <input type="text" value={gateway} onChange={(e) => setGateway(e.target.value)} placeholder="optional" />
+              </div>
+            </>
+          )}
+
+          {ipMode === 'config' && network.interfaces.length > 0 && (
+            <div className="form-group" data-help-id="editor.net.interface-ips">
+              <label><Tooltip text="Assign IP to each interface">Interface IPs</Tooltip></label>
+              {network.interfaces.map((iface) => (
+                <div key={iface.name} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+                  <span style={{ fontSize: '0.82em', minWidth: 100 }}>{iface.name}</span>
+                  <input
+                    type="text"
+                    value={interfaceIps[iface.name] || ''}
+                    onChange={(e) => setInterfaceIps(prev => ({ ...prev, [iface.name]: e.target.value }))}
+                    placeholder="e.g. 192.168.1.1"
+                    style={{ flex: 1 }}
+                  />
+                </div>
+              ))}
+            </div>
+          )}
+
+          {error && <div className="form-error">{error}</div>}
+
+          <button
+            className="primary-btn"
+            disabled={saving || loading}
+            onClick={handleSave}
+            style={{ marginTop: 4, marginBottom: 8 }}
+          >
+            {saving ? 'Saving…' : 'Apply IP Settings'}
+          </button>
+        </>
+      ) : isL2 ? (
+        <>
+          <div className="readonly-field">
+            <span className="readonly-label">IP Mode</span>
+            <span className="readonly-value">{derivedMode === 'auto' ? 'Auto' : derivedMode === 'config' ? 'User-Defined' : 'None'}</span>
+          </div>
+          {network.subnet && (
+            <div className="readonly-field">
+              <span className="readonly-label">Subnet</span>
+              <span className="readonly-value">{network.subnet}</span>
+            </div>
+          )}
+          {network.gateway && (
+            <div className="readonly-field">
+              <span className="readonly-label">Gateway</span>
+              <span className="readonly-value">{network.gateway}</span>
+            </div>
+          )}
+        </>
+      ) : (
+        <>
+          {network.subnet && (
+            <div className="readonly-field">
+              <span className="readonly-label">Subnet</span>
+              <span className="readonly-value">{network.subnet}</span>
+            </div>
+          )}
+          {network.gateway && (
+            <div className="readonly-field">
+              <span className="readonly-label">Gateway</span>
+              <span className="readonly-value">{network.gateway}</span>
+            </div>
+          )}
+        </>
       )}
 
       {network.interfaces.length > 0 && (
@@ -2136,7 +2401,11 @@ function NetworkReadOnlyView({
           {network.interfaces.map((iface) => (
             <div key={iface.name} className="readonly-field">
               <span className="readonly-label">{iface.name}</span>
-              <span className="readonly-value">{iface.node_name}{iface.ip_addr ? ` (${iface.ip_addr})` : ''}</span>
+              <span className="readonly-value">
+                {iface.node_name}
+                {iface.mode ? ` [${iface.mode}]` : ''}
+                {iface.ip_addr ? ` ${iface.ip_addr}` : ''}
+              </span>
             </div>
           ))}
         </>

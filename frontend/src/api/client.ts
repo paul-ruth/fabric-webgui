@@ -54,6 +54,13 @@ export function archiveAllTerminal(): Promise<{ archived: string[]; count: numbe
   return fetchJson('/slices/archive-terminal', { method: 'POST' });
 }
 
+export function renewLease(name: string, endDate: string): Promise<SliceData> {
+  return fetchJson(`/slices/${encodeURIComponent(name)}/renew`, {
+    method: 'POST',
+    body: JSON.stringify({ end_date: endDate }),
+  });
+}
+
 export function cloneSlice(name: string, newName: string): Promise<SliceData> {
   return fetchJson(`/slices/${encodeURIComponent(name)}/clone?new_name=${encodeURIComponent(newName)}`, { method: 'POST' });
 }
@@ -149,6 +156,22 @@ export function addNetwork(
     method: 'POST',
     body: JSON.stringify(net),
   });
+}
+
+export function updateNetwork(
+  sliceName: string,
+  netName: string,
+  update: {
+    subnet?: string;
+    gateway?: string;
+    ip_mode?: string;
+    interface_ips?: Record<string, string>;
+  }
+): Promise<SliceData> {
+  return fetchJson(
+    `/slices/${encodeURIComponent(sliceName)}/networks/${encodeURIComponent(netName)}`,
+    { method: 'PUT', body: JSON.stringify(update) }
+  );
 }
 
 export function removeNetwork(sliceName: string, netName: string): Promise<SliceData> {
@@ -712,6 +735,12 @@ export function saveBootConfig(sliceName: string, nodeName: string, config: Boot
 
 export function executeBootConfig(sliceName: string, nodeName: string): Promise<BootExecResult[]> {
   return fetchJson(`/files/boot-config/${encodeURIComponent(sliceName)}/${encodeURIComponent(nodeName)}/execute`, {
+    method: 'POST',
+  });
+}
+
+export function executeAllBootConfigs(sliceName: string): Promise<Record<string, BootExecResult[]>> {
+  return fetchJson(`/files/boot-config/${encodeURIComponent(sliceName)}/execute-all`, {
     method: 'POST',
   });
 }

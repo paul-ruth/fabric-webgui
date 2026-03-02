@@ -286,7 +286,7 @@ class CreateNetworkRequest(BaseModel):
     interfaces: List[str] = []  # list of interface names to attach
     subnet: Optional[str] = None      # e.g. "192.168.1.0/24"
     gateway: Optional[str] = None     # e.g. "192.168.1.1"
-    ip_mode: str = "none"             # "auto" | "manual" | "none"
+    ip_mode: str = "none"             # "auto" | "config" | "none"
     interface_ips: Dict[str, str] = {} # {"node1-nic1-p1": "10.0.0.1"}
 
 
@@ -358,23 +358,40 @@ async def list_slices() -> list[dict[str, Any]]:
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-    # Bulk-register all FABRIC results into registry (single write)
-    bulk_entries = []
+    # Load non-archived registry entries (before modifying anything)
+    registry = get_all_entries(include_archived=False)
+
+    # Separate fast results into: unchanged (same state as registry) and
+    # changed (state differs from registry — needs UUID confirmation).
+    # New slices not yet in the registry are registered directly.
+    unchanged_entries: list[dict] = []
+    needs_confirm: list[dict] = []  # fast results with state changes
+    new_entries: list[dict] = []    # not yet in registry
+
     for r in fabric_results:
-        bulk_entries.append({
-            "name": r["name"],
-            "uuid": r.get("id", ""),
-            "state": r.get("state", ""),
-            "has_errors": False,
-        })
-    if bulk_entries:
-        bulk_register(bulk_entries)
+        name = r["name"]
+        uuid = r.get("id", "")
+        fast_state = r.get("state", "")
+        entry = registry.get(name)
+        if entry is None:
+            # New slice — register directly
+            new_entries.append({
+                "name": name, "uuid": uuid,
+                "state": fast_state, "has_errors": False,
+            })
+        elif entry.get("state") == fast_state:
+            # State unchanged — trust it
+            unchanged_entries.append(r)
+        else:
+            # State changed — need UUID confirmation
+            needs_confirm.append(r)
+
+    # Bulk-register genuinely new slices
+    if new_entries:
+        bulk_register(new_entries)
 
     # Build set of names returned by the fast query
     fast_names: set[str] = {r["name"] for r in fabric_results}
-
-    # Load non-archived registry entries
-    registry = get_all_entries(include_archived=False)
 
     # Individually query registry entries NOT in fast results (by UUID)
     stale_entries: list[tuple[str, dict]] = []
@@ -384,10 +401,43 @@ async def list_slices() -> list[dict[str, Any]]:
         if entry.get("uuid"):
             stale_entries.append((name, entry))
 
-    def _query_stale():
-        """Query each stale registry entry individually by UUID."""
+    def _query_by_uuid():
+        """Confirm state changes and query stale entries by UUID."""
         fablib = get_fablib()
-        updated: list[dict[str, Any]] = []
+        confirmed: dict[str, dict[str, Any]] = {}
+        stale_updated: list[dict[str, Any]] = []
+
+        # Confirm state changes from the fast query
+        for r in needs_confirm:
+            name = r["name"]
+            uuid = r.get("id", "")
+            if not uuid:
+                # No UUID to query — trust the fast result
+                confirmed[name] = r
+                continue
+            try:
+                s = fablib.get_slice(slice_id=uuid)
+                state = str(s.get_state()) if s.get_state() else r.get("state", "")
+                has_errors = check_has_errors(s)
+                sid = str(s.get_slice_id()) if s.get_slice_id() else uuid
+                update_slice_state(name, state, uuid=sid, has_errors=has_errors)
+                confirmed[name] = {
+                    "name": name, "id": sid,
+                    "state": state, "has_errors": has_errors,
+                }
+                logger.info("Confirmed state change for '%s': %s → %s",
+                            name, registry.get(name, {}).get("state"), state)
+            except Exception:
+                # UUID query failed — keep registry state
+                entry = registry.get(name, {})
+                confirmed[name] = {
+                    "name": name, "id": uuid,
+                    "state": entry.get("state", r.get("state", "")),
+                    "has_errors": entry.get("has_errors", False),
+                }
+                logger.warning("UUID confirmation failed for '%s', keeping registry state", name)
+
+        # Query stale entries (not in fast results)
         for name, entry in stale_entries:
             uuid = entry["uuid"]
             try:
@@ -396,47 +446,71 @@ async def list_slices() -> list[dict[str, Any]]:
                 has_errors = check_has_errors(s)
                 sid = str(s.get_slice_id()) if s.get_slice_id() else uuid
                 update_slice_state(name, state, uuid=sid, has_errors=has_errors)
-                updated.append({
-                    "name": name,
-                    "id": sid,
-                    "state": state,
-                    "has_errors": has_errors,
+                stale_updated.append({
+                    "name": name, "id": sid,
+                    "state": state, "has_errors": has_errors,
                 })
             except Exception:
                 # Slice purged or inaccessible — mark as Dead
                 update_slice_state(name, "Dead", uuid=uuid, has_errors=False)
-                updated.append({
-                    "name": name,
-                    "id": uuid,
-                    "state": "Dead",
-                    "has_errors": False,
+                stale_updated.append({
+                    "name": name, "id": uuid,
+                    "state": "Dead", "has_errors": False,
                 })
-        return updated
 
+        return confirmed, stale_updated
+
+    # Run UUID queries (both confirmations and stale lookups)
+    confirmed_results: dict[str, dict[str, Any]] = {}
     stale_results: list[dict[str, Any]] = []
-    if stale_entries:
+    if needs_confirm or stale_entries:
         try:
-            stale_results = await asyncio.to_thread(_query_stale)
+            confirmed_results, stale_results = await asyncio.to_thread(_query_by_uuid)
         except Exception:
-            # Fall back to registry state if individual queries fail entirely
+            # Fall back: trust fast results for confirmations, registry for stale
+            for r in needs_confirm:
+                confirmed_results[r["name"]] = r
             for name, entry in stale_entries:
                 stale_results.append({
-                    "name": name,
-                    "id": entry["uuid"],
+                    "name": name, "id": entry["uuid"],
                     "state": entry.get("state", "Dead"),
                     "has_errors": entry.get("has_errors", False),
                 })
+    else:
+        # No confirmations or stale queries needed — register unchanged entries
+        unchanged_bulk = []
+        for r in unchanged_entries:
+            unchanged_bulk.append({
+                "name": r["name"], "uuid": r.get("id", ""),
+                "state": r.get("state", ""), "has_errors": False,
+            })
+        if unchanged_bulk:
+            bulk_register(unchanged_bulk)
+
+    # If we did UUID queries, also register the unchanged entries
+    if needs_confirm or stale_entries:
+        unchanged_bulk = []
+        for r in unchanged_entries:
+            unchanged_bulk.append({
+                "name": r["name"], "uuid": r.get("id", ""),
+                "state": r.get("state", ""), "has_errors": False,
+            })
+        if unchanged_bulk:
+            bulk_register(unchanged_bulk)
 
     results: list[dict[str, Any]] = []
     seen_names: set[str] = set()
 
-    # Add all FABRIC results (active slices)
+    # Add all FABRIC results — use confirmed state for changed slices
     for r in fabric_results:
         name = r["name"]
         seen_names.add(name)
-        entry = registry.get(name)
-        r["has_errors"] = entry.get("has_errors", False) if entry else False
-        results.append(r)
+        if name in confirmed_results:
+            results.append(confirmed_results[name])
+        else:
+            entry = registry.get(name)
+            r["has_errors"] = entry.get("has_errors", False) if entry else False
+            results.append(r)
 
     # Add individually-queried stale results
     for r in stale_results:
@@ -476,26 +550,51 @@ async def archive_terminal_slices() -> dict[str, Any]:
 
 @router.get("/slices/{slice_name}")
 async def get_slice(slice_name: str) -> dict[str, Any]:
-    """Get full slice data including topology graph."""
+    """Get full slice data including topology graph.
+
+    For submitted slices this always fetches a fresh copy from FABRIC
+    (by UUID) so the state is up-to-date.  New drafts (never submitted)
+    are served from the in-memory store.
+    """
     def _do():
-        slice_obj = _get_slice_obj(slice_name)
+        # New drafts (never submitted) — serve from memory
+        if _is_new_draft(slice_name):
+            slice_obj = _get_draft(slice_name)
+            if slice_obj is not None:
+                return _serialize(slice_obj)
+
+        # Submitted slices — always pull fresh from FABRIC by UUID
+        fablib = get_fablib()
+        uuid = get_slice_uuid(slice_name)
+        slice_obj = None
+        if uuid:
+            try:
+                slice_obj = fablib.get_slice(slice_id=uuid)
+            except Exception:
+                logger.debug("UUID lookup failed for '%s' (uuid=%s), falling back to name", slice_name, uuid)
+        if slice_obj is None:
+            slice_obj = fablib.get_slice(name=slice_name)
+
         # Determine state before deciding whether to store as draft
         state = str(slice_obj.get_state()) if slice_obj.get_state() else ""
         # Only store as draft if NOT in a terminal state — terminal slices
         # are read-only (viewable/clonable but not editable)
-        if not _is_draft(slice_name) and state not in TERMINAL_STATES:
+        if state not in TERMINAL_STATES:
             _store_draft(slice_name, slice_obj, is_new=False)
+        else:
+            # Terminal slice — remove any stale draft
+            _pop_draft(slice_name)
+
         data = _serialize(slice_obj)
-        # Update registry for non-draft slices (including has_errors)
-        if not _is_new_draft(slice_name):
-            try:
-                sid = str(slice_obj.get_slice_id()) if hasattr(slice_obj, 'get_slice_id') else ""
-                st = data.get("state", "")
-                has_errors = bool(data.get("error_messages"))
-                if sid or st:
-                    update_slice_state(slice_name, st, uuid=sid, has_errors=has_errors)
-            except Exception:
-                pass
+        # Update registry with fresh state (including has_errors)
+        try:
+            sid = str(slice_obj.get_slice_id()) if hasattr(slice_obj, 'get_slice_id') else ""
+            st = data.get("state", "")
+            has_errors = bool(data.get("error_messages"))
+            if sid or st:
+                update_slice_state(slice_name, st, uuid=sid, has_errors=has_errors)
+        except Exception:
+            pass
         return data
     try:
         return await asyncio.to_thread(_do)
@@ -821,6 +920,43 @@ async def delete_slice(slice_name: str) -> dict[str, str]:
         raise HTTPException(status_code=500, detail=str(e))
 
 
+class RenewRequest(BaseModel):
+    end_date: str
+
+
+@router.post("/slices/{slice_name}/renew")
+async def renew_slice(slice_name: str, body: RenewRequest) -> dict[str, Any]:
+    """Renew a slice lease to a new end date."""
+    from datetime import datetime
+
+    try:
+        end_dt = datetime.fromisoformat(body.end_date.replace("Z", "+00:00"))
+    except Exception:
+        raise HTTPException(status_code=400, detail=f"Invalid date format: {body.end_date}")
+
+    def _do():
+        fablib = get_fablib()
+        uuid = get_slice_uuid(slice_name)
+        if uuid:
+            try:
+                slice_obj = fablib.get_slice(slice_id=uuid)
+            except Exception:
+                slice_obj = fablib.get_slice(name=slice_name)
+        else:
+            slice_obj = fablib.get_slice(name=slice_name)
+        slice_obj.renew(end_dt)
+        slice_obj.update()
+        return _serialize(slice_obj)
+
+    try:
+        return await asyncio.to_thread(_do)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("renew_slice failed for %s", slice_name)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.post("/slices/{slice_name}/archive")
 async def archive_slice_endpoint(slice_name: str) -> dict[str, str]:
     """Archive a slice (hide from list without deleting)."""
@@ -1092,12 +1228,53 @@ def add_network(slice_name: str, req: CreateNetworkRequest) -> dict[str, Any]:
             if req.ip_mode == "auto" and req.subnet:
                 for iface in ifaces:
                     iface.set_mode("auto")
-            elif req.ip_mode == "manual":
+            elif req.ip_mode == "config":
                 for iface in ifaces:
                     iface_name = iface.get_name()
                     if iface_name in req.interface_ips:
-                        iface.set_mode("manual")
+                        iface.set_mode("config")
                         iface.set_ip_addr(addr=req.interface_ips[iface_name])
+
+        return _serialize(slice_obj, dirty=True)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class UpdateNetworkRequest(BaseModel):
+    subnet: Optional[str] = None
+    gateway: Optional[str] = None
+    ip_mode: str = "none"             # "auto" | "config" | "none"
+    interface_ips: Dict[str, str] = {}
+
+
+@router.put("/slices/{slice_name}/networks/{net_name}")
+def update_network(slice_name: str, net_name: str, req: UpdateNetworkRequest) -> dict[str, Any]:
+    """Update IP mode, subnet, and per-interface IPs on an existing L2 network."""
+    try:
+        slice_obj = _get_slice_obj(slice_name)
+        net = slice_obj.get_network(name=net_name)
+        ifaces = net.get_interfaces()
+
+        # Update subnet/gateway
+        if req.subnet:
+            net.set_subnet(req.subnet)
+        if req.gateway:
+            net.set_gateway(req.gateway)
+
+        # Reset all interface modes first
+        for iface in ifaces:
+            iface.set_mode("none")
+
+        # Apply new mode
+        if req.ip_mode == "auto" and req.subnet:
+            for iface in ifaces:
+                iface.set_mode("auto")
+        elif req.ip_mode == "config":
+            for iface in ifaces:
+                iface_name = iface.get_name()
+                if iface_name in req.interface_ips:
+                    iface.set_mode("config")
+                    iface.set_ip_addr(addr=req.interface_ips[iface_name])
 
         return _serialize(slice_obj, dirty=True)
     except Exception as e:
@@ -1378,6 +1555,17 @@ async def clone_slice(slice_name: str, new_name: str) -> dict[str, Any]:
                     net.set_subnet(subnet)
                 if gateway:
                     net.set_gateway(gateway)
+                ip_mode = net_def.get("ip_mode", "none")
+                if ip_mode == "auto" and subnet:
+                    for iface in ifaces:
+                        iface.set_mode("auto")
+                elif ip_mode == "config":
+                    iface_ips = net_def.get("interface_ips", {})
+                    for iface in ifaces:
+                        iname = iface.get_name()
+                        if iname in iface_ips:
+                            iface.set_mode("config")
+                            iface.set_ip_addr(addr=iface_ips[iname])
 
         _store_draft(new_name, new_slice, is_new=True)
         # Store resolved group membership for the clone
@@ -1450,13 +1638,23 @@ def build_slice_model(slice_name: str) -> dict:
         model["nodes"].append(node_model)
 
     for net in data.get("networks", []):
-        net_model = {
+        net_model: dict[str, Any] = {
             "name": net["name"],
             "type": net.get("type", "L2Bridge"),
             "interfaces": [i["name"] for i in net.get("interfaces", [])],
             "subnet": net.get("subnet", ""),
             "gateway": net.get("gateway", ""),
         }
+        # Derive ip_mode and interface_ips from interface modes
+        ifaces = net.get("interfaces", [])
+        modes = [i.get("mode", "") for i in ifaces]
+        if all(m == "auto" for m in modes if m):
+            net_model["ip_mode"] = "auto"
+        elif any(m == "config" for m in modes):
+            net_model["ip_mode"] = "config"
+            net_model["interface_ips"] = {
+                i["name"]: i["ip_addr"] for i in ifaces if i.get("ip_addr")
+            }
         model["networks"].append(net_model)
 
     return model
@@ -1599,12 +1797,12 @@ def import_slice(model: SliceModelImport) -> dict[str, Any]:
                 if ip_mode == "auto" and subnet:
                     for iface in ifaces:
                         iface.set_mode("auto")
-                elif ip_mode == "manual":
+                elif ip_mode == "config":
                     iface_ips = net_def.get("interface_ips", {})
                     for iface in ifaces:
                         iname = iface.get_name()
                         if iname in iface_ips:
-                            iface.set_mode("manual")
+                            iface.set_mode("config")
                             iface.set_ip_addr(addr=iface_ips[iname])
 
         _store_draft(model.name, slice_obj, is_new=True)
