@@ -52,18 +52,25 @@ def _now() -> str:
 
 # --- Public API ---
 
-def register_slice(name: str, uuid: str = "", state: str = "Draft", has_errors: bool | None = None) -> None:
+def _current_project_id() -> str:
+    """Return the current FABRIC_PROJECT_ID from environment."""
+    return os.environ.get("FABRIC_PROJECT_ID", "")
+
+
+def register_slice(name: str, uuid: str = "", state: str = "Draft", has_errors: bool | None = None, project_id: str = "") -> None:
     """Add or update a slice entry in the registry."""
     with _lock:
         reg = _load()
         now = _now()
         existing = reg["slices"].get(name)
+        pid = project_id or (existing.get("project_id", "") if existing else "") or _current_project_id()
         entry = {
             "uuid": uuid or (existing["uuid"] if existing else ""),
             "name": name,
             "state": state,
             "archived": False,
             "has_errors": has_errors if has_errors is not None else (existing.get("has_errors", False) if existing else False),
+            "project_id": pid,
             "created_at": existing["created_at"] if existing else now,
             "updated_at": now,
         }
@@ -71,7 +78,7 @@ def register_slice(name: str, uuid: str = "", state: str = "Draft", has_errors: 
         _save(reg)
 
 
-def update_slice_state(name: str, state: str, uuid: str = "", has_errors: bool | None = None) -> None:
+def update_slice_state(name: str, state: str, uuid: str = "", has_errors: bool | None = None, project_id: str = "") -> None:
     """Update state (and optionally UUID / has_errors) for a registered slice."""
     with _lock:
         reg = _load()
@@ -83,6 +90,7 @@ def update_slice_state(name: str, state: str, uuid: str = "", has_errors: bool |
                 "state": state,
                 "archived": False,
                 "has_errors": has_errors or False,
+                "project_id": project_id or _current_project_id(),
                 "created_at": _now(),
                 "updated_at": _now(),
             }
@@ -98,6 +106,11 @@ def update_slice_state(name: str, state: str, uuid: str = "", has_errors: bool |
                 entry["uuid"] = uuid
             if has_errors is not None:
                 entry["has_errors"] = has_errors
+            # Backfill project_id for entries created before this field existed
+            if project_id:
+                entry["project_id"] = project_id
+            elif not entry.get("project_id"):
+                entry["project_id"] = _current_project_id()
         reg["slices"][name] = entry
         _save(reg)
 
@@ -145,20 +158,55 @@ def unregister_slice(name: str) -> None:
             _save(reg)
 
 
-def get_all_entries(include_archived: bool = False) -> dict[str, dict[str, Any]]:
-    """Return all registry entries, optionally including archived ones."""
+def get_all_entries(include_archived: bool = False, project_id: str = "") -> dict[str, dict[str, Any]]:
+    """Return all registry entries, optionally including archived ones.
+
+    If *project_id* is given, only entries whose project_id matches are
+    returned.  Entries with no project_id are excluded when filtering (they
+    belong to an unknown project and should be reconciled first).
+    """
     with _lock:
         reg = _load()
-        if include_archived:
-            return dict(reg["slices"])
-        return {k: v for k, v in reg["slices"].items() if not v.get("archived")}
+        result = {}
+        for k, v in reg["slices"].items():
+            if not include_archived and v.get("archived"):
+                continue
+            if project_id:
+                entry_pid = v.get("project_id", "")
+                if entry_pid != project_id:
+                    continue
+            result[k] = v
+        return result
 
 
-def bulk_register(entries: list[dict[str, Any]]) -> None:
+def bulk_tag_project(uuid_to_project: dict[str, str]) -> int:
+    """Tag registry entries with their project_id based on UUID matching.
+
+    *uuid_to_project* maps slice UUID → project_id.
+    Returns the number of entries updated.
+    """
+    with _lock:
+        reg = _load()
+        updated = 0
+        for name, entry in reg["slices"].items():
+            uuid = entry.get("uuid", "")
+            if uuid and uuid in uuid_to_project:
+                pid = uuid_to_project[uuid]
+                if entry.get("project_id") != pid:
+                    entry["project_id"] = pid
+                    entry["updated_at"] = _now()
+                    updated += 1
+        if updated:
+            _save(reg)
+        return updated
+
+
+def bulk_register(entries: list[dict[str, Any]], project_id: str = "") -> None:
     """Register many slices at once (single read/write cycle).
 
     Each entry dict should have: name, uuid, state, and optionally has_errors.
     """
+    pid = project_id or _current_project_id()
     with _lock:
         reg = _load()
         now = _now()
@@ -171,6 +219,7 @@ def bulk_register(entries: list[dict[str, Any]]) -> None:
                 "state": e.get("state", ""),
                 "archived": existing.get("archived", False) if existing else False,
                 "has_errors": e.get("has_errors", existing.get("has_errors", False) if existing else False),
+                "project_id": e.get("project_id", "") or (existing.get("project_id", "") if existing else "") or pid,
                 "created_at": existing["created_at"] if existing else now,
                 "updated_at": now,
             }

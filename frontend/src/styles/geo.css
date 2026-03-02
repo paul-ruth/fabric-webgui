@@ -65,6 +65,28 @@
   50% { opacity: 0.4; }
 }
 
+/* Map dark/light toggle */
+.geo-theme-toggle {
+  background: none;
+  border: 1px solid var(--fabric-border);
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  padding: 2px 6px;
+  color: var(--fabric-text);
+  transition: background 0.15s, color 0.15s;
+}
+.geo-theme-toggle:hover {
+  background: var(--fabric-hover);
+}
+.geo-theme-toggle.dark {
+  color: #ffc107;
+}
+.geo-theme-toggle.light {
+  color: #5798bc;
+}
+
 /* Site popup */
 .site-popup h3 {
   font-size: 14px;

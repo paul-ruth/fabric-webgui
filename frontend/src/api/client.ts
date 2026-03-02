@@ -54,6 +54,10 @@ export function archiveAllTerminal(): Promise<{ archived: string[]; count: numbe
   return fetchJson('/slices/archive-terminal', { method: 'POST' });
 }
 
+export function reconcileProjects(): Promise<{ tagged: number; projects_scanned: number; slices_found: number }> {
+  return fetchJson('/slices/reconcile-projects', { method: 'POST' });
+}
+
 export function renewLease(name: string, endDate: string): Promise<SliceData> {
   return fetchJson(`/slices/${encodeURIComponent(name)}/renew`, {
     method: 'POST',
@@ -745,6 +749,19 @@ export function executeAllBootConfigs(sliceName: string): Promise<Record<string,
   });
 }
 
+// --- Projects (Core API) ---
+
+export function listUserProjects(): Promise<{ projects: Array<{ name: string; uuid: string }>; active_project_id: string }> {
+  return fetchJson('/projects');
+}
+
+export function switchProject(projectId: string): Promise<{ status: string; project_id: string }> {
+  return fetchJson('/projects/switch', {
+    method: 'POST',
+    body: JSON.stringify({ project_id: projectId }),
+  });
+}
+
 export function saveConfig(config: {
   project_id: string;
   bastion_username: string;
@@ -762,4 +779,16 @@ export function saveConfig(config: {
     method: 'POST',
     body: JSON.stringify(config),
   });
+}
+
+export function rebuildStorage(): Promise<{
+  status: string;
+  directories: number;
+  directories_created: number;
+  slice_templates_reseeded: number;
+  vm_templates_reseeded: number;
+  slice_templates_total: number;
+  vm_templates_total: number;
+}> {
+  return fetchJson('/config/rebuild-storage', { method: 'POST' });
 }

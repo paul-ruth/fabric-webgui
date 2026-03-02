@@ -339,3 +339,31 @@
   flex-shrink: 0;
   font-size: 11px;
 }
+
+/* Tab bar for combined Templates panel */
+.templates-tab-bar {
+  display: flex;
+  border-bottom: 1px solid var(--fabric-border);
+  flex-shrink: 0;
+}
+.templates-tab {
+  flex: 1;
+  padding: 6px 0;
+  font-size: 12px;
+  font-weight: 600;
+  text-align: center;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--fabric-text-muted);
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+.templates-tab:hover {
+  color: var(--fabric-primary);
+  background: var(--fabric-bg-tint);
+}
+.templates-tab.active {
+  color: var(--fabric-primary);
+  border-bottom-color: var(--fabric-primary);
+}

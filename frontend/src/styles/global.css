@@ -217,7 +217,7 @@ button.danger:hover {
 }
 
 /* Form controls — matches fabvis widget styling */
-select, input[type="text"], input[type="number"] {
+select, input[type="text"], input[type="number"], input[type="datetime-local"] {
   font-family: inherit;
   font-size: 13px;
   padding: 5px 8px;
@@ -228,8 +228,10 @@ select, input[type="text"], input[type="number"] {
 }
 [data-theme="dark"] select,
 [data-theme="dark"] input[type="text"],
-[data-theme="dark"] input[type="number"] {
+[data-theme="dark"] input[type="number"],
+[data-theme="dark"] input[type="datetime-local"] {
   border-color: rgba(255, 255, 255, 0.12);
+  color-scheme: dark;
 }
 select:focus, input:focus {
   outline: none;

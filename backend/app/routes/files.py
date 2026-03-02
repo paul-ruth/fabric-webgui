@@ -84,6 +84,14 @@ def _save_provisions(slice_name: str, rules: list):
 def _get_node(slice_name: str, node_name: str):
     """Return FABlib node object for a slice/node pair."""
     fablib = get_fablib()
+    from app.slice_registry import get_slice_uuid
+    uuid = get_slice_uuid(slice_name)
+    if uuid:
+        try:
+            slice_obj = fablib.get_slice(slice_id=uuid)
+            return slice_obj.get_node(node_name)
+        except Exception:
+            pass
     slice_obj = fablib.get_slice(slice_name)
     return slice_obj.get_node(node_name)
 
@@ -97,7 +105,15 @@ def _get_sftp(slice_name: str, node_name: str):
     import paramiko
 
     fablib = get_fablib()
-    slice_obj = fablib.get_slice(slice_name)
+    from app.slice_registry import get_slice_uuid
+    uuid = get_slice_uuid(slice_name)
+    if uuid:
+        try:
+            slice_obj = fablib.get_slice(slice_id=uuid)
+        except Exception:
+            slice_obj = fablib.get_slice(slice_name)
+    else:
+        slice_obj = fablib.get_slice(slice_name)
     node_obj = slice_obj.get_node(node_name)
     management_ip = str(node_obj.get_management_ip())
     username = node_obj.get_username()
@@ -135,7 +151,7 @@ async def list_files(path: str = ""):
         raise HTTPException(status_code=404, detail="Directory not found")
     entries = []
     for name in sorted(os.listdir(target)):
-        if name in (".provisions", ".boot-config", ".slice-keys"):
+        if name in (".provisions", ".boot-config", ".slice-keys", ".all_slices"):
             continue
         full = os.path.join(target, name)
         try:
@@ -241,7 +257,7 @@ async def download_folder(path: str = ""):
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         for root, dirs, files in os.walk(target):
             # Skip internal directories
-            dirs[:] = [d for d in dirs if d not in (".provisions", ".boot-config", ".slice-keys")]
+            dirs[:] = [d for d in dirs if d not in (".provisions", ".boot-config", ".slice-keys", ".all_slices")]
             for fname in files:
                 full = os.path.join(root, fname)
                 arcname = os.path.relpath(full, target)
@@ -610,7 +626,15 @@ async def execute_provisions(slice_name: str, node_name: Optional[str] = Query(N
 
     def _do():
         fablib = get_fablib()
-        slice_obj = fablib.get_slice(slice_name)
+        from app.slice_registry import get_slice_uuid
+        uuid = get_slice_uuid(slice_name)
+        if uuid:
+            try:
+                slice_obj = fablib.get_slice(slice_id=uuid)
+            except Exception:
+                slice_obj = fablib.get_slice(slice_name)
+        else:
+            slice_obj = fablib.get_slice(slice_name)
         for rule in rules:
             try:
                 base = _storage_dir()
@@ -808,3 +832,89 @@ async def execute_boot_config(slice_name: str, node_name: str):
 
     await asyncio.to_thread(_do)
     return results
+
+
+@router.post("/api/files/boot-config/{slice_name}/execute-all")
+async def execute_all_boot_configs(slice_name: str):
+    """Run boot config (uploads, network, commands) on every node that has one."""
+    from app.routes.slices import _get_slice_obj
+
+    def _do():
+        slice_obj = _get_slice_obj(slice_name)
+        nodes = slice_obj.get_nodes()
+        all_results = {}
+        base = _storage_dir()
+
+        for node_obj in nodes:
+            node_name = node_obj.get_name()
+            config = _load_boot_config(slice_name, node_name)
+            has_work = config.get("uploads") or config.get("commands") or config.get("network")
+            if not has_work:
+                continue
+
+            node_results = []
+
+            # 1. Uploads
+            for upload in config.get("uploads", []):
+                uid = upload.get("id", "?")
+                try:
+                    local_path = _safe_path(base, upload["source"])
+                    if os.path.isdir(local_path):
+                        node_obj.upload_directory(local_path, upload["dest"])
+                        node_results.append({"type": "upload", "id": uid, "status": "ok"})
+                    elif os.path.isfile(local_path):
+                        node_obj.upload_file(local_path, upload["dest"])
+                        node_results.append({"type": "upload", "id": uid, "status": "ok"})
+                    else:
+                        node_results.append({"type": "upload", "id": uid, "status": "error",
+                                             "detail": "Source not found"})
+                except Exception as e:
+                    node_results.append({"type": "upload", "id": uid, "status": "error",
+                                         "detail": str(e)})
+
+            # 2. Network config
+            for net in sorted(config.get("network", []), key=lambda n: n.get("order", 0)):
+                nid = net.get("id", "?")
+                try:
+                    iface = net["iface"]
+                    mode = net.get("mode", "auto")
+                    if mode == "auto":
+                        cmd = f"sudo dhclient {iface}"
+                    else:
+                        ip_addr = net.get("ip", "")
+                        subnet = net.get("subnet", "24")
+                        cmd = f"sudo ip addr add {ip_addr}/{subnet} dev {iface} && sudo ip link set {iface} up"
+                        gw = net.get("gateway")
+                        if gw:
+                            cmd += f" && sudo ip route add default via {gw} dev {iface}"
+                    stdout, stderr = node_obj.execute(cmd, quiet=True)
+                    if stderr and stderr.strip():
+                        node_results.append({"type": "network", "id": nid, "status": "error",
+                                             "detail": stderr.strip()})
+                    else:
+                        node_results.append({"type": "network", "id": nid, "status": "ok",
+                                             "detail": stdout.strip() or None})
+                except Exception as e:
+                    node_results.append({"type": "network", "id": nid, "status": "error",
+                                         "detail": str(e)})
+
+            # 3. Commands
+            for cmd_entry in sorted(config.get("commands", []), key=lambda c: c.get("order", 0)):
+                cid = cmd_entry.get("id", "?")
+                try:
+                    stdout, stderr = node_obj.execute(cmd_entry["command"], quiet=True)
+                    if stderr and stderr.strip():
+                        node_results.append({"type": "command", "id": cid, "status": "error",
+                                             "detail": stderr.strip()})
+                    else:
+                        node_results.append({"type": "command", "id": cid, "status": "ok",
+                                             "detail": stdout.strip() or None})
+                except Exception as e:
+                    node_results.append({"type": "command", "id": cid, "status": "error",
+                                         "detail": str(e)})
+
+            all_results[node_name] = node_results
+
+        return all_results
+
+    return await asyncio.to_thread(_do)

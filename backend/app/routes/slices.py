@@ -23,7 +23,8 @@ from app.slice_registry import (
     register_slice, update_slice_state, get_slice_uuid,
     archive_slice as registry_archive_slice,
     archive_all_terminal as registry_archive_all_terminal,
-    unregister_slice, get_all_entries, bulk_register, TERMINAL_STATES,
+    unregister_slice, get_all_entries, bulk_register, bulk_tag_project,
+    TERMINAL_STATES,
 )
 
 router = APIRouter(tags=["slices"])
@@ -75,6 +76,8 @@ _draft_slices: dict[str, Any] = {}
 _draft_is_new: dict[str, bool] = {}
 # Track site group membership: slice_name -> {node_name: "@group"}
 _draft_site_groups: dict[str, dict[str, str]] = {}
+# Track which project a draft belongs to
+_draft_project_id: dict[str, str] = {}
 
 
 def _drafts_dir() -> str:
@@ -99,11 +102,14 @@ def _persist_draft(name: str, slice_obj: Any) -> None:
         # Save topology
         topo_path = os.path.join(d, "topology.graphml")
         slice_obj.save(topo_path)
-        # Save metadata (original name, site groups)
+        # Save metadata (original name, site groups, project)
         meta = {"name": name}
         groups = _draft_site_groups.get(name, {})
         if groups:
             meta["site_groups"] = groups
+        pid = _draft_project_id.get(name, os.environ.get("FABRIC_PROJECT_ID", ""))
+        if pid:
+            meta["project_id"] = pid
         meta_path = os.path.join(d, "meta.json")
         with open(meta_path, "w") as f:
             json.dump(meta, f)
@@ -146,12 +152,14 @@ def _load_persistent_drafts() -> None:
         # Read metadata
         name = entry  # fallback to dir name
         groups: dict[str, str] = {}
+        draft_pid = ""
         if os.path.isfile(meta_path):
             try:
                 with open(meta_path) as f:
                     meta = json.load(f)
                 name = meta.get("name", entry)
                 groups = meta.get("site_groups", {})
+                draft_pid = meta.get("project_id", "")
             except Exception:
                 pass
         # Skip if already in memory
@@ -170,7 +178,9 @@ def _load_persistent_drafts() -> None:
             _draft_is_new[name] = True
             if groups:
                 _draft_site_groups[name] = groups
-            register_slice(name, state="Draft")
+            if draft_pid:
+                _draft_project_id[name] = draft_pid
+            register_slice(name, state="Draft", project_id=draft_pid)
             logger.info("Restored persistent draft '%s' from disk", name)
         except Exception:
             logger.warning("Could not restore draft '%s' from disk", name, exc_info=True)
@@ -180,6 +190,8 @@ def _store_draft(name: str, slice_obj: Any, is_new: bool = True) -> None:
     with _draft_lock:
         _draft_slices[name] = slice_obj
         _draft_is_new[name] = is_new
+        if name not in _draft_project_id:
+            _draft_project_id[name] = os.environ.get("FABRIC_PROJECT_ID", "")
     # Persist new drafts to disk
     if is_new:
         _persist_draft(name, slice_obj)
@@ -190,6 +202,7 @@ def _pop_draft(name: str) -> tuple[Any | None, bool]:
         obj = _draft_slices.pop(name, None)
         is_new = _draft_is_new.pop(name, True)
         _draft_site_groups.pop(name, None)
+        _draft_project_id.pop(name, None)
         return obj, is_new
 
 
@@ -358,8 +371,9 @@ async def list_slices() -> list[dict[str, Any]]:
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-    # Load non-archived registry entries (before modifying anything)
-    registry = get_all_entries(include_archived=False)
+    # Load non-archived registry entries for the current project
+    current_pid = os.environ.get("FABRIC_PROJECT_ID", "")
+    registry = get_all_entries(include_archived=False, project_id=current_pid)
 
     # Separate fast results into: unchanged (same state as registry) and
     # changed (state differs from registry — needs UUID confirmation).
@@ -519,7 +533,7 @@ async def list_slices() -> list[dict[str, Any]]:
             results.append(r)
             seen_names.add(name)
 
-    # Append new (never-submitted) draft slices.
+    # Append new (never-submitted) draft slices for the current project.
     # A draft with a UUID in the registry was already submitted — skip it
     # (the stale query above should have picked it up with its real state).
     # Check ALL registry entries (including archived) to avoid resurrecting
@@ -528,12 +542,17 @@ async def list_slices() -> list[dict[str, Any]]:
     with _draft_lock:
         for name in list(_draft_slices.keys()):
             if name not in seen_names and _draft_is_new.get(name, True):
+                # Skip drafts from other projects
+                draft_pid = _draft_project_id.get(name, "")
+                if draft_pid and current_pid and draft_pid != current_pid:
+                    continue
                 # Double-check: if registry has a UUID, this was submitted
                 reg_entry = all_registry.get(name)
                 if reg_entry and reg_entry.get("uuid"):
                     # Submitted slice stuck in draft store — clean it up
                     _draft_slices.pop(name, None)
                     _draft_is_new.pop(name, None)
+                    _draft_project_id.pop(name, None)
                     _delete_persistent_draft(name)
                     continue
                 results.append({"name": name, "id": "", "state": "Draft", "has_errors": False})
@@ -546,6 +565,65 @@ async def archive_terminal_slices() -> dict[str, Any]:
     archived = registry_archive_all_terminal()
     return {"archived": archived, "count": len(archived)}
 
+
+@router.post("/slices/reconcile-projects")
+async def reconcile_projects() -> dict[str, Any]:
+    """Scan all user projects and tag every known slice with its project_id.
+
+    For each project the user belongs to, temporarily switches to that project,
+    queries its slices, and tags the UUIDs in the registry.  Restores the
+    original project when done.
+    """
+    def _reconcile():
+        fablib = get_fablib()
+        mgr = fablib.get_manager()
+        original_pid = os.environ.get("FABRIC_PROJECT_ID", "")
+
+        # Get all projects
+        try:
+            projects = mgr.get_project_info()
+        except Exception as e:
+            logger.warning("reconcile-projects: could not get project list: %s", e)
+            return {"tagged": 0, "projects_scanned": 0, "error": str(e)}
+
+        uuid_to_project: dict[str, str] = {}
+        projects_scanned = 0
+
+        for proj in projects:
+            pid = proj.get("uuid", "")
+            if not pid:
+                continue
+            try:
+                fablib.set_project_id(pid)
+                os.environ["FABRIC_PROJECT_ID"] = pid
+                slices = fablib.get_slices()
+                for s in slices:
+                    sid = str(s.get_slice_id()) if s.get_slice_id() else ""
+                    if sid:
+                        uuid_to_project[sid] = pid
+                projects_scanned += 1
+            except Exception as e:
+                logger.warning("reconcile-projects: failed for project %s (%s): %s",
+                               proj.get("name", "?"), pid, e)
+
+        # Restore original project
+        if original_pid:
+            fablib.set_project_id(original_pid)
+            os.environ["FABRIC_PROJECT_ID"] = original_pid
+
+        # Bulk-tag the registry
+        tagged = bulk_tag_project(uuid_to_project)
+        return {
+            "tagged": tagged,
+            "projects_scanned": projects_scanned,
+            "slices_found": len(uuid_to_project),
+        }
+
+    try:
+        result = await asyncio.to_thread(_reconcile)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/slices/{slice_name}")

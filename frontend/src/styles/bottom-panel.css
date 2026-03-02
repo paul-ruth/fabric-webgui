@@ -186,6 +186,34 @@
   border-radius: 1px;
 }
 
+/* Status indicator (progress spinner + message) */
+.bp-status-indicator {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-right: 8px;
+  font-size: 11px;
+  color: var(--fabric-teal);
+}
+.bp-status-spinner {
+  width: 10px;
+  height: 10px;
+  border: 2px solid var(--fabric-border);
+  border-top-color: var(--fabric-teal);
+  border-radius: 50%;
+  animation: bp-spin 0.8s linear infinite;
+  flex-shrink: 0;
+}
+@keyframes bp-spin {
+  to { transform: rotate(360deg); }
+}
+.bp-status-text {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 300px;
+}
+
 .bp-collapse-btn {
   border: none;
   background: none;

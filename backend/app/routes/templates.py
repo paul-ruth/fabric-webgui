@@ -65,11 +65,61 @@ SEED_SLICE_TEMPLATES: list[dict[str, Any]] = [
         },
     },
     {
-        "name": "L2 Point-to-Point",
-        "description": "Two nodes on the same site connected by an L2Bridge with manual IP configuration.",
+        "name": "L2 Bridge — Manual Config",
+        "description": "Raw L2 bridge. IPs configured post-boot via boot config scripts (192.168.1.1/24, .2/24).",
         "model": {
             "format": "fabric-slice-v1",
-            "name": "L2 Point-to-Point",
+            "name": "L2 Bridge — Manual Config",
+            "nodes": [
+                {
+                    "name": "node1",
+                    "site": "@lan",
+                    "cores": 2,
+                    "ram": 8,
+                    "disk": 10,
+                    "image": "default_ubuntu_22",
+                    "components": [{"name": "nic1", "model": "NIC_Basic"}],
+                    "boot_config": {
+                        "uploads": [],
+                        "commands": [],
+                        "network": [
+                            {"id": "1", "iface": "eth1", "mode": "manual", "ip": "192.168.1.1", "subnet": "24", "order": 0},
+                        ],
+                    },
+                },
+                {
+                    "name": "node2",
+                    "site": "@lan",
+                    "cores": 2,
+                    "ram": 8,
+                    "disk": 10,
+                    "image": "default_ubuntu_22",
+                    "components": [{"name": "nic1", "model": "NIC_Basic"}],
+                    "boot_config": {
+                        "uploads": [],
+                        "commands": [],
+                        "network": [
+                            {"id": "1", "iface": "eth1", "mode": "manual", "ip": "192.168.1.2", "subnet": "24", "order": 0},
+                        ],
+                    },
+                },
+            ],
+            "networks": [
+                {
+                    "name": "lan",
+                    "type": "L2Bridge",
+                    "ip_mode": "none",
+                    "interfaces": ["node1-nic1-p1", "node2-nic1-p1"],
+                }
+            ],
+        },
+    },
+    {
+        "name": "L2 Bridge — Auto IP",
+        "description": "L2 bridge with FABlib auto-assigned IPs from 192.168.1.0/24. No boot config needed.",
+        "model": {
+            "format": "fabric-slice-v1",
+            "name": "L2 Bridge — Auto IP",
             "nodes": [
                 {
                     "name": "node1",
@@ -94,6 +144,46 @@ SEED_SLICE_TEMPLATES: list[dict[str, Any]] = [
                 {
                     "name": "lan",
                     "type": "L2Bridge",
+                    "subnet": "192.168.1.0/24",
+                    "ip_mode": "auto",
+                    "interfaces": ["node1-nic1-p1", "node2-nic1-p1"],
+                }
+            ],
+        },
+    },
+    {
+        "name": "L2 Bridge — User-Defined IP",
+        "description": "L2 bridge with exact IPs set pre-submit. FABlib configures 192.168.1.1 and .2 during post-boot.",
+        "model": {
+            "format": "fabric-slice-v1",
+            "name": "L2 Bridge — User-Defined IP",
+            "nodes": [
+                {
+                    "name": "node1",
+                    "site": "@lan",
+                    "cores": 2,
+                    "ram": 8,
+                    "disk": 10,
+                    "image": "default_ubuntu_22",
+                    "components": [{"name": "nic1", "model": "NIC_Basic"}],
+                },
+                {
+                    "name": "node2",
+                    "site": "@lan",
+                    "cores": 2,
+                    "ram": 8,
+                    "disk": 10,
+                    "image": "default_ubuntu_22",
+                    "components": [{"name": "nic1", "model": "NIC_Basic"}],
+                },
+            ],
+            "networks": [
+                {
+                    "name": "lan",
+                    "type": "L2Bridge",
+                    "subnet": "192.168.1.0/24",
+                    "ip_mode": "config",
+                    "interface_ips": {"node1-nic1-p1": "192.168.1.1", "node2-nic1-p1": "192.168.1.2"},
                     "interfaces": ["node1-nic1-p1", "node2-nic1-p1"],
                 }
             ],
@@ -187,7 +277,7 @@ SEED_SLICE_TEMPLATES: list[dict[str, Any]] = [
     },
     {
         "name": "Prometheus + Grafana Stack",
-        "description": "3-node monitoring stack: 1 monitor (Prometheus + Grafana in Docker) and 2 target nodes running node_exporter.",
+        "description": "3-node monitoring stack: 1 monitor (Prometheus + Grafana in Docker) and 2 target nodes running node_exporter. Docker is installed via boot config.",
         "_tools": [
             {
                 "filename": "prometheus.yml",
@@ -203,7 +293,48 @@ scrape_configs:
       - targets: ['localhost:9100']
       # Add target node IPs after slice is active
 """,
-            }
+            },
+            {
+                "filename": "install-docker.sh",
+                "content": """#!/bin/bash
+set -ex
+sudo dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
+sudo dnf install -y docker-ce docker-ce-cli containerd.io
+sudo systemctl enable docker
+sudo systemctl start docker
+""",
+            },
+            {
+                "filename": "setup-monitor.sh",
+                "content": """#!/bin/bash
+set -ex
+# Install Prometheus config
+sudo mkdir -p /etc/prometheus
+sudo cp ~/tools/prometheus.yml /etc/prometheus/prometheus.yml
+
+# Run Prometheus
+sudo docker run -d --name prometheus --restart always \\
+  --net host \\
+  -v /etc/prometheus:/etc/prometheus \\
+  prom/prometheus
+
+# Run Grafana
+sudo docker run -d --name grafana --restart always \\
+  -p 3000:3000 \\
+  grafana/grafana
+""",
+            },
+            {
+                "filename": "setup-exporter.sh",
+                "content": """#!/bin/bash
+set -ex
+# Run Prometheus node_exporter
+sudo docker run -d --name node-exporter --restart always \\
+  --net host --pid host \\
+  -v /:/host:ro,rslave \\
+  prom/node-exporter --path.rootfs=/host
+""",
+            },
         ],
         "model": {
             "format": "fabric-slice-v1",
@@ -215,22 +346,12 @@ scrape_configs:
                     "cores": 4,
                     "ram": 16,
                     "disk": 50,
-                    "image": "default_docker_rocky_8",
+                    "image": "default_rocky_8",
                     "boot_config": {
                         "uploads": [],
                         "commands": [
-                            {"id": "1", "command": "sudo systemctl start docker", "order": 0},
-                            {"id": "2", "command": "sudo mkdir -p /etc/prometheus && sudo cp ~/tools/prometheus.yml /etc/prometheus/prometheus.yml", "order": 1},
-                            {
-                                "id": "3",
-                                "command": "sudo docker run -d --name prometheus --restart always --net host -v /etc/prometheus:/etc/prometheus prom/prometheus",
-                                "order": 2,
-                            },
-                            {
-                                "id": "4",
-                                "command": "sudo docker run -d --name grafana --restart always -p 3000:3000 grafana/grafana",
-                                "order": 3,
-                            },
+                            {"id": "1", "command": "chmod +x ~/tools/*.sh && ~/tools/install-docker.sh", "order": 0},
+                            {"id": "2", "command": "~/tools/setup-monitor.sh", "order": 1},
                         ],
                         "network": [],
                     },
@@ -242,7 +363,15 @@ scrape_configs:
                     "cores": 2,
                     "ram": 8,
                     "disk": 10,
-                    "vm_template": "Prometheus Node Exporter",
+                    "image": "default_rocky_8",
+                    "boot_config": {
+                        "uploads": [],
+                        "commands": [
+                            {"id": "1", "command": "chmod +x ~/tools/*.sh && ~/tools/install-docker.sh", "order": 0},
+                            {"id": "2", "command": "~/tools/setup-exporter.sh", "order": 1},
+                        ],
+                        "network": [],
+                    },
                     "components": [{"name": "FABNET", "model": "NIC_Basic"}],
                 },
                 {
@@ -251,7 +380,15 @@ scrape_configs:
                     "cores": 2,
                     "ram": 8,
                     "disk": 10,
-                    "vm_template": "Prometheus Node Exporter",
+                    "image": "default_rocky_8",
+                    "boot_config": {
+                        "uploads": [],
+                        "commands": [
+                            {"id": "1", "command": "chmod +x ~/tools/*.sh && ~/tools/install-docker.sh", "order": 0},
+                            {"id": "2", "command": "~/tools/setup-exporter.sh", "order": 1},
+                        ],
+                        "network": [],
+                    },
                     "components": [{"name": "FABNET", "model": "NIC_Basic"}],
                 },
             ],
@@ -583,9 +720,25 @@ def _seed_if_needed() -> None:
     - Creates it if the directory doesn't exist.
     - Re-writes it if the on-disk model differs from the code
       (detected via a hash stored in metadata).
+    - Removes stale builtins no longer in SEED_SLICE_TEMPLATES.
     """
     tdir = _templates_dir()
     os.makedirs(tdir, exist_ok=True)
+
+    # Remove stale builtin templates no longer in the seed list
+    current_names = {_sanitize_name(t["name"]) for t in SEED_SLICE_TEMPLATES}
+    if os.path.isdir(tdir):
+        for entry in os.listdir(tdir):
+            meta_path = os.path.join(tdir, entry, "metadata.json")
+            if os.path.isfile(meta_path):
+                try:
+                    with open(meta_path) as f:
+                        meta = json.load(f)
+                    if meta.get("builtin") and entry not in current_names:
+                        shutil.rmtree(os.path.join(tdir, entry))
+                except Exception:
+                    pass
+
     for idx, tmpl in enumerate(SEED_SLICE_TEMPLATES):
         safe = _sanitize_name(tmpl["name"])
         tmpl_dir = os.path.join(tdir, safe)

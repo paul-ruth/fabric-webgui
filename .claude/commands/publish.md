@@ -1,19 +1,28 @@
-Rebuild the combined Docker image and push it to Docker Hub as `pruth/fabric-webui:latest`.
+Rebuild the combined Docker image and push it to Docker Hub as `pruth/fabric-webui`.
+
+If the user provided a version number as an argument (e.g. `/publish 1.2.3`), push both `pruth/fabric-webui:<version>` and `pruth/fabric-webui:latest`. If no version was given, push only `pruth/fabric-webui:latest`.
 
 IMPORTANT: Before pushing, you MUST audit the built image to ensure it contains NO user data, secrets, or credentials. A contaminated push is irreversible for anyone who pulls before a fix.
 
 ## Steps
 
-1. **Pre-flight checks**
+1. **Parse version argument**
+   - Check if `$ARGUMENTS` contains a version string (e.g. `1.2.3`, `v0.5.0`).
+   - Strip any leading `v` prefix (so `v1.2.3` becomes `1.2.3`).
+   - If a version is provided, set `VERSION_TAG=<version>` and note that we will push two tags.
+   - If no version is provided, note that we will push only `:latest`.
+
+2. **Pre-flight checks**
    - Run `docker login` status check (`docker info 2>&1 | grep Username`) to confirm we're authenticated to Docker Hub.
    - If not logged in, stop and tell the user to run `docker login` first.
 
-2. **Build the image**
+3. **Build the image**
    - `cd /mnt/scratch_nvme/work/fabric-webgui`
    - `docker build --no-cache -t pruth/fabric-webui:latest .`
    - The `--no-cache` flag ensures a clean build from scratch — no stale layers that might contain old data.
+   - If a version was provided, also tag it: `docker tag pruth/fabric-webui:latest pruth/fabric-webui:<version>`
 
-3. **Audit the image for secrets and user data**
+4. **Audit the image for secrets and user data**
    Run ALL of the following checks inside the freshly built image. If ANY check fails, STOP immediately and report the finding. Do NOT push.
 
    a. **Check /fabric_config is empty:**
@@ -40,12 +49,16 @@ IMPORTANT: Before pushing, you MUST audit the built image to ensure it contains 
       `docker run --rm pruth/fabric-webui:latest env`
       Verify no env vars contain tokens, passwords, or API keys. Expected env vars like FABRIC_CONFIG_DIR=/fabric_config are fine.
 
-4. **Report audit results**
+5. **Report audit results**
    Summarize what each check found. Only proceed if ALL checks pass.
 
-5. **Push to Docker Hub**
-   - `docker push pruth/fabric-webui:latest`
+6. **Push to Docker Hub**
+   - Always push: `docker push pruth/fabric-webui:latest`
+   - If a version was provided, also push: `docker push pruth/fabric-webui:<version>`
 
-6. **Verify the push**
+7. **Verify the push**
    - `docker inspect pruth/fabric-webui:latest --format '{{.Id}}'` to get the image digest.
-   - Report success with the image ID/digest.
+   - Report success with:
+     - The image ID/digest
+     - Which tags were pushed (e.g. `pruth/fabric-webui:latest` and `pruth/fabric-webui:1.2.3`)
+     - Confirm that `:latest` and `:<version>` point to the same image

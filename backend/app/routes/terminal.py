@@ -154,7 +154,15 @@ async def terminal_ws(websocket: WebSocket, slice_name: str, node_name: str):
         # Step 1: Look up the node
         await websocket.send_text(f"[terminal] Looking up node '{node_name}' in slice '{slice_name}'...\r\n")
         fablib = get_fablib()
-        slice_obj = await loop.run_in_executor(None, fablib.get_slice, slice_name)
+        from app.slice_registry import get_slice_uuid
+        uuid = get_slice_uuid(slice_name)
+        if uuid:
+            try:
+                slice_obj = await loop.run_in_executor(None, lambda: fablib.get_slice(slice_id=uuid))
+            except Exception:
+                slice_obj = await loop.run_in_executor(None, fablib.get_slice, slice_name)
+        else:
+            slice_obj = await loop.run_in_executor(None, fablib.get_slice, slice_name)
         node_obj = await loop.run_in_executor(None, slice_obj.get_node, node_name)
         management_ip = str(node_obj.get_management_ip())
         username = node_obj.get_username()

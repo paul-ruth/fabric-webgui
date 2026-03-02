@@ -49,6 +49,15 @@ def serialize_interface(iface) -> dict[str, Any]:
     except Exception:
         pass
 
+    # Read interface mode from fablib_data (auto/config/none)
+    mode = ""
+    try:
+        fd = iface.get_fablib_data()
+        if fd:
+            mode = str(fd.get("mode", ""))
+    except Exception:
+        pass
+
     return {
         "name": _safe(iface.get_name),
         "node_name": _safe(lambda: iface.get_node().get_name() if iface.get_node() else ""),
@@ -57,6 +66,7 @@ def serialize_interface(iface) -> dict[str, Any]:
         "mac": mac,
         "ip_addr": ip_addr,
         "bandwidth": _safe(iface.get_bandwidth),
+        "mode": mode,
     }
 
 

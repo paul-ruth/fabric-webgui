@@ -16,6 +16,7 @@ export interface SliceInterface {
   mac: string;
   ip_addr: string;
   bandwidth: string;
+  mode: string;
 }
 
 export interface SliceComponent {

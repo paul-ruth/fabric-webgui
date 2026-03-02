@@ -135,6 +135,20 @@
   opacity: 1;
 }
 
+.toolbar-btn-auto-refresh {
+  font-size: 11px;
+  opacity: 0.5;
+  padding: 4px 8px;
+}
+.toolbar-btn-auto-refresh.active {
+  opacity: 1;
+  color: var(--fabric-teal);
+  border-color: var(--fabric-teal);
+}
+.toolbar-btn-auto-refresh:hover {
+  opacity: 1;
+}
+
 /* --- Slice combo box --- */
 .slice-combo {
   position: relative;

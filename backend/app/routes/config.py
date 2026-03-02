@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import os
 import shutil
 import stat
@@ -18,12 +19,15 @@ from app.fablib_manager import (
     DEFAULT_CONFIG_DIR,
     is_configured,
     reset_fablib,
+    get_fablib,
     _load_keys_json,
     _save_keys_json,
     _migrate_legacy_keys,
     get_default_slice_key_path,
     get_slice_key_path,
 )
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -544,6 +548,68 @@ def set_slice_key_assignment(slice_name: str, body: SliceKeyAssignment):
 
 
 # ---------------------------------------------------------------------------
+# GET /api/projects — all user projects from the Core API
+# ---------------------------------------------------------------------------
+
+@router.get("/api/projects")
+def list_user_projects():
+    """Return all projects the user belongs to, queried from the FABRIC Core API."""
+    try:
+        fablib = get_fablib()
+        mgr = fablib.get_manager()
+        projects = mgr.get_project_info()  # returns [{name, uuid}, ...]
+        current_id = os.environ.get("FABRIC_PROJECT_ID", "")
+        return {"projects": projects, "active_project_id": current_id}
+    except RuntimeError:
+        raise HTTPException(status_code=400, detail="FABRIC is not configured yet.")
+    except Exception as e:
+        logger.warning("Failed to query projects from Core API: %s", e)
+        raise HTTPException(status_code=500, detail=f"Failed to query projects: {e}")
+
+
+# ---------------------------------------------------------------------------
+# POST /api/projects/switch — switch active project
+# ---------------------------------------------------------------------------
+
+class ProjectSwitchRequest(BaseModel):
+    project_id: str
+
+
+@router.post("/api/projects/switch")
+def switch_project(req: ProjectSwitchRequest):
+    """Switch the active project in-memory and persist to fabric_rc."""
+    try:
+        fablib = get_fablib()
+    except RuntimeError:
+        raise HTTPException(status_code=400, detail="FABRIC is not configured yet.")
+
+    # Update in-memory via FABlib
+    fablib.set_project_id(req.project_id)
+    os.environ["FABRIC_PROJECT_ID"] = req.project_id
+
+    # Persist to fabric_rc
+    config_dir = _config_dir()
+    rc_path = os.path.join(config_dir, "fabric_rc")
+    if os.path.isfile(rc_path):
+        with open(rc_path) as f:
+            lines = f.readlines()
+        new_lines = []
+        found = False
+        for line in lines:
+            if line.strip().startswith("export FABRIC_PROJECT_ID="):
+                new_lines.append(f"export FABRIC_PROJECT_ID={req.project_id}\n")
+                found = True
+            else:
+                new_lines.append(line)
+        if not found:
+            new_lines.append(f"export FABRIC_PROJECT_ID={req.project_id}\n")
+        with open(rc_path, "w") as f:
+            f.writelines(new_lines)
+
+    return {"status": "ok", "project_id": req.project_id}
+
+
+# ---------------------------------------------------------------------------
 # POST /api/config/save — write fabric_rc and reset FABlib
 # ---------------------------------------------------------------------------
 
@@ -628,3 +694,82 @@ Host * !bastion.fabric-testbed.net
     reset_fablib()
 
     return {"status": "ok", "configured": is_configured()}
+
+
+# ---------------------------------------------------------------------------
+# POST /api/config/rebuild-storage — re-initialize storage and re-seed templates
+# ---------------------------------------------------------------------------
+
+@router.post("/api/config/rebuild-storage")
+def rebuild_storage():
+    """Re-initialize storage directories and force re-seed all builtin templates."""
+    storage = os.environ.get("FABRIC_STORAGE_DIR", "/fabric_storage")
+
+    # 1. Ensure all storage subdirectories exist
+    subdirs = [".slice_templates", ".vm_templates", ".drafts", ".all_slices", ".slice-keys"]
+    dirs_created = 0
+    for sd in subdirs:
+        path = os.path.join(storage, sd)
+        if not os.path.isdir(path):
+            os.makedirs(path, exist_ok=True)
+            dirs_created += 1
+
+    # 2. Force re-seed slice templates by clearing model_hash in metadata
+    from app.routes.templates import _templates_dir, _seed_if_needed as seed_slice_templates, SEED_SLICE_TEMPLATES, _sanitize_name as sanitize_slice
+    tdir = _templates_dir()
+    slice_invalidated = 0
+    if os.path.isdir(tdir):
+        for tmpl in SEED_SLICE_TEMPLATES:
+            try:
+                safe = sanitize_slice(tmpl["name"])
+            except Exception:
+                continue
+            meta_path = os.path.join(tdir, safe, "metadata.json")
+            if os.path.isfile(meta_path):
+                try:
+                    with open(meta_path) as f:
+                        meta = json.load(f)
+                    if "model_hash" in meta:
+                        del meta["model_hash"]
+                        with open(meta_path, "w") as f:
+                            json.dump(meta, f, indent=2)
+                        slice_invalidated += 1
+                except Exception as e:
+                    logger.warning("Failed to invalidate slice template %s: %s", tmpl["name"], e)
+
+    # 3. Force re-seed VM templates by clearing model_hash
+    from app.routes.vm_templates import _vm_templates_dir, _seed_if_needed as seed_vm_templates, SEED_TEMPLATES as SEED_VM_TEMPLATES, _sanitize_name as sanitize_vm
+    vmdir = _vm_templates_dir()
+    vm_invalidated = 0
+    if os.path.isdir(vmdir):
+        for tmpl in SEED_VM_TEMPLATES:
+            try:
+                safe = sanitize_vm(tmpl["name"])
+            except Exception:
+                continue
+            tmpl_path = os.path.join(vmdir, safe, "vm-template.json")
+            if os.path.isfile(tmpl_path):
+                try:
+                    with open(tmpl_path) as f:
+                        data = json.load(f)
+                    if "model_hash" in data:
+                        del data["model_hash"]
+                        with open(tmpl_path, "w") as f:
+                            json.dump(data, f, indent=2)
+                        vm_invalidated += 1
+                except Exception as e:
+                    logger.warning("Failed to invalidate VM template %s: %s", tmpl["name"], e)
+
+    # 4. Run seed functions to re-write stale templates
+    seed_slice_templates()
+    seed_vm_templates()
+
+    return {
+        "status": "ok",
+        "directories": len(subdirs),
+        "directories_created": dirs_created,
+        "slice_templates_reseeded": slice_invalidated,
+        "vm_templates_reseeded": vm_invalidated,
+        "slice_templates_total": len(SEED_SLICE_TEMPLATES),
+        "vm_templates_total": len(SEED_VM_TEMPLATES),
+    }

@@ -168,16 +168,18 @@ SEED_TEMPLATES: list[dict[str, Any]] = [
     {
         "name": "Prometheus Node Exporter",
         "description": "Rocky 8 with Docker running Prometheus node_exporter on port 9100 for metrics collection",
-        "image": "default_docker_rocky_8",
+        "image": "default_rocky_8",
         "builtin": True,
         "boot_config": {
             "uploads": [],
             "commands": [
-                {"id": "1", "command": "sudo systemctl start docker", "order": 0},
+                {"id": "1", "command": "sudo dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo", "order": 0},
+                {"id": "2", "command": "sudo dnf install -y docker-ce docker-ce-cli containerd.io", "order": 1},
+                {"id": "3", "command": "sudo systemctl enable docker && sudo systemctl start docker", "order": 2},
                 {
-                    "id": "2",
+                    "id": "4",
                     "command": "sudo docker run -d --name node-exporter --restart always --net host --pid host -v /:/host:ro,rslave prom/node-exporter --path.rootfs=/host",
-                    "order": 1,
+                    "order": 3,
                 },
             ],
             "network": [],
@@ -316,13 +318,15 @@ echo "Kubernetes node ready. Run 'sudo kubeadm init' on controller or 'sudo kube
     {
         "name": "iPerf3 Test Node",
         "description": "Rocky 8 with Docker and iperf3 container for network bandwidth testing",
-        "image": "default_docker_rocky_8",
+        "image": "default_rocky_8",
         "builtin": True,
         "boot_config": {
             "uploads": [],
             "commands": [
-                {"id": "1", "command": "sudo systemctl start docker", "order": 0},
-                {"id": "2", "command": "sudo docker pull networkstatic/iperf3", "order": 1},
+                {"id": "1", "command": "sudo dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo", "order": 0},
+                {"id": "2", "command": "sudo dnf install -y docker-ce docker-ce-cli containerd.io", "order": 1},
+                {"id": "3", "command": "sudo systemctl enable docker && sudo systemctl start docker", "order": 2},
+                {"id": "4", "command": "sudo docker pull networkstatic/iperf3", "order": 3},
             ],
             "network": [],
         },
