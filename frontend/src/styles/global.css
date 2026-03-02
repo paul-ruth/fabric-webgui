@@ -115,9 +115,12 @@ body {
   background: var(--fabric-light);
   height: 100vh;
   overflow: hidden;
+  display: flex;
+  flex-direction: column;
 }
 
-#root {
+#root,
+#__next {
   height: 100vh;
   display: flex;
   flex-direction: column;
