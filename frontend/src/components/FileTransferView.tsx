@@ -1,8 +1,10 @@
+'use client';
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
 import * as api from '../api/client';
+import { buildWsUrl } from '../utils/wsUrl';
 import type { FileEntry, SliceData } from '../types/fabric';
 import FileEditor, { isTextFile, isLikelyBinary } from './FileEditor';
 import LogView from './LogView';
@@ -901,8 +903,7 @@ function FtvContainerTerminal() {
 
     term.writeln('\x1b[36m[local] Opening shell...\x1b[0m');
 
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${protocol}//${window.location.host}/ws/terminal/container`;
+    const wsUrl = buildWsUrl('/ws/terminal/container');
     const ws = new WebSocket(wsUrl);
 
     ws.onopen = () => {

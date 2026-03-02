@@ -1,3 +1,4 @@
+'use client';
 import { useState, useEffect, useLayoutEffect, useCallback, useRef } from 'react';
 import type { TourStep } from '../data/tourSteps';
 import '../styles/guided-tour.css';

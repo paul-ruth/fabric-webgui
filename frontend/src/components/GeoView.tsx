@@ -1,3 +1,4 @@
+'use client';
 import { useState, useRef, useEffect } from 'react';
 import { MapContainer, TileLayer, CircleMarker, Polyline, Popup, useMap } from 'react-leaflet';
 import type { LatLngBoundsExpression } from 'leaflet';
@@ -63,11 +64,25 @@ interface GeoViewProps {
   metricsLoading: boolean;
 }
 
+const TILE_LIGHT = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}';
+const TILE_DARK = 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png';
+const ATTR_LIGHT = '&copy; Esri';
+const ATTR_DARK = '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> &copy; <a href="https://carto.com/">CARTO</a>';
+
 export default function GeoView({ sliceData, selectedElement, onNodeClick, sites, links, linksLoading, siteMetricsCache, linkMetricsCache, metricsRefreshRate, onMetricsRefreshRateChange, onRefreshMetrics, metricsLoading }: GeoViewProps) {
   const [showInfraSites, setShowInfraSites] = useState(true);
   const [showInfraLinks, setShowInfraLinks] = useState(true);
   const [showSliceNodes, setShowSliceNodes] = useState(true);
   const [showSliceLinks, setShowSliceLinks] = useState(true);
+  const [mapDark, setMapDark] = useState(() => localStorage.getItem('map-theme') === 'dark');
+
+  const toggleMapDark = () => {
+    setMapDark(prev => {
+      const next = !prev;
+      localStorage.setItem('map-theme', next ? 'dark' : 'light');
+      return next;
+    });
+  };
 
   // Build site lookup
   const siteLookup = new Map(sites.map((s) => [s.name, s]));
@@ -138,6 +153,9 @@ export default function GeoView({ sliceData, selectedElement, onNodeClick, sites
               </label>
             </div>
           )}
+          <button className={`geo-theme-toggle ${mapDark ? 'dark' : 'light'}`} onClick={toggleMapDark} title={mapDark ? 'Switch to light map' : 'Switch to dark map'}>
+            {mapDark ? '☀' : '☾'}
+          </button>
         </div>
         <MapContainer
           center={[38, -95]}
@@ -147,8 +165,9 @@ export default function GeoView({ sliceData, selectedElement, onNodeClick, sites
           worldCopyJump={false}
         >
           <TileLayer
-            attribution='&copy; Esri'
-            url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}"
+            key={mapDark ? 'dark' : 'light'}
+            attribution={mapDark ? ATTR_DARK : ATTR_LIGHT}
+            url={mapDark ? TILE_DARK : TILE_LIGHT}
           />
           <FitBounds sites={sites} />
 

@@ -1,3 +1,4 @@
+'use client';
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { EditorView, keymap, lineNumbers, highlightActiveLineGutter, highlightSpecialChars, drawSelection, highlightActiveLine, rectangularSelection, crosshairCursor } from '@codemirror/view';
 import { EditorState } from '@codemirror/state';

@@ -1,3 +1,4 @@
+'use client';
 import { useState, useEffect, useRef, useCallback } from 'react';
 import * as api from '../api/client';
 import type { ConfigStatus, ProjectInfo, SliceKeySet } from '../types/fabric';
@@ -584,6 +585,35 @@ export default function ConfigureView({ onConfigured, onClose }: ConfigureViewPr
               <input type="text" value={sshCommandLine} onChange={(e) => setSshCommandLine(e.target.value)} />
             </div>
           )}
+        </div>
+
+        {/* Storage */}
+        <div className="configure-section">
+          <h3>Storage</h3>
+          <p>Re-initialize storage directories and force re-import all builtin templates. Use this if templates are missing or storage was corrupted.</p>
+          <div className="btn-row">
+            <button
+              className="btn"
+              onClick={async () => {
+                setLoading(true);
+                setMessage(null);
+                try {
+                  const result = await api.rebuildStorage();
+                  setMessage({
+                    text: `Storage rebuilt: ${result.slice_templates_total} slice templates, ${result.vm_templates_total} VM templates re-seeded.`,
+                    type: 'success',
+                  });
+                } catch (err: any) {
+                  setMessage({ text: `Rebuild failed: ${err.message}`, type: 'error' });
+                } finally {
+                  setLoading(false);
+                }
+              }}
+              disabled={loading}
+            >
+              {loading ? 'Rebuilding...' : 'Rebuild Storage'}
+            </button>
+          </div>
         </div>
 
       </div>

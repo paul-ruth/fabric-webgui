@@ -1,3 +1,4 @@
+'use client';
 import { useState, useRef, useCallback, useLayoutEffect, type ReactNode } from 'react';
 import '../styles/tooltip.css';
 

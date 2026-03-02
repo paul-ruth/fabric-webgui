@@ -1,3 +1,4 @@
+'use client';
 import { useState, useEffect } from 'react';
 import type { SliceData, SliceNode, SliceNetwork, SliceErrorMessage, SiteDetail, SiteMetrics, LinkMetrics } from '../types/fabric';
 import { getSiteDetail } from '../api/client';

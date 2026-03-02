@@ -1,3 +1,4 @@
+'use client';
 import { useState, useMemo, useCallback, useRef } from 'react';
 import type { SliceData } from '../types/fabric';
 import '../styles/sliver-view.css';

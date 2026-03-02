@@ -1,3 +1,4 @@
+'use client';
 import { useState, useEffect, useCallback, useRef } from 'react';
 import * as api from '../api/client';
 import type { FileEntry, SliceData, SliceNode } from '../types/fabric';

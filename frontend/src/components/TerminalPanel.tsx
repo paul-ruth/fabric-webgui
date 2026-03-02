@@ -1,8 +1,10 @@
+'use client';
 import { useEffect, useRef } from 'react';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
 import '../styles/terminal.css';
+import { buildWsUrl } from '../utils/wsUrl';
 
 interface TerminalPanelProps {
   sliceName: string;
@@ -56,8 +58,7 @@ export default function TerminalPanel({ sliceName, nodeName, managementIp, onClo
     term.writeln(`\x1b[36m[terminal] Opening session to ${nodeName} (${managementIp})...\x1b[0m`);
 
     // Connect WebSocket
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${protocol}//${window.location.host}/ws/terminal/${encodeURIComponent(sliceName)}/${encodeURIComponent(nodeName)}`;
+    const wsUrl = buildWsUrl(`/ws/terminal/${encodeURIComponent(sliceName)}/${encodeURIComponent(nodeName)}`);
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
 

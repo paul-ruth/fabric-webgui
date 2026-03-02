@@ -1,3 +1,4 @@
+'use client';
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
@@ -5,6 +6,7 @@ import '@xterm/xterm/css/xterm.css';
 import '../styles/bottom-panel.css';
 import type { ValidationIssue, SliceErrorMessage } from '../types/fabric';
 import LogView from './LogView';
+import { buildWsUrl } from '../utils/wsUrl';
 
 export interface TerminalTab {
   id: string;
@@ -12,6 +14,13 @@ export interface TerminalTab {
   sliceName: string;
   nodeName: string;
   managementIp: string;
+}
+
+export interface BootConfigError {
+  node: string;
+  type: string;
+  id: string;
+  detail: string;
 }
 
 interface BottomPanelProps {
@@ -24,6 +33,8 @@ interface BottomPanelProps {
   errors: string[];
   onClearErrors: () => void;
   sliceErrors: SliceErrorMessage[];
+  bootConfigErrors: BootConfigError[];
+  onClearBootConfigErrors?: () => void;
   fullWidth?: boolean;
   onToggleFullWidth?: () => void;
   showWidthToggle?: boolean;
@@ -31,6 +42,8 @@ interface BottomPanelProps {
   onExpandedChange: (expanded: boolean) => void;
   panelHeight: number;
   onPanelHeightChange: (height: number) => void;
+  statusMessage?: string;
+  loading?: boolean;
 }
 
 const TERM_THEME = {
@@ -56,7 +69,7 @@ const TERM_THEME = {
   brightWhite: '#ffffff',
 };
 
-export default function BottomPanel({ terminals, onCloseTerminal, validationIssues, validationValid, sliceState, dirty, errors, onClearErrors, sliceErrors, fullWidth = true, onToggleFullWidth, showWidthToggle = false, expanded, onExpandedChange, panelHeight, onPanelHeightChange }: BottomPanelProps) {
+export default function BottomPanel({ terminals, onCloseTerminal, validationIssues, validationValid, sliceState, dirty, errors, onClearErrors, sliceErrors, bootConfigErrors, onClearBootConfigErrors, fullWidth = true, onToggleFullWidth, showWidthToggle = false, expanded, onExpandedChange, panelHeight, onPanelHeightChange, statusMessage, loading }: BottomPanelProps) {
   const setExpanded = onExpandedChange;
   const setPanelHeight = onPanelHeightChange;
   const [activeTab, setActiveTab] = useState('validation');
@@ -81,8 +94,9 @@ export default function BottomPanel({ terminals, onCloseTerminal, validationIssu
     prevErrorCount.current = errors.length;
   }, [errors.length]);
 
-  // Auto-switch to slice errors tab when slice errors arrive
+  // Auto-switch to slice errors tab when slice errors or boot config errors arrive
   const prevSliceErrorCount = useRef(sliceErrors.length);
+  const prevBootErrorCount = useRef(bootConfigErrors.length);
   useEffect(() => {
     if (sliceErrors.length > 0 && prevSliceErrorCount.current === 0) {
       setActiveTab('slice-errors');
@@ -90,6 +104,13 @@ export default function BottomPanel({ terminals, onCloseTerminal, validationIssu
     }
     prevSliceErrorCount.current = sliceErrors.length;
   }, [sliceErrors.length, setExpanded]);
+  useEffect(() => {
+    if (bootConfigErrors.length > 0 && prevBootErrorCount.current === 0) {
+      setActiveTab('slice-errors');
+      setExpanded(true);
+    }
+    prevBootErrorCount.current = bootConfigErrors.length;
+  }, [bootConfigErrors.length, setExpanded]);
 
   // If active tab was closed, switch to validation
   useEffect(() => {
@@ -140,13 +161,15 @@ export default function BottomPanel({ terminals, onCloseTerminal, validationIssu
   const warnCount = validationIssues.filter((i) => i.severity === 'warning').length;
   const apiErrorCount = errors.length;
   const sliceErrorCount = sliceErrors.length;
+  const bootErrorCount = bootConfigErrors.length;
+  const totalSliceIssues = sliceErrorCount + bootErrorCount;
 
   if (!expanded) {
     return (
       <div className="bottom-panel-collapsed">
         <span className="bottom-panel-collapsed-label" onClick={() => setExpanded(true)}>
           ▲ Console
-          {sliceErrorCount > 0 && <span className="bottom-panel-badge error">{sliceErrorCount} slice error{sliceErrorCount !== 1 ? 's' : ''}</span>}
+          {totalSliceIssues > 0 && <span className="bottom-panel-badge error">{totalSliceIssues} slice issue{totalSliceIssues !== 1 ? 's' : ''}</span>}
           {apiErrorCount > 0 && <span className="bottom-panel-badge error">{apiErrorCount} error{apiErrorCount !== 1 ? 's' : ''}</span>}
           <span className={`bottom-panel-badge ${validationErrorCount > 0 ? 'warn' : 'ok'}`}>{validationErrorCount} validation</span>
           {warnCount > 0 && <span className="bottom-panel-badge warn">{warnCount} warning{warnCount !== 1 ? 's' : ''}</span>}
@@ -154,6 +177,12 @@ export default function BottomPanel({ terminals, onCloseTerminal, validationIssu
           {containerTermActive && <span className="bottom-panel-badge">local</span>}
         </span>
         <span className="bottom-panel-collapsed-actions">
+          {statusMessage && (
+            <span className="bp-status-indicator">
+              <span className="bp-status-spinner" />
+              <span className="bp-status-text">{statusMessage}</span>
+            </span>
+          )}
           {showWidthToggle && onToggleFullWidth && (
             <button
               className="bp-width-toggle"
@@ -172,15 +201,13 @@ export default function BottomPanel({ terminals, onCloseTerminal, validationIssu
     <div className="bottom-panel" style={{ height: panelHeight }}>
       <div className="bp-resize-handle" onMouseDown={handleDragStart} />
       <div className="bottom-panel-tabs">
-        {sliceErrorCount > 0 && (
-          <button
-            className={`bp-tab ${activeTab === 'slice-errors' ? 'active' : ''}`}
-            onClick={() => setActiveTab('slice-errors')}
-          >
-            Slice Errors
-            <span className="bp-tab-badge error">{sliceErrorCount}</span>
-          </button>
-        )}
+        <button
+          className={`bp-tab ${activeTab === 'slice-errors' ? 'active' : ''}`}
+          onClick={() => setActiveTab('slice-errors')}
+        >
+          Slice Errors
+          {totalSliceIssues > 0 && <span className="bp-tab-badge error">{totalSliceIssues}</span>}
+        </button>
         <button
           className={`bp-tab ${activeTab === 'errors' ? 'active' : ''}`}
           onClick={() => setActiveTab('errors')}
@@ -229,6 +256,12 @@ export default function BottomPanel({ terminals, onCloseTerminal, validationIssu
           </button>
         ))}
         <div className="bp-tab-spacer" />
+        {statusMessage && (
+          <span className="bp-status-indicator">
+            <span className="bp-status-spinner" />
+            <span className="bp-status-text">{statusMessage}</span>
+          </span>
+        )}
         {showWidthToggle && onToggleFullWidth && (
           <button
             className="bp-width-toggle"
@@ -242,7 +275,7 @@ export default function BottomPanel({ terminals, onCloseTerminal, validationIssu
       </div>
       <div className="bottom-panel-content">
         <div style={{ display: activeTab === 'slice-errors' ? 'flex' : 'none', flex: 1, overflow: 'hidden' }}>
-          <SliceErrorsView errors={sliceErrors} />
+          <SliceErrorsView errors={sliceErrors} bootConfigErrors={bootConfigErrors} onClearBootConfigErrors={onClearBootConfigErrors} />
         </div>
         <div style={{ display: activeTab === 'errors' ? 'flex' : 'none', flex: 1, overflow: 'hidden' }}>
           <div className="bp-errors-list">
@@ -335,41 +368,69 @@ function diagnoseError(message: string): ErrorDiagnosis {
   };
 }
 
-function SliceErrorsView({ errors }: { errors: SliceErrorMessage[] }) {
-  if (!errors || errors.length === 0) {
+function SliceErrorsView({ errors, bootConfigErrors, onClearBootConfigErrors }: { errors: SliceErrorMessage[]; bootConfigErrors: BootConfigError[]; onClearBootConfigErrors?: () => void }) {
+  const hasSliceErrors = errors && errors.length > 0;
+  const hasBootErrors = bootConfigErrors && bootConfigErrors.length > 0;
+
+  if (!hasSliceErrors && !hasBootErrors) {
     return (
       <div className="bp-validation-container">
-        <div className="bp-validation-empty">No slice errors.</div>
+        <div className="bp-validation-ok">No slice errors.</div>
       </div>
     );
   }
 
   const seen = new Set<string>();
   const diagnosed: Array<{ sliver: string; diagnosis: ErrorDiagnosis; raw: string }> = [];
-  for (const err of errors) {
-    const key = err.message;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    diagnosed.push({ sliver: err.sliver, diagnosis: diagnoseError(err.message), raw: err.message });
+  if (hasSliceErrors) {
+    for (const err of errors) {
+      const key = err.message;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      diagnosed.push({ sliver: err.sliver, diagnosis: diagnoseError(err.message), raw: err.message });
+    }
   }
 
   return (
     <div className="bp-validation-container">
-      <div className="bp-validation-header error">
-        Slice Failed — {diagnosed.length} error{diagnosed.length !== 1 ? 's' : ''}
-      </div>
-      {diagnosed.map((d, i) => (
-        <div key={i} className="bp-slice-error-entry">
-          <div className="bp-slice-error-category">
-            {d.diagnosis.category}
-            {d.sliver && <span className="bp-slice-error-sliver"> — {d.sliver}</span>}
+      {diagnosed.length > 0 && (
+        <>
+          <div className="bp-validation-header error">
+            Slice Failed — {diagnosed.length} error{diagnosed.length !== 1 ? 's' : ''}
           </div>
-          <div className="bp-slice-error-summary">{d.diagnosis.summary}</div>
-          <div className="bp-slice-error-remedy">
-            <strong>Suggested fix:</strong> {d.diagnosis.remedy}
+          {diagnosed.map((d, i) => (
+            <div key={i} className="bp-slice-error-entry">
+              <div className="bp-slice-error-category">
+                {d.diagnosis.category}
+                {d.sliver && <span className="bp-slice-error-sliver"> — {d.sliver}</span>}
+              </div>
+              <div className="bp-slice-error-summary">{d.diagnosis.summary}</div>
+              <div className="bp-slice-error-remedy">
+                <strong>Suggested fix:</strong> {d.diagnosis.remedy}
+              </div>
+            </div>
+          ))}
+        </>
+      )}
+      {hasBootErrors && (
+        <>
+          <div className="bp-validation-header error" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span>Boot Config — {bootConfigErrors.length} error{bootConfigErrors.length !== 1 ? 's' : ''}</span>
+            {onClearBootConfigErrors && (
+              <button className="bp-errors-clear" onClick={onClearBootConfigErrors}>Clear</button>
+            )}
           </div>
-        </div>
-      ))}
+          {bootConfigErrors.map((e, i) => (
+            <div key={i} className="bp-slice-error-entry">
+              <div className="bp-slice-error-category">
+                {e.type === 'network' ? 'Network Config' : e.type === 'upload' ? 'File Upload' : 'Command'}
+                <span className="bp-slice-error-sliver"> — {e.node}</span>
+              </div>
+              <div className="bp-slice-error-summary">{e.detail}</div>
+            </div>
+          ))}
+        </>
+      )}
     </div>
   );
 }
@@ -469,8 +530,7 @@ function TerminalView({ sliceName, nodeName, managementIp }: { sliceName: string
 
     term.writeln(`\x1b[36m[terminal] Opening session to ${nodeName} (${managementIp})...\x1b[0m`);
 
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${protocol}//${window.location.host}/ws/terminal/${encodeURIComponent(sliceName)}/${encodeURIComponent(nodeName)}`;
+    const wsUrl = buildWsUrl(`/ws/terminal/${encodeURIComponent(sliceName)}/${encodeURIComponent(nodeName)}`);
     const ws = new WebSocket(wsUrl);
 
     ws.onopen = () => {
@@ -538,8 +598,7 @@ function ContainerTerminalView() {
 
     term.writeln('\x1b[36m[local] Opening shell...\x1b[0m');
 
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${protocol}//${window.location.host}/ws/terminal/container`;
+    const wsUrl = buildWsUrl('/ws/terminal/container');
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
 

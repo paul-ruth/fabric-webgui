@@ -1,3 +1,4 @@
+'use client';
 import { useState, useEffect, useCallback, useRef } from 'react';
 import type { SliceData, SiteInfo, ComponentModel, SliceNode, SliceNetwork, SliceFacilityPort, BootConfig, BootUpload, BootCommand, BootExecResult, FileEntry, SliceKeySet, VMTemplateSummary, HostInfo } from '../types/fabric';
 import * as api from '../api/client';

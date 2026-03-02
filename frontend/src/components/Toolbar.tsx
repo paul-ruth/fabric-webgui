@@ -1,3 +1,4 @@
+'use client';
 import { useState, useRef, useEffect } from 'react';
 import type { SliceSummary } from '../types/fabric';
 import Tooltip from './Tooltip';
@@ -13,7 +14,6 @@ interface ToolbarProps {
   sliceValid: boolean;
   loading: boolean;
   onSelectSlice: (name: string) => void;
-  onLoad: () => void;
   onCreateSlice: (name: string) => void;
   onSubmit: () => void;
   onRefreshSlices: () => void;
@@ -35,7 +35,7 @@ interface ToolbarProps {
 
 export default function Toolbar(props: ToolbarProps) {
   const [confirmingDelete, setConfirmingDelete] = useState(false);
-  const [confirmingRevert, setConfirmingRevert] = useState(false);
+
   const [creating, setCreating] = useState(false);
   const [newSliceName, setNewSliceName] = useState('');
   const [cloning, setCloning] = useState(false);
@@ -64,18 +64,6 @@ export default function Toolbar(props: ToolbarProps) {
     setConfirmingDelete(false);
   };
 
-  const handleRevertConfirm = () => {
-    props.onRefreshSlices();
-    setConfirmingRevert(false);
-  };
-
-  const handleLoadSlice = () => {
-    if (hasSlice && props.dirty) {
-      setConfirmingRevert(true);
-    } else {
-      props.onLoad();
-    }
-  };
 
   const handleCreate = () => {
     if (newSliceName.trim()) {
@@ -99,10 +87,6 @@ export default function Toolbar(props: ToolbarProps) {
   const isTerminal = TERMINAL_STATES.has(props.sliceState);
   const hasTerminalSlices = props.slices.some(s => TERMINAL_STATES.has(s.state));
 
-  const loadLabel = hasSlice ? 'Reload' : 'Load';
-  const loadTitle = hasSlice
-    ? (props.dirty ? 'Reload slice from FABRIC — all uncommitted changes will be lost' : 'Reload slice data from FABRIC')
-    : 'Load the selected slice from FABRIC';
 
   return (
     <div className="toolbar">
@@ -221,17 +205,6 @@ export default function Toolbar(props: ToolbarProps) {
             );
           })()}
         </div>
-
-        <Tooltip text={loadTitle}>
-          <button
-            className={`toolbar-btn toolbar-btn-load ${hasSlice && props.dirty ? 'warning' : 'primary'}`}
-            onClick={handleLoadSlice}
-            disabled={!props.selectedSlice || props.loading}
-            data-help-id="toolbar.load"
-          >
-            {props.loading ? 'Loading...' : loadLabel}
-          </button>
-        </Tooltip>
 
         <Tooltip text="Create a new empty draft slice">
           <button
@@ -352,20 +325,6 @@ export default function Toolbar(props: ToolbarProps) {
             <div className="toolbar-modal-actions">
               <button onClick={() => setConfirmingDelete(false)}>Cancel</button>
               <button className="danger" onClick={handleDeleteConfirm}>{isDraft ? 'Discard' : 'Delete'}</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* --- Modal: Confirm Reload --- */}
-      {confirmingRevert && (
-        <div className="toolbar-modal-overlay" onClick={() => setConfirmingRevert(false)}>
-          <div className="toolbar-modal" onClick={(e) => e.stopPropagation()}>
-            <h4>Reload Slice</h4>
-            <p>All uncommitted changes to <strong>{props.selectedSlice}</strong> will be lost. Continue?</p>
-            <div className="toolbar-modal-actions">
-              <button onClick={() => setConfirmingRevert(false)}>Cancel</button>
-              <button className="warning" onClick={handleRevertConfirm}>Reload</button>
             </div>
           </div>
         </div>

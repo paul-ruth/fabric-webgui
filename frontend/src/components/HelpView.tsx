@@ -1,3 +1,4 @@
+'use client';
 import { useEffect, useRef } from 'react';
 import { helpSections } from '../data/helpData';
 import { tourList, toursBySection } from '../data/tourSteps';

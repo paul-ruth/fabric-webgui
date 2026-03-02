@@ -1,3 +1,4 @@
+'use client';
 import { useState, useEffect, useRef, useCallback } from 'react';
 import cytoscape, { type Core, type EventObject } from 'cytoscape';
 import type { CyGraph, SliceData } from '../types/fabric';

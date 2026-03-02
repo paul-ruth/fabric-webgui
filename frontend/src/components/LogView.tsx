@@ -1,7 +1,9 @@
+'use client';
 import { useEffect, useRef } from 'react';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
+import { buildWsUrl } from '../utils/wsUrl';
 
 const TERM_THEME = {
   background: '#1a1a2e',
@@ -50,8 +52,7 @@ export default function LogView() {
 
     term.writeln('\x1b[36m[log] Connecting to log stream...\x1b[0m');
 
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${protocol}//${window.location.host}/ws/logs`;
+    const wsUrl = buildWsUrl('/ws/logs');
     const ws = new WebSocket(wsUrl);
 
     ws.onmessage = (event) => {

@@ -1,3 +1,4 @@
+'use client';
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import TitleBar from './components/TitleBar';
 import Toolbar from './components/Toolbar';
@@ -5,8 +6,7 @@ import CytoscapeGraph from './components/CytoscapeGraph';
 import type { ContextMenuAction } from './components/CytoscapeGraph';
 import SliverView from './components/SliverView';
 import EditorPanel from './components/EditorPanel';
-import TemplatePanel from './components/TemplatePanel';
-import VMTemplatePanel from './components/VMTemplatePanel';
+import TemplatesPanel from './components/TemplatesPanel';
 import DetailPanel from './components/DetailPanel';
 import GeoView from './components/GeoView';
 import BottomPanel from './components/BottomPanel';
@@ -35,13 +35,13 @@ export default function App() {
   const [listLoaded, setListLoaded] = useState(false);
   const [dark, setDark] = useState(() => localStorage.getItem('theme') === 'dark');
   // --- Draggable panel layout ---
-  type PanelId = 'editor' | 'template' | 'detail' | 'vm-template';
+  type PanelId = 'editor' | 'template' | 'detail';
   type PanelLayoutEntry = { side: 'left' | 'right'; collapsed: boolean; width: number; order: number };
   type PanelLayoutMap = Record<PanelId, PanelLayoutEntry>;
 
-  const PANEL_ICONS: Record<PanelId, string> = { editor: '\u270E', template: '\u29C9', detail: '\u2139', 'vm-template': '\u2699' };
-  const PANEL_LABELS: Record<PanelId, string> = { editor: 'Editor', template: 'Slice Templates', detail: 'Details', 'vm-template': 'VM Templates' };
-  const PANEL_IDS: PanelId[] = ['editor', 'template', 'detail', 'vm-template'];
+  const PANEL_ICONS: Record<PanelId, string> = { editor: '\u270E', template: '\u29C9', detail: '\u2139' };
+  const PANEL_LABELS: Record<PanelId, string> = { editor: 'Editor', template: 'Templates', detail: 'Details' };
+  const PANEL_IDS: PanelId[] = ['editor', 'template', 'detail'];
   const DEFAULT_PANEL_WIDTH = 280;
   const MIN_PANEL_WIDTH = 180;
 
@@ -49,7 +49,6 @@ export default function App() {
     editor: { side: 'left', collapsed: false, width: DEFAULT_PANEL_WIDTH, order: 0 },
     detail: { side: 'left', collapsed: true, width: DEFAULT_PANEL_WIDTH, order: 1 },
     template: { side: 'right', collapsed: false, width: DEFAULT_PANEL_WIDTH, order: 0 },
-    'vm-template': { side: 'right', collapsed: true, width: DEFAULT_PANEL_WIDTH, order: 1 },
   };
 
   const [panelLayout, setPanelLayout] = useState<PanelLayoutMap>(() => {
@@ -63,10 +62,8 @@ export default function App() {
             parsed[id].width = DEFAULT_PANEL_WIDTH;
           }
         }
-        // Migrate: add vm-template panel if missing
-        if (!parsed['vm-template']) {
-          parsed['vm-template'] = { side: 'right', collapsed: true, width: DEFAULT_PANEL_WIDTH, order: 2 };
-        }
+        // Migrate: remove vm-template panel (merged into template)
+        delete parsed['vm-template'];
         // Migrate: add order field if missing
         for (const id of PANEL_IDS) {
           if (parsed[id] && parsed[id].order === undefined) {
@@ -77,7 +74,6 @@ export default function App() {
         if (!parsed._layoutV2) {
           parsed.detail = { ...defaultLayout.detail };
           parsed.template = { ...defaultLayout.template };
-          parsed['vm-template'] = { ...defaultLayout['vm-template'] };
           parsed._layoutV2 = true;
         }
         return parsed;
@@ -221,13 +217,12 @@ export default function App() {
   useEffect(() => {
     api.getConfig().then((cfg) => {
       setIsConfigured(cfg.configured);
-      // Populate projects list and current project
-      if (cfg.token_info?.projects) {
-        setProjects(cfg.token_info.projects);
-      }
+      // Set project ID from config as initial value
       if (cfg.project_id) {
         setProjectId(cfg.project_id);
+        // Use JWT projects as initial fallback until Core API responds
         if (cfg.token_info?.projects) {
+          setProjects(cfg.token_info.projects);
           const proj = cfg.token_info.projects.find((p) => p.uuid === cfg.project_id);
           if (proj) setProjectName(proj.name);
         }
@@ -245,6 +240,22 @@ export default function App() {
         // Token is good — auto-load slices and resources
         refreshSliceList();
         refreshInfrastructureAndMark();
+        // Fetch full project list from Core API (replaces JWT subset)
+        api.listUserProjects().then((resp) => {
+          setProjects(resp.projects);
+          if (resp.active_project_id) {
+            setProjectId(resp.active_project_id);
+            const proj = resp.projects.find((p) => p.uuid === resp.active_project_id);
+            if (proj) setProjectName(proj.name);
+          }
+          // Reconcile all known slices with their projects in the background,
+          // then refresh the slice list so filtering is accurate
+          api.reconcileProjects().then(() => {
+            refreshSliceList();
+          }).catch(() => {});
+        }).catch(() => {
+          // Core API unavailable — keep JWT projects as fallback
+        });
       }
     }).catch(() => {
       setIsConfigured(false);
@@ -568,18 +579,14 @@ export default function App() {
     if (!proj) return;
     setStatusMessage('Switching project...');
     try {
-      // We need bastion_username from current config to save
-      const cfg = await api.getConfig();
-      await api.saveConfig({
-        project_id: uuid,
-        bastion_username: cfg.bastion_username,
-      });
+      await api.switchProject(uuid);
       setProjectId(uuid);
       setProjectName(proj.name);
       // Reset slice state and refresh
       setSliceData(null);
       setSelectedSliceName('');
       setSelectedElement(null);
+      setSlices([]);
       setListLoaded(false);
     } catch (e: any) {
       setErrors(prev => [...prev, e.message]);
@@ -589,30 +596,6 @@ export default function App() {
   }, [projects]);
 
   // No auto-load — user must click "Load Slices" first
-
-  const loadSlice = useCallback(async () => {
-    if (!selectedSliceName) return;
-    setLoading(true);
-    setErrors([]);
-    setSelectedElement(null);
-    setStatusMessage('Loading slice...');
-    try {
-      // Refresh the slice list first, then load the selected slice
-      const [list, data] = await Promise.all([
-        api.listSlices(),
-        api.getSlice(selectedSliceName),
-      ]);
-      setSlices(list);
-      setListLoaded(true);
-      setSliceData(data);
-      runValidation(selectedSliceName);
-    } catch (e: any) {
-      setErrors(prev => [...prev, e.message]);
-    } finally {
-      setLoading(false);
-      setStatusMessage('');
-    }
-  }, [selectedSliceName, runValidation]);
 
   // When sliceData updates, push its state into the matching slices list entry
   // so the dropdown stays in sync with the loaded slice's current state.
@@ -1103,7 +1086,6 @@ export default function App() {
             });
           }
         }}
-        onLoad={loadSlice}
         onCreateSlice={handleCreateSlice}
         onSubmit={handleSubmit}
         onRefreshSlices={handleRefreshSlices}
@@ -1145,19 +1127,29 @@ export default function App() {
               setSettingsOpen(false);
               setListLoaded(false);
               refreshInfrastructureAndMark();
-              // Refresh project name and projects list
-              api.getConfig().then((cfg) => {
-                if (cfg.token_info?.projects) {
-                  setProjects(cfg.token_info.projects);
+              // Refresh project list from Core API (with config fallback)
+              api.listUserProjects().then((resp) => {
+                setProjects(resp.projects);
+                if (resp.active_project_id) {
+                  setProjectId(resp.active_project_id);
+                  const proj = resp.projects.find((p) => p.uuid === resp.active_project_id);
+                  if (proj) setProjectName(proj.name);
                 }
-                if (cfg.project_id) {
-                  setProjectId(cfg.project_id);
+                // Reconcile slice→project mappings in background
+                api.reconcileProjects().catch(() => {});
+              }).catch(() => {
+                // Fallback to JWT projects
+                api.getConfig().then((cfg) => {
                   if (cfg.token_info?.projects) {
-                    const proj = cfg.token_info.projects.find((p) => p.uuid === cfg.project_id);
+                    setProjects(cfg.token_info.projects);
+                  }
+                  if (cfg.project_id) {
+                    setProjectId(cfg.project_id);
+                    const proj = cfg.token_info?.projects?.find((p) => p.uuid === cfg.project_id);
                     if (proj) setProjectName(proj.name);
                   }
-                }
-              }).catch(() => {});
+                }).catch(() => {});
+              });
             }}
             onClose={() => {
               setSettingsOpen(false);
@@ -1210,19 +1202,10 @@ export default function App() {
                   );
                 case 'template':
                   return (
-                    <TemplatePanel
+                    <TemplatesPanel
                       key="template"
                       onSliceImported={handleSliceImported}
                       onCollapse={() => toggleCollapse('template')}
-                      dragHandleProps={dragProps}
-                      panelIcon={icon}
-                    />
-                  );
-                case 'vm-template':
-                  return (
-                    <VMTemplatePanel
-                      key="vm-template"
-                      onCollapse={() => toggleCollapse('vm-template')}
                       dragHandleProps={dragProps}
                       panelIcon={icon}
                       onVmTemplatesChanged={refreshVmTemplates}
