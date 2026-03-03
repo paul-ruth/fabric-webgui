@@ -1,0 +1,8 @@
+{
+  "name": "Wide-Area L2 Network",
+  "description": "Two nodes at different sites connected by an L2STS (site-to-site) network for cross-site L2 connectivity.",
+  "builtin": true,
+  "order": 4,
+  "node_count": 2,
+  "network_count": 1
+}

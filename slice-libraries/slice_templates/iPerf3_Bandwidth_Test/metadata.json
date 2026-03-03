@@ -1,0 +1,8 @@
+{
+  "name": "iPerf3 Bandwidth Test",
+  "description": "Two Docker nodes at different sites, each with its own FABNetv4 network for routed L3 connectivity. Server runs iperf3 -s, client has iperf3 pulled.",
+  "builtin": true,
+  "order": 5,
+  "node_count": 2,
+  "network_count": 2
+}

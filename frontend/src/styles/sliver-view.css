@@ -395,3 +395,60 @@
 [data-theme="dark"] .sliver-empty {
   color: #8888aa;
 }
+
+/* Checkbox column */
+.sliver-checkbox-col {
+  width: 28px;
+  min-width: 28px;
+  max-width: 28px;
+  text-align: center;
+  padding: 4px 6px !important;
+}
+
+.sliver-checkbox-col input[type="checkbox"] {
+  margin: 0;
+  cursor: pointer;
+  accent-color: var(--fabric-primary, #5798bc);
+}
+
+/* Multi-selected row highlight */
+.sliver-table tbody tr.multi-selected {
+  background: rgba(87, 152, 188, 0.08);
+}
+.sliver-table tbody tr.multi-selected:hover {
+  background: rgba(87, 152, 188, 0.14);
+}
+.sliver-table tbody tr.multi-selected.selected {
+  background: rgba(87, 152, 188, 0.16);
+}
+
+[data-theme="dark"] .sliver-table tbody tr.multi-selected {
+  background: rgba(87, 152, 188, 0.12);
+}
+[data-theme="dark"] .sliver-table tbody tr.multi-selected:hover {
+  background: rgba(87, 152, 188, 0.18);
+}
+[data-theme="dark"] .sliver-table tbody tr.multi-selected.selected {
+  background: rgba(87, 152, 188, 0.22);
+}
+
+/* Activity column indicators */
+.sliver-activity {
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.sliver-activity.ready { color: var(--fabric-teal, #008e7a); }
+.sliver-activity.pending { color: #999; }
+.sliver-activity.running { color: var(--fabric-primary, #5798bc); }
+.sliver-activity.error { color: var(--fabric-coral, #e25241); }
+
+@keyframes sliver-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+.sliver-activity-spinner {
+  display: inline-block;
+  animation: sliver-spin 1s linear infinite;
+  margin-right: 3px;
+}

@@ -1,6 +1,6 @@
 /** API client for the FABRIC Web GUI backend. */
 
-import type { SliceSummary, SliceData, SiteInfo, SiteDetail, LinkInfo, ComponentModel, ConfigStatus, ProjectsResponse, ValidationResult, SiteMetrics, LinkMetrics, FileEntry, ProvisionRule, BootConfig, BootExecResult, SliceKeySet, VMTemplateSummary, VMTemplateDetail, HostInfo } from '../types/fabric';
+import type { SliceSummary, SliceData, SiteInfo, SiteDetail, LinkInfo, ComponentModel, ConfigStatus, ProjectsResponse, ValidationResult, SiteMetrics, LinkMetrics, FileEntry, ProvisionRule, BootConfig, BootExecResult, SliceKeySet, VMTemplateSummary, VMTemplateDetail, VMTemplateVariantDetail, HostInfo, ProjectDetails, ToolFile, RecipeSummary, RecipeExecResult } from '../types/fabric';
 
 const BASE = '/api';
 
@@ -296,6 +296,36 @@ export function deleteTemplate(name: string): Promise<{ status: string; name: st
   return fetchJson(`/templates/${encodeURIComponent(name)}`, { method: 'DELETE' });
 }
 
+export function updateTemplate(name: string, data: { description: string }): Promise<TemplateSummary> {
+  return fetchJson(`/templates/${encodeURIComponent(name)}`, {
+    method: 'PUT',
+    body: JSON.stringify(data),
+  });
+}
+
+export function getTemplate(name: string): Promise<TemplateSummary & { model: any; tools: ToolFile[] }> {
+  return fetchJson(`/templates/${encodeURIComponent(name)}`);
+}
+
+export function resyncTemplates(): Promise<TemplateSummary[]> {
+  return fetchJson('/templates/resync', { method: 'POST' });
+}
+
+export function readTemplateTool(templateName: string, filename: string): Promise<{ filename: string; content: string }> {
+  return fetchJson(`/templates/${encodeURIComponent(templateName)}/tools/${encodeURIComponent(filename)}`);
+}
+
+export function writeTemplateTool(templateName: string, filename: string, content: string): Promise<{ filename: string; status: string }> {
+  return fetchJson(`/templates/${encodeURIComponent(templateName)}/tools/${encodeURIComponent(filename)}`, {
+    method: 'PUT',
+    body: JSON.stringify({ content }),
+  });
+}
+
+export function deleteTemplateTool(templateName: string, filename: string): Promise<{ filename: string; status: string }> {
+  return fetchJson(`/templates/${encodeURIComponent(templateName)}/tools/${encodeURIComponent(filename)}`, { method: 'DELETE' });
+}
+
 // --- VM Templates ---
 
 export function listVmTemplates(): Promise<VMTemplateSummary[]> {
@@ -304,6 +334,10 @@ export function listVmTemplates(): Promise<VMTemplateSummary[]> {
 
 export function getVmTemplate(name: string): Promise<VMTemplateDetail> {
   return fetchJson(`/vm-templates/${encodeURIComponent(name)}`);
+}
+
+export function getVmTemplateVariant(name: string, image: string): Promise<VMTemplateVariantDetail> {
+  return fetchJson(`/vm-templates/${encodeURIComponent(name)}/variant/${encodeURIComponent(image)}`);
 }
 
 export function saveVmTemplate(data: { name: string; description: string; image: string; boot_config: BootConfig }): Promise<VMTemplateDetail> {
@@ -322,6 +356,25 @@ export function updateVmTemplate(name: string, data: { description?: string; ima
 
 export function deleteVmTemplate(name: string): Promise<{ status: string; name: string }> {
   return fetchJson(`/vm-templates/${encodeURIComponent(name)}`, { method: 'DELETE' });
+}
+
+export function resyncVmTemplates(): Promise<VMTemplateSummary[]> {
+  return fetchJson('/vm-templates/resync', { method: 'POST' });
+}
+
+export function readVmTemplateTool(templateName: string, filename: string): Promise<{ filename: string; content: string }> {
+  return fetchJson(`/vm-templates/${encodeURIComponent(templateName)}/tools/${encodeURIComponent(filename)}`);
+}
+
+export function writeVmTemplateTool(templateName: string, filename: string, content: string): Promise<{ filename: string; status: string }> {
+  return fetchJson(`/vm-templates/${encodeURIComponent(templateName)}/tools/${encodeURIComponent(filename)}`, {
+    method: 'PUT',
+    body: JSON.stringify({ content }),
+  });
+}
+
+export function deleteVmTemplateTool(templateName: string, filename: string): Promise<{ filename: string; status: string }> {
+  return fetchJson(`/vm-templates/${encodeURIComponent(templateName)}/tools/${encodeURIComponent(filename)}`, { method: 'DELETE' });
 }
 
 // --- Resources ---
@@ -749,13 +802,20 @@ export function executeAllBootConfigs(sliceName: string): Promise<Record<string,
   });
 }
 
+// --- Project Details (UIS API) ---
+
+export function getProjectDetails(uuid: string): Promise<ProjectDetails> {
+  return fetchJson(`/projects/${encodeURIComponent(uuid)}/details`);
+}
+
+
 // --- Projects (Core API) ---
 
 export function listUserProjects(): Promise<{ projects: Array<{ name: string; uuid: string }>; active_project_id: string }> {
   return fetchJson('/projects');
 }
 
-export function switchProject(projectId: string): Promise<{ status: string; project_id: string }> {
+export function switchProject(projectId: string): Promise<{ status: string; project_id: string; token_refreshed?: boolean; warning?: string; login_url?: string }> {
   return fetchJson('/projects/switch', {
     method: 'POST',
     body: JSON.stringify({ project_id: projectId }),
@@ -780,6 +840,92 @@ export function saveConfig(config: {
     body: JSON.stringify(config),
   });
 }
+
+// -- Monitoring ------------------------------------------------------------
+
+export function getMonitoringStatus(sliceName: string): Promise<import('../types/fabric').MonitoringStatus> {
+  return fetchJson(`/api/monitoring/${encodeURIComponent(sliceName)}/status`);
+}
+
+export function enableMonitoring(sliceName: string): Promise<{ status: string; install_results: Record<string, string> }> {
+  return fetchJson(`/api/monitoring/${encodeURIComponent(sliceName)}/enable`, { method: 'POST' });
+}
+
+export function disableMonitoring(sliceName: string): Promise<{ status: string }> {
+  return fetchJson(`/api/monitoring/${encodeURIComponent(sliceName)}/disable`, { method: 'POST' });
+}
+
+export function enableNodeMonitoring(sliceName: string, nodeName: string): Promise<{ status: string; message: string }> {
+  return fetchJson(`/api/monitoring/${encodeURIComponent(sliceName)}/nodes/${encodeURIComponent(nodeName)}/enable`, { method: 'POST' });
+}
+
+export function disableNodeMonitoring(sliceName: string, nodeName: string): Promise<{ status: string }> {
+  return fetchJson(`/api/monitoring/${encodeURIComponent(sliceName)}/nodes/${encodeURIComponent(nodeName)}/disable`, { method: 'POST' });
+}
+
+export function getMonitoringHistory(sliceName: string, minutes = 30): Promise<import('../types/fabric').MonitoringHistory> {
+  return fetchJson(`/api/monitoring/${encodeURIComponent(sliceName)}/metrics/history?minutes=${minutes}`);
+}
+
+export function getInfrastructureMetrics(sliceName: string): Promise<import('../types/fabric').InfrastructureMetrics> {
+  return fetchJson(`/api/monitoring/${encodeURIComponent(sliceName)}/infrastructure`);
+}
+
+// -- Recipes ---------------------------------------------------------------
+
+export function listRecipes(): Promise<RecipeSummary[]> {
+  return fetchJson('/recipes');
+}
+
+export function executeRecipe(name: string, sliceName: string, nodeName: string): Promise<RecipeExecResult> {
+  return fetchJson(`/recipes/${encodeURIComponent(name)}/execute/${encodeURIComponent(sliceName)}/${encodeURIComponent(nodeName)}`, {
+    method: 'POST',
+  });
+}
+
+export interface RecipeStreamEvent {
+  event: 'step' | 'output' | 'error' | 'done';
+  message?: string;
+  status?: string;
+  results?: Array<{ type: string; status: string; detail?: string }>;
+}
+
+export async function executeRecipeStream(
+  name: string,
+  sliceName: string,
+  nodeName: string,
+  onEvent: (evt: RecipeStreamEvent) => void,
+): Promise<void> {
+  const res = await fetch(`${BASE}/recipes/${encodeURIComponent(name)}/execute/${encodeURIComponent(sliceName)}/${encodeURIComponent(nodeName)}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+  });
+  if (!res.ok) {
+    const detail = await res.text();
+    throw new Error(`API error ${res.status}: ${detail}`);
+  }
+  const reader = res.body?.getReader();
+  if (!reader) throw new Error('No response body');
+  const decoder = new TextDecoder();
+  let buffer = '';
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop() || '';
+    for (const line of lines) {
+      if (line.startsWith('data: ')) {
+        try {
+          const evt = JSON.parse(line.slice(6)) as RecipeStreamEvent;
+          onEvent(evt);
+        } catch { /* skip malformed */ }
+      }
+    }
+  }
+}
+
+// -- Storage ---------------------------------------------------------------
 
 export function rebuildStorage(): Promise<{
   status: string;

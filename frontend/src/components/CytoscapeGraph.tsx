@@ -1,7 +1,7 @@
 'use client';
 import { useState, useEffect, useRef, useCallback } from 'react';
 import cytoscape, { type Core, type EventObject } from 'cytoscape';
-import type { CyGraph, SliceData } from '../types/fabric';
+import type { CyGraph, SliceData, RecipeSummary } from '../types/fabric';
 import '../styles/context-menu.css';
 
 // Register layout extensions
@@ -175,11 +175,12 @@ const LAYOUTS: Record<string, any> = {
 };
 
 export interface ContextMenuAction {
-  type: 'terminal' | 'delete' | 'delete-component' | 'delete-facility-port' | 'save-vm-template';
+  type: 'terminal' | 'delete' | 'delete-component' | 'delete-facility-port' | 'save-vm-template' | 'apply-recipe';
   elements: Record<string, string>[];
   nodeName?: string;
   componentName?: string;
   fpName?: string;
+  recipeName?: string;
 }
 
 interface CytoscapeGraphProps {
@@ -187,6 +188,7 @@ interface CytoscapeGraphProps {
   layout: string;
   dark: boolean;
   sliceData: SliceData | null;
+  recipes?: RecipeSummary[];
   onLayoutChange: (layout: string) => void;
   onNodeClick: (data: Record<string, string>) => void;
   onEdgeClick: (data: Record<string, string>) => void;
@@ -205,6 +207,7 @@ export default function CytoscapeGraph({
   layout,
   dark,
   sliceData,
+  recipes,
   onLayoutChange,
   onNodeClick,
   onEdgeClick,
@@ -581,6 +584,37 @@ export default function CytoscapeGraph({
               </button>
             </>
           )}
+          {singleVm && singleVm.management_ip && recipes && recipes.length > 0 && (() => {
+            const vmImage = singleVm.image || '';
+            const compatible = recipes.filter((r) => {
+              const patterns = r.image_patterns || {};
+              return Object.keys(patterns).some((key) =>
+                key === '*' || vmImage.toLowerCase().includes(key.toLowerCase())
+              );
+            });
+            return (
+              <>
+                <div className="graph-context-menu-sep" />
+                <div className="graph-context-menu-label">Recipes</div>
+                {compatible.length > 0 ? compatible.map((r) => (
+                  <button
+                    key={r.dir_name}
+                    className="graph-context-menu-item"
+                    onClick={() => {
+                      onContextAction({ type: 'apply-recipe', elements: [singleVm], nodeName: singleVm.name, recipeName: r.dir_name });
+                      setMenu(null);
+                    }}
+                  >
+                    ▸ {r.name}
+                  </button>
+                )) : (
+                  <div className="graph-context-menu-item" style={{ opacity: 0.5, cursor: 'default' }}>
+                    No recipes for this image
+                  </div>
+                )}
+              </>
+            );
+          })()}
           {deletable.length > 0 && (singleVm || vmsWithIp.length > 0 || vmComponents.length > 0) && (
             <div className="graph-context-menu-sep" />
           )}

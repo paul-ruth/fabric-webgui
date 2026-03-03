@@ -1,0 +1,50 @@
+{
+  "format": "fabric-slice-v1",
+  "name": "L2 Bridge \u2014 User-Defined IP",
+  "nodes": [
+    {
+      "name": "node1",
+      "site": "@lan",
+      "cores": 2,
+      "ram": 8,
+      "disk": 10,
+      "image": "default_ubuntu_22",
+      "components": [
+        {
+          "name": "nic1",
+          "model": "NIC_Basic"
+        }
+      ]
+    },
+    {
+      "name": "node2",
+      "site": "@lan",
+      "cores": 2,
+      "ram": 8,
+      "disk": 10,
+      "image": "default_ubuntu_22",
+      "components": [
+        {
+          "name": "nic1",
+          "model": "NIC_Basic"
+        }
+      ]
+    }
+  ],
+  "networks": [
+    {
+      "name": "lan",
+      "type": "L2Bridge",
+      "subnet": "192.168.1.0/24",
+      "ip_mode": "config",
+      "interface_ips": {
+        "node1-nic1-p1": "192.168.1.1",
+        "node2-nic1-p1": "192.168.1.2"
+      },
+      "interfaces": [
+        "node1-nic1-p1",
+        "node2-nic1-p1"
+      ]
+    }
+  ]
+}

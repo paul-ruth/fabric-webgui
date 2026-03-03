@@ -362,9 +362,15 @@ async def list_slices() -> list[dict[str, Any]]:
         except Exception:
             logger.warning("Failed to load persistent drafts", exc_info=True)
 
+    current_pid = os.environ.get("FABRIC_PROJECT_ID", "")
+
     def _fast_query():
         fablib = get_fablib()
         slices = fablib.get_slices()
+        # Filter to current project — get_slices() returns all accessible slices
+        if current_pid:
+            slices = [s for s in slices
+                      if (getattr(s, 'get_project_id', lambda: '')() or '') == current_pid]
         return [slice_summary(s) for s in slices]
     try:
         fabric_results = await asyncio.to_thread(_fast_query)
@@ -372,7 +378,6 @@ async def list_slices() -> list[dict[str, Any]]:
         raise HTTPException(status_code=500, detail=str(e))
 
     # Load non-archived registry entries for the current project
-    current_pid = os.environ.get("FABRIC_PROJECT_ID", "")
     registry = get_all_entries(include_archived=False, project_id=current_pid)
 
     # Separate fast results into: unchanged (same state as registry) and

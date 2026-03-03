@@ -23,6 +23,11 @@ export interface BootConfigError {
   detail: string;
 }
 
+export interface RecipeConsoleLine {
+  type: string;   // 'step' | 'output' | 'error'
+  message: string;
+}
+
 interface BottomPanelProps {
   terminals: TerminalTab[];
   onCloseTerminal: (id: string) => void;
@@ -44,6 +49,10 @@ interface BottomPanelProps {
   onPanelHeightChange: (height: number) => void;
   statusMessage?: string;
   loading?: boolean;
+  // Recipe console
+  recipeConsole: RecipeConsoleLine[];
+  recipeRunning: boolean;
+  onClearRecipeConsole: () => void;
 }
 
 const TERM_THEME = {
@@ -69,7 +78,7 @@ const TERM_THEME = {
   brightWhite: '#ffffff',
 };
 
-export default function BottomPanel({ terminals, onCloseTerminal, validationIssues, validationValid, sliceState, dirty, errors, onClearErrors, sliceErrors, bootConfigErrors, onClearBootConfigErrors, fullWidth = true, onToggleFullWidth, showWidthToggle = false, expanded, onExpandedChange, panelHeight, onPanelHeightChange, statusMessage, loading }: BottomPanelProps) {
+export default function BottomPanel({ terminals, onCloseTerminal, validationIssues, validationValid, sliceState, dirty, errors, onClearErrors, sliceErrors, bootConfigErrors, onClearBootConfigErrors, fullWidth = true, onToggleFullWidth, showWidthToggle = false, expanded, onExpandedChange, panelHeight, onPanelHeightChange, statusMessage, loading, recipeConsole, recipeRunning, onClearRecipeConsole }: BottomPanelProps) {
   const setExpanded = onExpandedChange;
   const setPanelHeight = onPanelHeightChange;
   const [activeTab, setActiveTab] = useState('validation');
@@ -112,6 +121,24 @@ export default function BottomPanel({ terminals, onCloseTerminal, validationIssu
     prevBootErrorCount.current = bootConfigErrors.length;
   }, [bootConfigErrors.length, setExpanded]);
 
+  // Auto-switch to recipes tab when recipe execution starts
+  const prevRecipeRunning = useRef(recipeRunning);
+  useEffect(() => {
+    if (recipeRunning && !prevRecipeRunning.current) {
+      setActiveTab('recipes');
+      setExpanded(true);
+    }
+    prevRecipeRunning.current = recipeRunning;
+  }, [recipeRunning, setExpanded]);
+
+  // Auto-scroll recipe console
+  const recipeConsoleEndRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (activeTab === 'recipes') {
+      recipeConsoleEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [recipeConsole, activeTab]);
+
   // If active tab was closed, switch to validation
   useEffect(() => {
     if (
@@ -120,6 +147,7 @@ export default function BottomPanel({ terminals, onCloseTerminal, validationIssu
       activeTab !== 'validation' &&
       activeTab !== 'local-terminal' &&
       activeTab !== 'slice-errors' &&
+      activeTab !== 'recipes' &&
       !terminals.find((t) => t.id === activeTab)
     ) {
       setActiveTab('validation');
@@ -175,6 +203,7 @@ export default function BottomPanel({ terminals, onCloseTerminal, validationIssu
           {warnCount > 0 && <span className="bottom-panel-badge warn">{warnCount} warning{warnCount !== 1 ? 's' : ''}</span>}
           {termCount > 0 && <span className="bottom-panel-badge">{termCount} terminal{termCount !== 1 ? 's' : ''}</span>}
           {containerTermActive && <span className="bottom-panel-badge">local</span>}
+          {recipeRunning && <span className="bottom-panel-badge warn">recipe running</span>}
         </span>
         <span className="bottom-panel-collapsed-actions">
           {statusMessage && (
@@ -232,6 +261,14 @@ export default function BottomPanel({ terminals, onCloseTerminal, validationIssu
           data-help-id="bottom.log"
         >
           Log
+        </button>
+        <button
+          className={`bp-tab ${activeTab === 'recipes' ? 'active' : ''}`}
+          onClick={() => setActiveTab('recipes')}
+        >
+          Recipes
+          {recipeRunning && <span className="bp-tab-indicator warn" />}
+          {!recipeRunning && recipeConsole.length > 0 && <span className="bp-tab-indicator ok" />}
         </button>
         <button
           className={`bp-tab bp-tab-container ${activeTab === 'local-terminal' ? 'active' : ''}`}
@@ -301,6 +338,14 @@ export default function BottomPanel({ terminals, onCloseTerminal, validationIssu
         <div style={{ display: activeTab === 'log' ? 'flex' : 'none', flex: 1, overflow: 'hidden' }}>
           <LogView />
         </div>
+        <div style={{ display: activeTab === 'recipes' ? 'flex' : 'none', flex: 1, overflow: 'hidden' }}>
+          <RecipeConsoleView
+            lines={recipeConsole}
+            running={recipeRunning}
+            onClear={onClearRecipeConsole}
+            endRef={recipeConsoleEndRef}
+          />
+        </div>
         <div style={{ display: activeTab === 'local-terminal' ? 'flex' : 'none', flex: 1, overflow: 'hidden' }}>
           {containerTermActive && <ContainerTerminalView />}
         </div>
@@ -309,6 +354,40 @@ export default function BottomPanel({ terminals, onCloseTerminal, validationIssu
             <TerminalView sliceName={t.sliceName} nodeName={t.nodeName} managementIp={t.managementIp} />
           </div>
         ))}
+      </div>
+    </div>
+  );
+}
+
+// --- Recipe Console View ---
+function RecipeConsoleView({ lines, running, onClear, endRef }: { lines: RecipeConsoleLine[]; running: boolean; onClear: () => void; endRef: React.RefObject<HTMLDivElement> }) {
+  if (lines.length === 0) {
+    return (
+      <div className="bp-validation-container">
+        <div className="bp-validation-empty">No recipe output. Apply a recipe from the Libraries panel to see execution output here.</div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="bp-recipe-console">
+      <div className="bp-recipe-header">
+        <span>{running ? 'Recipe running...' : 'Recipe complete'}</span>
+        {!running && (
+          <button className="bp-errors-clear" onClick={onClear}>Clear</button>
+        )}
+        {running && <span className="bp-recipe-pulse" />}
+      </div>
+      <div className="bp-recipe-body">
+        {lines.map((line, i) => (
+          <div key={i} className={`bp-recipe-line bp-recipe-${line.type}`}>
+            {line.type === 'step'   && <span className="bp-recipe-icon">{'\u25B6'}</span>}
+            {line.type === 'output' && <span className="bp-recipe-icon">{' '}</span>}
+            {line.type === 'error'  && <span className="bp-recipe-icon">{'\u2716'}</span>}
+            <span>{line.message}</span>
+          </div>
+        ))}
+        <div ref={endRef} />
       </div>
     </div>
   );

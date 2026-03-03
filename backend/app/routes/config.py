@@ -214,10 +214,15 @@ async def upload_token(file: UploadFile = File(...)):
 
 @router.get("/api/config/login")
 def get_login_url():
-    cm_url = "https://cm.fabric-testbed.net/credmgr/tokens/create_cli?" + urlencode({
+    params: dict = {
         "scope": "all",
         "lifetime": "4",
-    })
+    }
+    # Include current project_id so the token is scoped to the active project
+    pid = os.environ.get("FABRIC_PROJECT_ID", "")
+    if pid:
+        params["project_id"] = pid
+    cm_url = "https://cm.fabric-testbed.net/credmgr/tokens/create_cli?" + urlencode(params)
     return {"login_url": cm_url}
 
 
@@ -264,6 +269,9 @@ def oauth_callback(id_token: str, refresh_token: str = ""):
     with open(path, "w") as f:
         json.dump(token_data, f, indent=2)
     os.chmod(path, stat.S_IRUSR | stat.S_IWUSR)
+
+    # Reset FABlib so it picks up the new token (including refresh_token)
+    reset_fablib()
 
     # Redirect back to frontend with success indicator
     base_url = os.environ.get("WEBGUI_BASE_URL", "http://localhost:3000")
@@ -587,6 +595,20 @@ def switch_project(req: ProjectSwitchRequest):
     fablib.set_project_id(req.project_id)
     os.environ["FABRIC_PROJECT_ID"] = req.project_id
 
+    # Update the SliceManager's project_id so token refresh uses the new project
+    mgr = fablib.get_manager()
+    mgr.project_id = req.project_id
+
+    # Force token refresh scoped to the new project
+    token_refreshed = False
+    try:
+        refresh_token = mgr.get_refresh_token()
+        if refresh_token:
+            mgr.refresh_tokens(refresh_token=refresh_token)
+            token_refreshed = True
+    except Exception:
+        pass  # Token refresh is best-effort
+
     # Persist to fabric_rc
     config_dir = _config_dir()
     rc_path = os.path.join(config_dir, "fabric_rc")
@@ -606,7 +628,21 @@ def switch_project(req: ProjectSwitchRequest):
         with open(rc_path, "w") as f:
             f.writelines(new_lines)
 
-    return {"status": "ok", "project_id": req.project_id}
+    result: dict = {"status": "ok", "project_id": req.project_id, "token_refreshed": token_refreshed}
+    if not token_refreshed:
+        # Provide a CM login URL scoped to the new project so the frontend
+        # can redirect the user to re-authenticate with a project-scoped token.
+        login_url = "https://cm.fabric-testbed.net/credmgr/tokens/create_cli?" + urlencode({
+            "scope": "all",
+            "lifetime": "4",
+            "project_id": req.project_id,
+        })
+        result["warning"] = (
+            "Your token does not have a refresh capability. "
+            "Click 'Re-authenticate' in Settings to get a token for this project."
+        )
+        result["login_url"] = login_url
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -715,16 +751,14 @@ def rebuild_storage():
             dirs_created += 1
 
     # 2. Force re-seed slice templates by clearing model_hash in metadata
-    from app.routes.templates import _templates_dir, _seed_if_needed as seed_slice_templates, SEED_SLICE_TEMPLATES, _sanitize_name as sanitize_slice
+    from app.routes.templates import _templates_dir, _seed_if_needed as seed_slice_templates, _list_builtin_templates as list_slice_builtins
     tdir = _templates_dir()
+    slice_builtins = list_slice_builtins()
     slice_invalidated = 0
     if os.path.isdir(tdir):
-        for tmpl in SEED_SLICE_TEMPLATES:
-            try:
-                safe = sanitize_slice(tmpl["name"])
-            except Exception:
-                continue
-            meta_path = os.path.join(tdir, safe, "metadata.json")
+        for builtin in slice_builtins:
+            entry = builtin["_entry"]
+            meta_path = os.path.join(tdir, entry, "metadata.json")
             if os.path.isfile(meta_path):
                 try:
                     with open(meta_path) as f:
@@ -735,19 +769,17 @@ def rebuild_storage():
                             json.dump(meta, f, indent=2)
                         slice_invalidated += 1
                 except Exception as e:
-                    logger.warning("Failed to invalidate slice template %s: %s", tmpl["name"], e)
+                    logger.warning("Failed to invalidate slice template %s: %s", entry, e)
 
     # 3. Force re-seed VM templates by clearing model_hash
-    from app.routes.vm_templates import _vm_templates_dir, _seed_if_needed as seed_vm_templates, SEED_TEMPLATES as SEED_VM_TEMPLATES, _sanitize_name as sanitize_vm
+    from app.routes.vm_templates import _vm_templates_dir, _seed_if_needed as seed_vm_templates, _list_builtin_templates as list_vm_builtins
     vmdir = _vm_templates_dir()
+    vm_builtins = list_vm_builtins()
     vm_invalidated = 0
     if os.path.isdir(vmdir):
-        for tmpl in SEED_VM_TEMPLATES:
-            try:
-                safe = sanitize_vm(tmpl["name"])
-            except Exception:
-                continue
-            tmpl_path = os.path.join(vmdir, safe, "vm-template.json")
+        for builtin in vm_builtins:
+            entry = builtin["_entry"]
+            tmpl_path = os.path.join(vmdir, entry, "vm-template.json")
             if os.path.isfile(tmpl_path):
                 try:
                     with open(tmpl_path) as f:
@@ -758,7 +790,7 @@ def rebuild_storage():
                             json.dump(data, f, indent=2)
                         vm_invalidated += 1
                 except Exception as e:
-                    logger.warning("Failed to invalidate VM template %s: %s", tmpl["name"], e)
+                    logger.warning("Failed to invalidate VM template %s: %s", entry, e)
 
     # 4. Run seed functions to re-write stale templates
     seed_slice_templates()
@@ -770,6 +802,6 @@ def rebuild_storage():
         "directories_created": dirs_created,
         "slice_templates_reseeded": slice_invalidated,
         "vm_templates_reseeded": vm_invalidated,
-        "slice_templates_total": len(SEED_SLICE_TEMPLATES),
-        "vm_templates_total": len(SEED_VM_TEMPLATES),
+        "slice_templates_total": len(slice_builtins),
+        "vm_templates_total": len(vm_builtins),
     }

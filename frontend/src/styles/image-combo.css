@@ -129,3 +129,22 @@
   background: rgba(0, 142, 122, 0.15);
   color: var(--fabric-teal, #008e7a);
 }
+.image-badge-variant {
+  background: rgba(255, 133, 66, 0.15);
+  color: var(--fabric-orange, #ff8542);
+}
+
+/* Expandable multi-variant entries */
+.image-combo-expandable {
+  font-weight: 600;
+}
+.image-combo-expand-arrow {
+  flex-shrink: 0;
+  font-size: 8px;
+  color: var(--fabric-text-muted);
+  width: 12px;
+  text-align: center;
+}
+.image-combo-variant-row {
+  padding-left: 28px;
+}

@@ -1,0 +1,44 @@
+{
+  "format": "fabric-slice-v1",
+  "name": "Wide-Area L2 Network",
+  "nodes": [
+    {
+      "name": "node-a",
+      "site": "@wan-a",
+      "cores": 2,
+      "ram": 8,
+      "disk": 10,
+      "image": "default_ubuntu_22",
+      "components": [
+        {
+          "name": "nic1",
+          "model": "NIC_Basic"
+        }
+      ]
+    },
+    {
+      "name": "node-b",
+      "site": "@wan-b",
+      "cores": 2,
+      "ram": 8,
+      "disk": 10,
+      "image": "default_ubuntu_22",
+      "components": [
+        {
+          "name": "nic1",
+          "model": "NIC_Basic"
+        }
+      ]
+    }
+  ],
+  "networks": [
+    {
+      "name": "wan-l2",
+      "type": "L2STS",
+      "interfaces": [
+        "node-a-nic1-p1",
+        "node-b-nic1-p1"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,309 @@
+/* MonitoringView styles — .mv- prefix */
+
+.mv-root {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow-y: auto;
+  padding: 20px 28px;
+  gap: 20px;
+  background: var(--fabric-bg-tint);
+  color: var(--fabric-text);
+}
+
+/* -- Header ------------------------------------------------------------ */
+
+.mv-header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.mv-header h2 {
+  margin: 0;
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: var(--fabric-text);
+}
+
+.mv-header-slice {
+  color: var(--fabric-primary);
+  font-weight: 500;
+}
+
+.mv-toggle-btn {
+  padding: 6px 16px;
+  border: none;
+  border-radius: 6px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, opacity 0.15s;
+}
+
+.mv-toggle-btn.enable {
+  background: var(--fabric-teal);
+  color: #fff;
+}
+
+.mv-toggle-btn.disable {
+  background: var(--fabric-coral);
+  color: #fff;
+}
+
+.mv-toggle-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.mv-refresh-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--fabric-teal);
+  animation: mv-pulse 2s infinite;
+}
+
+@keyframes mv-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+.mv-time-range {
+  display: flex;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.mv-time-btn {
+  padding: 4px 10px;
+  border: 1px solid var(--fabric-border);
+  border-radius: 4px;
+  background: var(--fabric-white);
+  color: var(--fabric-text);
+  font-size: 0.78rem;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.mv-time-btn.active {
+  background: var(--fabric-primary);
+  color: #fff;
+  border-color: var(--fabric-primary);
+}
+
+/* -- No-slice / empty state -------------------------------------------- */
+
+.mv-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--fabric-text);
+  opacity: 0.6;
+  font-size: 1rem;
+}
+
+/* -- Section ----------------------------------------------------------- */
+
+.mv-section {
+  background: var(--fabric-white);
+  border: 1px solid var(--fabric-border);
+  border-radius: 8px;
+  padding: 16px 20px;
+}
+
+.mv-section h3 {
+  margin: 0 0 12px 0;
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--fabric-text);
+}
+
+/* -- Node cards -------------------------------------------------------- */
+
+.mv-node-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 12px;
+}
+
+.mv-node-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px;
+  border: 1px solid var(--fabric-border);
+  border-radius: 6px;
+  background: var(--fabric-bg-tint);
+  font-size: 0.82rem;
+}
+
+.mv-node-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.mv-status-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.mv-status-dot.green { background: var(--fabric-teal); }
+.mv-status-dot.yellow { background: var(--fabric-orange); }
+.mv-status-dot.red { background: var(--fabric-coral); }
+.mv-status-dot.gray { background: #999; }
+
+.mv-node-name {
+  font-weight: 600;
+  color: var(--fabric-text);
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mv-node-toggle {
+  position: relative;
+  width: 36px;
+  height: 20px;
+  border: none;
+  border-radius: 10px;
+  background: #ccc;
+  cursor: pointer;
+  transition: background 0.2s;
+  flex-shrink: 0;
+}
+
+.mv-node-toggle.on {
+  background: var(--fabric-teal);
+}
+
+.mv-node-toggle::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  transition: transform 0.2s;
+}
+
+.mv-node-toggle.on::after {
+  transform: translateX(16px);
+}
+
+.mv-node-meta {
+  color: var(--fabric-text);
+  opacity: 0.7;
+  font-size: 0.75rem;
+}
+
+.mv-node-error {
+  color: var(--fabric-coral);
+  font-size: 0.75rem;
+  word-break: break-word;
+}
+
+/* -- Charts ------------------------------------------------------------ */
+
+.mv-chart-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(400px, 1fr));
+  gap: 16px;
+}
+
+.mv-chart-container {
+  position: relative;
+  height: 240px;
+  background: var(--fabric-bg-tint);
+  border: 1px solid var(--fabric-border);
+  border-radius: 6px;
+  padding: 8px;
+}
+
+.mv-chart-label {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--fabric-text);
+  margin-bottom: 4px;
+}
+
+.mv-chart-inner {
+  position: relative;
+  height: calc(100% - 20px);
+}
+
+/* -- Infrastructure ---------------------------------------------------- */
+
+.mv-infra-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 12px;
+}
+
+.mv-infra-card {
+  padding: 12px;
+  border: 1px solid var(--fabric-border);
+  border-radius: 6px;
+  background: var(--fabric-bg-tint);
+}
+
+.mv-infra-card h4 {
+  margin: 0 0 8px 0;
+  font-size: 0.9rem;
+  color: var(--fabric-primary);
+}
+
+.mv-infra-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.8rem;
+  padding: 2px 0;
+}
+
+.mv-infra-label {
+  color: var(--fabric-text);
+  opacity: 0.7;
+}
+
+.mv-infra-value {
+  font-weight: 600;
+  color: var(--fabric-text);
+}
+
+/* -- Loading / status messages ----------------------------------------- */
+
+.mv-loading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px;
+  font-size: 0.85rem;
+  color: var(--fabric-text);
+  opacity: 0.7;
+}
+
+.mv-spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--fabric-border);
+  border-top-color: var(--fabric-primary);
+  border-radius: 50%;
+  animation: mv-spin 0.8s linear infinite;
+}
+
+@keyframes mv-spin {
+  to { transform: rotate(360deg); }
+}
+
+.mv-spin {
+  display: inline-block;
+  animation: mv-spin 1s linear infinite;
+}

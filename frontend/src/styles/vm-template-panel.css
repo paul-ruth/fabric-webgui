@@ -289,3 +289,114 @@
   font-size: 12px;
   padding: 5px 14px;
 }
+
+/* Version badge */
+.vmt-badge-version {
+  font-size: 9px;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: rgba(87, 152, 188, 0.15);
+  color: var(--fabric-primary);
+  flex-shrink: 0;
+}
+
+/* Variant picker inline */
+.vmt-variant-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 4px 0;
+}
+.vmt-variant-btn {
+  font-size: 10px;
+  padding: 3px 8px;
+  border: 1px solid var(--fabric-border);
+  border-radius: 3px;
+  background: var(--fabric-white);
+  color: var(--fabric-text);
+  cursor: pointer;
+}
+.vmt-variant-btn:hover:not(:disabled) {
+  border-color: var(--fabric-primary);
+  color: var(--fabric-primary);
+}
+.vmt-variant-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.vmt-variant-cancel {
+  color: var(--fabric-text-muted);
+}
+
+/* Recipe Execution Console */
+.recipe-console {
+  margin: 8px;
+  border: 1px solid var(--fabric-border);
+  border-radius: 6px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  max-height: 250px;
+}
+.recipe-console-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  background: var(--fabric-bg-tint);
+  border-bottom: 1px solid var(--fabric-border);
+  color: var(--fabric-text);
+}
+.recipe-console-close {
+  border: none;
+  background: none;
+  font-size: 12px;
+  color: var(--fabric-text-muted);
+  cursor: pointer;
+  padding: 0 2px;
+}
+.recipe-console-close:hover:not(:disabled) {
+  color: var(--fabric-text);
+}
+.recipe-console-close:disabled {
+  color: var(--fabric-orange, #ff8542);
+  cursor: default;
+  animation: recipe-pulse 1s infinite;
+}
+@keyframes recipe-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+.recipe-console-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px 0;
+  font-family: 'SF Mono', 'Fira Code', Consolas, monospace;
+  font-size: 10px;
+  line-height: 1.5;
+  background: var(--fabric-white);
+}
+.recipe-console-line {
+  display: flex;
+  gap: 4px;
+  padding: 1px 8px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.recipe-console-icon {
+  flex-shrink: 0;
+  width: 12px;
+  text-align: center;
+}
+.recipe-console-step {
+  color: var(--fabric-primary);
+}
+.recipe-console-output {
+  color: var(--fabric-text-muted);
+}
+.recipe-console-error {
+  color: var(--fabric-coral, #e25241);
+}

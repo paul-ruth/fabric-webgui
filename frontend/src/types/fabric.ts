@@ -262,6 +262,16 @@ export interface BootConfig {
   network: BootNetConfig[];
 }
 
+export interface ToolFile {
+  filename: string;
+  content?: string;
+}
+
+export interface VMTemplateVariant {
+  label: string;
+  dir: string;
+}
+
 export interface VMTemplateSummary {
   name: string;
   description: string;
@@ -269,10 +279,26 @@ export interface VMTemplateSummary {
   created: string;
   builtin: boolean;
   dir_name: string;
+  images: string[];
+  variant_count: number;
+  version: string;
 }
 
 export interface VMTemplateDetail extends VMTemplateSummary {
+  boot_config?: BootConfig;
+  variants?: Record<string, VMTemplateVariant>;
+  setup_script?: string;
+  remote_dir?: string;
+  tools?: ToolFile[];
+}
+
+export interface VMTemplateVariantDetail {
+  image: string;
+  label: string;
   boot_config: BootConfig;
+  template_name: string;
+  variant_dir: string;
+  remote_dir: string;
 }
 
 export interface BootExecResult {
@@ -281,3 +307,102 @@ export interface BootExecResult {
   status: 'ok' | 'error';
   detail?: string;
 }
+
+export interface ProjectPerson {
+  name: string;
+  email: string;
+  uuid: string;
+}
+
+export interface ProjectFunding {
+  agency: string;
+  award_number: string;
+  award_amount: number;
+  directorate: string;
+}
+
+export interface ProjectDetails {
+  uuid: string;
+  name: string;
+  description: string;
+  project_type: string;
+  active: boolean;
+  created: string;
+  communities: string[];
+  tags: string[];
+  project_lead: ProjectPerson | null;
+  project_owners: ProjectPerson[];
+  project_members: ProjectPerson[];
+  project_creators: ProjectPerson[];
+  project_funding: ProjectFunding[];
+  slice_counts: {
+    active: number;
+    total: number;
+  };
+}
+
+// -- Monitoring types -------------------------------------------------------
+
+export interface NodeMonitoringStatus {
+  name: string;
+  enabled: boolean;
+  exporter_installed: boolean;
+  management_ip: string;
+  site: string;
+  last_scrape: number;
+  last_error: string;
+}
+
+export interface MonitoringStatus {
+  slice_name: string;
+  enabled: boolean;
+  nodes: NodeMonitoringStatus[];
+}
+
+export interface TimeSeriesPoint {
+  t: number;
+  v: number;
+}
+
+export interface NodeMetricsHistory {
+  cpu_percent?: TimeSeriesPoint[];
+  memory_percent?: TimeSeriesPoint[];
+  load1?: TimeSeriesPoint[];
+  load5?: TimeSeriesPoint[];
+  load15?: TimeSeriesPoint[];
+  [key: string]: TimeSeriesPoint[] | undefined;  // net_rx_bytes.eth0, etc.
+}
+
+export interface MonitoringHistory {
+  slice_name: string;
+  nodes: Record<string, NodeMetricsHistory>;
+}
+
+// -- Recipe types -----------------------------------------------------------
+
+export interface RecipeSummary {
+  name: string;
+  description: string;
+  image_patterns: Record<string, string>;
+  dir_name: string;
+  builtin: boolean;
+}
+
+export interface RecipeExecResult {
+  recipe: string;
+  node: string;
+  results: Array<{ type: string; status: 'ok' | 'error'; detail?: string }>;
+  status: 'ok' | 'partial' | 'error';
+}
+
+export interface InfrastructureMetrics {
+  slice_name: string;
+  sites: Record<string, {
+    node_load1?: PrometheusResult[];
+    node_load5?: PrometheusResult[];
+    dataplaneInBits?: PrometheusResult[];
+    dataplaneOutBits?: PrometheusResult[];
+    error?: string;
+  }>;
+}
+

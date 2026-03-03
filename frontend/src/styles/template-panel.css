@@ -355,13 +355,16 @@
   background: transparent;
   border: none;
   border-bottom: 2px solid transparent;
+  border-radius: 0;
   color: var(--fabric-text-muted);
   cursor: pointer;
+  box-shadow: none;
   transition: color 0.15s, border-color 0.15s;
 }
 .templates-tab:hover {
   color: var(--fabric-primary);
   background: var(--fabric-bg-tint);
+  box-shadow: none;
 }
 .templates-tab.active {
   color: var(--fabric-primary);

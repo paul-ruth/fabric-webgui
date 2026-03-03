@@ -1,0 +1,73 @@
+{
+  "format": "fabric-slice-v1",
+  "name": "L2 Bridge \u2014 Manual Config",
+  "nodes": [
+    {
+      "name": "node1",
+      "site": "@lan",
+      "cores": 2,
+      "ram": 8,
+      "disk": 10,
+      "image": "default_ubuntu_22",
+      "components": [
+        {
+          "name": "nic1",
+          "model": "NIC_Basic"
+        }
+      ],
+      "boot_config": {
+        "uploads": [],
+        "commands": [],
+        "network": [
+          {
+            "id": "1",
+            "iface": "eth1",
+            "mode": "manual",
+            "ip": "192.168.1.1",
+            "subnet": "24",
+            "order": 0
+          }
+        ]
+      }
+    },
+    {
+      "name": "node2",
+      "site": "@lan",
+      "cores": 2,
+      "ram": 8,
+      "disk": 10,
+      "image": "default_ubuntu_22",
+      "components": [
+        {
+          "name": "nic1",
+          "model": "NIC_Basic"
+        }
+      ],
+      "boot_config": {
+        "uploads": [],
+        "commands": [],
+        "network": [
+          {
+            "id": "1",
+            "iface": "eth1",
+            "mode": "manual",
+            "ip": "192.168.1.2",
+            "subnet": "24",
+            "order": 0
+          }
+        ]
+      }
+    }
+  ],
+  "networks": [
+    {
+      "name": "lan",
+      "type": "L2Bridge",
+      "ip_mode": "none",
+      "interfaces": [
+        "node1-nic1-p1",
+        "node2-nic1-p1"
+      ]
+    }
+  ]
+}

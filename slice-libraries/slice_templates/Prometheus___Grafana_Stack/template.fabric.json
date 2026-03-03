@@ -1,0 +1,107 @@
+{
+  "format": "fabric-slice-v1",
+  "name": "Prometheus + Grafana Stack",
+  "nodes": [
+    {
+      "name": "monitor",
+      "site": "@cluster",
+      "cores": 4,
+      "ram": 16,
+      "disk": 50,
+      "image": "default_rocky_8",
+      "boot_config": {
+        "uploads": [],
+        "commands": [
+          {
+            "id": "1",
+            "command": "chmod +x ~/tools/*.sh && ~/tools/install-docker.sh",
+            "order": 0
+          },
+          {
+            "id": "2",
+            "command": "~/tools/setup-monitor.sh",
+            "order": 1
+          }
+        ],
+        "network": []
+      },
+      "components": [
+        {
+          "name": "FABNET",
+          "model": "NIC_Basic"
+        }
+      ]
+    },
+    {
+      "name": "target1",
+      "site": "@cluster",
+      "cores": 2,
+      "ram": 8,
+      "disk": 10,
+      "image": "default_rocky_8",
+      "boot_config": {
+        "uploads": [],
+        "commands": [
+          {
+            "id": "1",
+            "command": "chmod +x ~/tools/*.sh && ~/tools/install-docker.sh",
+            "order": 0
+          },
+          {
+            "id": "2",
+            "command": "~/tools/setup-exporter.sh",
+            "order": 1
+          }
+        ],
+        "network": []
+      },
+      "components": [
+        {
+          "name": "FABNET",
+          "model": "NIC_Basic"
+        }
+      ]
+    },
+    {
+      "name": "target2",
+      "site": "@cluster",
+      "cores": 2,
+      "ram": 8,
+      "disk": 10,
+      "image": "default_rocky_8",
+      "boot_config": {
+        "uploads": [],
+        "commands": [
+          {
+            "id": "1",
+            "command": "chmod +x ~/tools/*.sh && ~/tools/install-docker.sh",
+            "order": 0
+          },
+          {
+            "id": "2",
+            "command": "~/tools/setup-exporter.sh",
+            "order": 1
+          }
+        ],
+        "network": []
+      },
+      "components": [
+        {
+          "name": "FABNET",
+          "model": "NIC_Basic"
+        }
+      ]
+    }
+  ],
+  "networks": [
+    {
+      "name": "monitoring-net",
+      "type": "FABNetv4",
+      "interfaces": [
+        "monitor-FABNET-p1",
+        "target1-FABNET-p1",
+        "target2-FABNET-p1"
+      ]
+    }
+  ]
+}

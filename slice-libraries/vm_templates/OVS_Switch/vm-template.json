@@ -1,0 +1,32 @@
+{
+  "name": "OVS Switch",
+  "description": "Ubuntu 22.04 with Open vSwitch bridge (br0) auto-configured",
+  "image": "default_ubuntu_22",
+  "builtin": true,
+  "boot_config": {
+    "uploads": [],
+    "commands": [
+      {
+        "id": "1",
+        "command": "sudo apt-get update",
+        "order": 0
+      },
+      {
+        "id": "2",
+        "command": "sudo apt-get install -y openvswitch-switch",
+        "order": 1
+      },
+      {
+        "id": "3",
+        "command": "sudo ovs-vsctl add-br br0",
+        "order": 2
+      },
+      {
+        "id": "4",
+        "command": "for iface in $(ip -o link show | awk -F': ' '{print $2}' | grep -v -E '^(lo|eth0|ens3|docker|br|ovs|veth)'); do sudo ovs-vsctl add-port br0 $iface; done",
+        "order": 3
+      }
+    ],
+    "network": []
+  }
+}

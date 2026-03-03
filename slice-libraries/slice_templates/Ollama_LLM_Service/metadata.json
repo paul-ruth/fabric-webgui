@@ -1,0 +1,8 @@
+{
+  "name": "Ollama LLM Service",
+  "description": "GPU server running Ollama + Open WebUI with a client node. Connected via FABNetv4.",
+  "builtin": true,
+  "order": 11,
+  "node_count": 2,
+  "network_count": 1
+}

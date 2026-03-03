@@ -1,0 +1,27 @@
+{
+  "name": "P4 BMv2 Switch",
+  "description": "Ubuntu 20.04 with P4 behavioral model (BMv2) software switch in Docker. Add NIC_Basic components for data-plane ports.",
+  "image": "default_ubuntu_20",
+  "builtin": true,
+  "boot_config": {
+    "uploads": [],
+    "commands": [
+      {
+        "id": "1",
+        "command": "sudo apt-get update",
+        "order": 0
+      },
+      {
+        "id": "2",
+        "command": "sudo apt-get install -y docker.io && sudo systemctl enable docker && sudo systemctl start docker",
+        "order": 1
+      },
+      {
+        "id": "3",
+        "command": "sudo docker pull pruth/fabric-images:0.0.2j",
+        "order": 2
+      }
+    ],
+    "network": []
+  }
+}

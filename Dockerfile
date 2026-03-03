@@ -27,6 +27,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy backend code
 COPY backend/app/ app/
 
+# Copy builtin slice-libraries (slice templates, VM templates, recipes)
+COPY slice-libraries/ slice-libraries/
+
 # Copy built frontend
 COPY --from=frontend-build /app/dist /usr/share/nginx/html
 

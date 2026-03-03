@@ -12,6 +12,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app/ app/
 
+# Copy builtin slice-libraries (slice templates, VM templates, recipes) — synced before build
+COPY slice-libraries/ slice-libraries/
+
 RUN mkdir -p /fabric_config && chmod 700 /fabric_config
 RUN mkdir -p /fabric_storage && chmod 755 /fabric_storage
 

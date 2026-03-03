@@ -11,6 +11,19 @@ fabric-webgui is a standalone web GUI that replicates the Jupyter-based **fabvis
 - **Backend**: FastAPI (Python) wrapping FABlib for all FABRIC operations → `backend/`
 - **Frontend**: React 18 + TypeScript with Cytoscape.js and react-leaflet → `frontend/`
 - **Deployment**: Docker Compose (backend + nginx-served frontend)
+- **Full architecture reference**: See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for complete endpoint tables, data flow diagrams, storage layout, and type system documentation.
+
+## Agent Team
+
+Specialist agents available as slash commands for development:
+- `/lead <goal>` — Team lead: breaks goals into tasks, delegates to specialists
+- `/backend <task>` — Backend specialist: FastAPI, FABlib, Python
+- `/frontend <task>` — Frontend specialist: React, TypeScript, CSS
+- `/graph <task>` — Graph/visualization: Cytoscape.js, Leaflet, graph_builder
+- `/libraries <task>` — Slice libraries: templates, recipes, seeding
+- `/infra <task>` — Infrastructure: Docker, builds, deployment, nginx
+
+Agents share state via `docs/TEAM_STATUS.md`.
 
 ## Build & Run
 

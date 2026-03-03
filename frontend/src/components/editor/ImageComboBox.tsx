@@ -12,6 +12,7 @@ interface ImageComboBoxProps {
 export default function ImageComboBox({ images, vmTemplates, value, onSelect }: ImageComboBoxProps) {
   const [open, setOpen] = useState(false);
   const [filter, setFilter] = useState('');
+  const [expandedTemplate, setExpandedTemplate] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
@@ -31,11 +32,75 @@ export default function ImageComboBox({ images, vmTemplates, value, onSelect }: 
       if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
         setOpen(false);
         setFilter('');
+        setExpandedTemplate(null);
       }
     };
     window.addEventListener('mousedown', close);
     return () => window.removeEventListener('mousedown', close);
   }, [open]);
+
+  const renderTemplateEntry = (t: VMTemplateSummary) => {
+    const isMultiVariant = t.variant_count > 0;
+    const isExpanded = expandedTemplate === t.dir_name;
+
+    if (!isMultiVariant) {
+      // Legacy single-image template — flat row
+      return (
+        <div
+          key={`tpl:${t.dir_name}`}
+          className="image-combo-option"
+          onClick={() => {
+            onSelect(t.image, t);
+            setOpen(false);
+            setFilter('');
+            setExpandedTemplate(null);
+          }}
+        >
+          <div className="image-combo-opt-info">
+            <span className="image-combo-opt-name">{t.name}</span>
+            {t.description && (
+              <span className="image-combo-opt-desc">{t.description}</span>
+            )}
+          </div>
+          <span className="image-badge image-badge-tpl">TPL</span>
+        </div>
+      );
+    }
+
+    // Multi-variant template — expandable header + sub-rows
+    return (
+      <div key={`tpl:${t.dir_name}`}>
+        <div
+          className="image-combo-option image-combo-expandable"
+          onClick={() => setExpandedTemplate(isExpanded ? null : t.dir_name)}
+        >
+          <span className="image-combo-expand-arrow">{isExpanded ? '\u25BC' : '\u25B6'}</span>
+          <div className="image-combo-opt-info">
+            <span className="image-combo-opt-name">{t.name}</span>
+            {t.description && (
+              <span className="image-combo-opt-desc">{t.description}</span>
+            )}
+          </div>
+          <span className="image-badge image-badge-variant">{t.variant_count}</span>
+        </div>
+        {isExpanded && t.images.map((imgKey) => (
+          <div
+            key={`tpl-v:${t.dir_name}:${imgKey}`}
+            className="image-combo-option image-combo-variant-row"
+            onClick={() => {
+              onSelect(imgKey, t);
+              setOpen(false);
+              setFilter('');
+              setExpandedTemplate(null);
+            }}
+          >
+            <span className="image-combo-opt-name">{imgKey}</span>
+            <span className="image-badge image-badge-tpl">TPL</span>
+          </div>
+        ))}
+      </div>
+    );
+  };
 
   return (
     <div className="image-combo" ref={dropdownRef}>
@@ -57,6 +122,7 @@ export default function ImageComboBox({ images, vmTemplates, value, onSelect }: 
               if (e.key === 'Escape') {
                 setOpen(false);
                 setFilter('');
+                setExpandedTemplate(null);
               }
             }}
           />
@@ -84,25 +150,7 @@ export default function ImageComboBox({ images, vmTemplates, value, onSelect }: 
               {filteredTemplates.length > 0 && (
                 <div>
                   <div className="image-combo-group">VM Templates</div>
-                  {filteredTemplates.map((t) => (
-                    <div
-                      key={`tpl:${t.dir_name}`}
-                      className="image-combo-option"
-                      onClick={() => {
-                        onSelect(t.image, t);
-                        setOpen(false);
-                        setFilter('');
-                      }}
-                    >
-                      <div className="image-combo-opt-info">
-                        <span className="image-combo-opt-name">{t.name}</span>
-                        {t.description && (
-                          <span className="image-combo-opt-desc">{t.description}</span>
-                        )}
-                      </div>
-                      <span className="image-badge image-badge-tpl">TPL</span>
-                    </div>
-                  ))}
+                  {filteredTemplates.map(renderTemplateEntry)}
                 </div>
               )}
               {filteredImages.length > 0 && (
@@ -116,6 +164,7 @@ export default function ImageComboBox({ images, vmTemplates, value, onSelect }: 
                         onSelect(img);
                         setOpen(false);
                         setFilter('');
+                        setExpandedTemplate(null);
                       }}
                     >
                       <span className="image-combo-opt-name">{img}</span>

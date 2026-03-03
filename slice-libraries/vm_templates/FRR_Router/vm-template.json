@@ -1,0 +1,37 @@
+{
+  "name": "FRR Router",
+  "description": "Ubuntu 22.04 with FRRouting (OSPF + Zebra) and IP forwarding enabled",
+  "image": "default_ubuntu_22",
+  "builtin": true,
+  "boot_config": {
+    "uploads": [],
+    "commands": [
+      {
+        "id": "1",
+        "command": "sudo apt-get update",
+        "order": 0
+      },
+      {
+        "id": "2",
+        "command": "sudo apt-get install -y frr",
+        "order": 1
+      },
+      {
+        "id": "3",
+        "command": "sudo sed -i 's/ospfd=no/ospfd=yes/' /etc/frr/daemons && sudo sed -i 's/zebra=no/zebra=yes/' /etc/frr/daemons",
+        "order": 2
+      },
+      {
+        "id": "4",
+        "command": "sudo systemctl restart frr",
+        "order": 3
+      },
+      {
+        "id": "5",
+        "command": "sudo sysctl -w net.ipv4.ip_forward=1",
+        "order": 4
+      }
+    ],
+    "network": []
+  }
+}

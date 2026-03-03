@@ -1,0 +1,32 @@
+{
+  "name": "NVMe Storage Node",
+  "description": "Ubuntu 22.04 with NVMe P4510 formatted ext4 and mounted at /mnt/nvme. Add an NVME_P4510 component to the node.",
+  "image": "default_ubuntu_22",
+  "builtin": true,
+  "boot_config": {
+    "uploads": [],
+    "commands": [
+      {
+        "id": "1",
+        "command": "sudo apt-get update",
+        "order": 0
+      },
+      {
+        "id": "2",
+        "command": "sudo apt-get install -y nvme-cli",
+        "order": 1
+      },
+      {
+        "id": "3",
+        "command": "NVME_DEV=$(lsblk -d -n -o NAME | grep nvme | head -1) && [ -n \"$NVME_DEV\" ] && sudo mkfs.ext4 /dev/$NVME_DEV",
+        "order": 2
+      },
+      {
+        "id": "4",
+        "command": "NVME_DEV=$(lsblk -d -n -o NAME | grep nvme | head -1) && [ -n \"$NVME_DEV\" ] && sudo mkdir -p /mnt/nvme && sudo mount /dev/$NVME_DEV /mnt/nvme && sudo chown $(whoami):$(whoami) /mnt/nvme",
+        "order": 3
+      }
+    ],
+    "network": []
+  }
+}

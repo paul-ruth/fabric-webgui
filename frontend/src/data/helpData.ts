@@ -14,8 +14,8 @@ export interface HelpSection {
 
 const entries: HelpEntry[] = [
   // --- Title Bar ---
-  { id: 'titlebar.view', label: 'View Selector', tooltip: 'Switch between Topology, Slivers, Map, and Files views', section: 'titlebar',
-    description: 'The View selector lets you switch between four main views:\n\n**Topology** — Interactive Cytoscape.js graph showing your slice nodes, components, networks, and their connections. Click elements to inspect, right-click for actions.\n\n**Slivers** — Two-panel spreadsheet view: VM nodes on top with compute-specific columns (cores, RAM, disk, image, host), network services below with network-specific columns (layer/type, subnet, gateway, connected interfaces). Panels are vertically resizable and independently scrollable.\n\n**Map** — Geographic Leaflet map showing all FABRIC sites worldwide, backbone links, and resource availability. Click sites to view metrics and capacity.\n\n**Files** — Dual-panel file manager for transferring files between container storage and slice VMs via SFTP.' },
+  { id: 'titlebar.view', label: 'View Selector', tooltip: 'Switch between Topology, Slivers, Map, Files, and Project views', section: 'titlebar',
+    description: 'The View selector lets you switch between five main views:\n\n**Topology** — Interactive Cytoscape.js graph showing your slice nodes, components, networks, and their connections. Click elements to inspect, right-click for actions.\n\n**Slivers** — Two-panel spreadsheet view: VM nodes on top with compute-specific columns (cores, RAM, disk, image, host), network services below with network-specific columns (layer/type, subnet, gateway, connected interfaces). Panels are vertically resizable and independently scrollable.\n\n**Map** — Geographic Leaflet map showing all FABRIC sites worldwide, backbone links, and resource availability. Click sites to view metrics and capacity.\n\n**Files** — Dual-panel file manager for transferring files between container storage and slice VMs via SFTP.\n\n**Project** — Full-window dashboard showing project details, members, slice history, funding, and permission tags.' },
   { id: 'titlebar.project', label: 'Project Selector', tooltip: 'Switch active FABRIC project', section: 'titlebar',
     description: 'Select which FABRIC project to work with. Changing the project resets the current slice and reloads the slice list for the new project. Projects are determined by your FABRIC token and membership. Each project has its own resource quotas and permissions.' },
   { id: 'titlebar.settings', label: 'Settings', tooltip: 'Open configuration panel', section: 'titlebar',
@@ -61,6 +61,9 @@ const entries: HelpEntry[] = [
 
   { id: 'editor.remap-sites', label: 'Auto-Assign Sites & Hosts', tooltip: 'Automatically assign each node to sites and hosts with enough available cores, RAM, and disk for your VMs based on current FABRIC resource data', section: 'editor',
     description: 'Automatically places each node on a FABRIC site and host with enough resources for your VMs. Uses live FABRIC resource availability data to find the best placement.\n\nThe resolver:\n1. Fetches fresh site and host-level resource data\n2. Treats all non-grouped nodes as needing re-assignment\n3. Preserves @group co-location constraints (grouped nodes stay together)\n4. Validates that each node fits on at least one physical host at the chosen site\n5. Assigns heaviest nodes first for optimal placement\n\nUse this when sites have run out of resources or when you want to find better placement for your slice. The button appears in its own section with a description below the sliver selector when the slice is a draft with nodes.' },
+
+  { id: 'editor.monitoring-toggle', label: 'Enable Monitoring After Submit', tooltip: 'Toggle automatic monitoring setup when slice reaches StableOK', section: 'editor',
+    description: 'When enabled, monitoring (node_exporter) will be automatically installed on all VMs once the slice reaches StableOK after submission. This is similar to how boot configs auto-execute on first boot.\n\nThe toggle appears in the Slice tab for draft slices and slices not yet in a stable state. Once the slice provisions successfully, the system calls the monitoring enable API which installs node_exporter on each VM and begins scraping metrics.\n\nYou can view monitoring status and charts in the Monitoring view.' },
 
   // --- Editor Panel: Tabs ---
   { id: 'editor.node-tab', label: 'Node Tab', tooltip: 'Configure VM node properties', section: 'editor',
@@ -176,6 +179,20 @@ const entries: HelpEntry[] = [
   { id: 'bottom.node-terminals', label: 'Node Terminals', tooltip: 'SSH terminal sessions to provisioned slice VMs', section: 'bottom',
     description: 'Terminal tabs for SSH sessions to slice VMs. Open them by right-clicking a provisioned node in the topology graph and selecting "Open Terminal".\n\nRequirements:\n- Node must have a management IP (i.e., be provisioned and running)\n- SSH keys must be configured in Settings\n- Bastion key and username must be set\n\nEach tab maintains an independent SSH connection via WebSocket through the FABRIC bastion host. You can have multiple terminal tabs open simultaneously to different nodes.' },
 
+  // --- Project Panel ---
+  { id: 'project.panel', label: 'Project View', tooltip: 'Full-window dashboard for the active FABRIC project', section: 'project',
+    description: 'Full-window dashboard for the active FABRIC project, accessible from the View dropdown.\n\n**Header** — Project name, type badge, active/inactive status, creation date, and description.\n\n**Stats Row** — Cards showing Active Slices, Total Slices, Sites Used, and Total Members.\n\n**Members** (left column) — Project lead (highlighted), owners, members, and creators with role badges and email addresses. Members are deduplicated and sorted by role priority.\n\n**Slice History** (center column) — Sortable table of all project slices from the FABRIC Reports API, showing name, state, user, creation/modification dates, and sites. Filter by name, state, user, or site.\n\n**Details** (right column) — Permission tags, funding cards (agency/award/amount/directorate), communities, and sites used.\n\nThe view auto-refreshes when you switch to a different project via the title bar.' },
+
+  // --- Monitoring ---
+  { id: 'monitoring.view', label: 'Monitoring View', tooltip: 'Real-time CPU, memory, and network monitoring for slice VMs', section: 'monitoring',
+    description: 'Full-window monitoring dashboard for the selected slice. Shows real-time CPU utilization, memory usage, system load, and network I/O charts for each VM.\n\n**How it works:**\n1. Select a slice from the toolbar\n2. Switch to Monitoring view from the View dropdown\n3. Click "Enable Monitoring" to install node_exporter on all VMs\n4. Charts auto-populate every 15 seconds\n\nThe backend SSH-tunnels through the FABRIC bastion to scrape Prometheus node_exporter metrics from each VM. Data is retained for 60 minutes in memory.' },
+  { id: 'monitoring.enable', label: 'Enable Toggle', tooltip: 'Master switch to enable/disable monitoring for the slice', section: 'monitoring',
+    description: 'Toggles monitoring for all nodes in the slice. When enabled:\n- Installs Docker and prom/node-exporter container on each VM\n- Starts a background scrape loop (every 15s)\n- Charts begin populating after the first scrape\n\nWhen disabled, scraping stops but node_exporter containers remain running on the VMs.' },
+  { id: 'monitoring.node-toggle', label: 'Per-Node Toggle', tooltip: 'Enable or disable monitoring for individual nodes', section: 'monitoring',
+    description: 'Each node card has a toggle switch to individually enable or disable monitoring. Status indicators:\n- Green: actively scraping, recent data\n- Yellow: enabled but waiting for data or exporter installing\n- Red: error (e.g., SSH failure, exporter not responding)\n- Gray: disabled\n\nThe node card also shows the site name, last scrape time, and any error messages.' },
+  { id: 'monitoring.infrastructure', label: 'Infrastructure Metrics', tooltip: 'Public FABRIC site load and dataplane traffic', section: 'monitoring',
+    description: 'Shows public FABRIC infrastructure metrics for the sites used by your slice. Includes:\n- Node load averages (1m, 5m)\n- Dataplane traffic in/out (bits per second)\n\nThese metrics come from the public FABRIC Prometheus endpoint and reflect overall site health, not just your slice.' },
+
   // --- Settings ---
   { id: 'settings.token', label: 'FABRIC Token', tooltip: 'Manage your FABRIC authentication token', section: 'settings',
     description: 'Your FABRIC identity token provides authentication for all API operations.\n\n**How to get a token:**\n1. Click "Login via FABRIC Portal" to open the FABRIC credential manager\n2. Log in with your institutional credentials\n3. Copy the token and paste it back in the token field\n\nThe token contains your project memberships and determines what resources you can access. Tokens expire periodically and must be refreshed.\n\nThe token status shows your email, name, project list, and expiration time.' },
@@ -193,9 +210,11 @@ export const helpSections: HelpSection[] = [
   { id: 'sliver', title: 'Sliver View', entries: entries.filter(e => e.section === 'sliver') },
   { id: 'detail', title: 'Detail Panel', entries: entries.filter(e => e.section === 'detail') },
   { id: 'map', title: 'Map View', entries: entries.filter(e => e.section === 'map') },
-  { id: 'templates', title: 'Slice Templates', entries: entries.filter(e => e.section === 'templates') },
+  { id: 'templates', title: 'Slice Libraries', entries: entries.filter(e => e.section === 'templates') },
   { id: 'vm-templates', title: 'VM Templates', entries: entries.filter(e => e.section === 'vm-templates') },
+  { id: 'project', title: 'Project View', entries: entries.filter(e => e.section === 'project') },
   { id: 'files', title: 'Files View', entries: entries.filter(e => e.section === 'files') },
+  { id: 'monitoring', title: 'Monitoring', entries: entries.filter(e => e.section === 'monitoring') },
   { id: 'bottom', title: 'Bottom Panel', entries: entries.filter(e => e.section === 'bottom') },
   { id: 'settings', title: 'Settings', entries: entries.filter(e => e.section === 'settings') },
 ];

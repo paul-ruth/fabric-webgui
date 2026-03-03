@@ -1,0 +1,48 @@
+{
+  "format": "fabric-slice-v1",
+  "name": "Ollama LLM Service",
+  "nodes": [
+    {
+      "name": "llm-server",
+      "site": "@llm",
+      "cores": 16,
+      "ram": 32,
+      "disk": 100,
+      "vm_template": "Ollama LLM Server",
+      "components": [
+        {
+          "name": "gpu1",
+          "model": "GPU_RTX6000"
+        },
+        {
+          "name": "FABNET",
+          "model": "NIC_Basic"
+        }
+      ]
+    },
+    {
+      "name": "client",
+      "site": "@llm",
+      "cores": 4,
+      "ram": 8,
+      "disk": 10,
+      "image": "default_ubuntu_22",
+      "components": [
+        {
+          "name": "FABNET",
+          "model": "NIC_Basic"
+        }
+      ]
+    }
+  ],
+  "networks": [
+    {
+      "name": "llm-net",
+      "type": "FABNetv4",
+      "interfaces": [
+        "llm-server-FABNET-p1",
+        "client-FABNET-p1"
+      ]
+    }
+  ]
+}

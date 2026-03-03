@@ -1,6 +1,7 @@
 'use client';
 import { useState, useRef, useEffect } from 'react';
 import '../styles/titlebar.css';
+import { VERSION } from '../version';
 
 interface ProjectInfo {
   uuid: string;
@@ -11,7 +12,7 @@ interface TitleBarProps {
   dark: boolean;
   currentView: string;
   onToggleDark: () => void;
-  onViewChange: (view: 'topology' | 'sliver' | 'map' | 'files') => void;
+  onViewChange: (view: 'topology' | 'sliver' | 'map' | 'files' | 'libraries' | 'project' | 'monitoring') => void;
   onOpenSettings: () => void;
   onOpenHelp: () => void;
   projectName?: string;
@@ -19,11 +20,14 @@ interface TitleBarProps {
   onProjectChange?: (uuid: string) => void;
 }
 
-const VIEWS: Array<{ key: 'topology' | 'sliver' | 'map' | 'files'; label: string; icon: string }> = [
+const VIEWS: Array<{ key: 'topology' | 'sliver' | 'map' | 'files' | 'libraries' | 'project' | 'monitoring'; label: string; icon: string }> = [
   { key: 'topology', label: 'Topology', icon: '\u25A6' },
   { key: 'sliver', label: 'Slivers', icon: '\u2261' },
   { key: 'map', label: 'Map', icon: '\u25C9' },
   { key: 'files', label: 'Files', icon: '\u2630' },
+  { key: 'libraries', label: 'Libraries', icon: '\u29C9' },
+  { key: 'project', label: 'Project', icon: '\u25A4' },
+  { key: 'monitoring', label: 'Monitoring', icon: '\u25CE' },
 ];
 
 export default function TitleBar({ dark, currentView, onToggleDark, onViewChange, onOpenSettings, onOpenHelp, projectName, projects, onProjectChange }: TitleBarProps) {
@@ -50,7 +54,7 @@ export default function TitleBar({ dark, currentView, onToggleDark, onViewChange
       <div className="title-left">
         <img src="/fabric_logo.png" alt="FABRIC" className="fabric-logo" />
         <span className="title-text">FABRIC Visualization Suite</span>
-        <span className="title-version">v0.1.0-beta</span>
+        <span className="title-version">v{VERSION}</span>
       </div>
       <div className="title-right">
         {/* View selector pill */}

@@ -13,8 +13,9 @@ import hashlib
 import json
 import os
 import re
+import shutil
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -25,6 +26,17 @@ router = APIRouter(prefix="/api/vm-templates", tags=["vm-templates"])
 def _vm_templates_dir() -> str:
     storage = os.environ.get("FABRIC_STORAGE_DIR", "/fabric_storage")
     return os.path.join(storage, ".vm_templates")
+
+
+def _builtin_templates_dir() -> str:
+    """Return the path to the builtin VM templates shipped with the repo."""
+    # Check two candidate paths: inside backend (Docker) and repo root (local dev)
+    base = os.path.dirname(__file__)
+    for levels in [("..", ".."), ("..", "..", "..")]:
+        candidate = os.path.realpath(os.path.join(base, *levels, "slice-libraries", "vm_templates"))
+        if os.path.isdir(candidate):
+            return candidate
+    return os.path.join(base, "..", "..", "slice-libraries", "vm_templates")
 
 
 def _sanitize_name(name: str) -> str:
@@ -42,322 +54,84 @@ def _validate_path(base: str, name: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Seed templates
+# Builtin template helpers
 # ---------------------------------------------------------------------------
 
-SEED_TEMPLATES: list[dict[str, Any]] = [
-    {
-        "name": "Docker Host",
-        "description": "Ubuntu 22.04 with Docker CE installed and ready to use",
-        "image": "default_ubuntu_22",
-        "builtin": True,
-        "boot_config": {
-            "uploads": [],
-            "commands": [
-                {"id": "1", "command": "sudo apt-get update", "order": 0},
-                {"id": "2", "command": "sudo apt-get install -y docker.io", "order": 1},
-                {"id": "3", "command": "sudo systemctl enable docker", "order": 2},
-                {"id": "4", "command": "sudo systemctl start docker", "order": 3},
-                {"id": "5", "command": "sudo usermod -aG docker ubuntu", "order": 4},
-            ],
-            "network": [],
-        },
-    },
-    {
-        "name": "OVS Switch",
-        "description": "Ubuntu 22.04 with Open vSwitch bridge (br0) auto-configured",
-        "image": "default_ubuntu_22",
-        "builtin": True,
-        "boot_config": {
-            "uploads": [],
-            "commands": [
-                {"id": "1", "command": "sudo apt-get update", "order": 0},
-                {"id": "2", "command": "sudo apt-get install -y openvswitch-switch", "order": 1},
-                {"id": "3", "command": "sudo ovs-vsctl add-br br0", "order": 2},
-                {
-                    "id": "4",
-                    "command": (
-                        "for iface in $(ip -o link show | awk -F': ' '{print $2}' "
-                        "| grep -v -E '^(lo|eth0|ens3|docker|br|ovs|veth)'); do "
-                        "sudo ovs-vsctl add-port br0 $iface; done"
-                    ),
-                    "order": 3,
-                },
-            ],
-            "network": [],
-        },
-    },
-    {
-        "name": "FRR Router",
-        "description": "Ubuntu 22.04 with FRRouting (OSPF + Zebra) and IP forwarding enabled",
-        "image": "default_ubuntu_22",
-        "builtin": True,
-        "boot_config": {
-            "uploads": [],
-            "commands": [
-                {"id": "1", "command": "sudo apt-get update", "order": 0},
-                {"id": "2", "command": "sudo apt-get install -y frr", "order": 1},
-                {
-                    "id": "3",
-                    "command": "sudo sed -i 's/ospfd=no/ospfd=yes/' /etc/frr/daemons && sudo sed -i 's/zebra=no/zebra=yes/' /etc/frr/daemons",
-                    "order": 2,
-                },
-                {"id": "4", "command": "sudo systemctl restart frr", "order": 3},
-                {"id": "5", "command": "sudo sysctl -w net.ipv4.ip_forward=1", "order": 4},
-            ],
-            "network": [],
-        },
-    },
-    {
-        "name": "GPU + CUDA Host",
-        "description": "Ubuntu 22.04 with NVIDIA drivers, CUDA 12.6 toolkit, and PyTorch. Add a GPU component (e.g. GPU_RTX6000) to the node.",
-        "image": "default_ubuntu_22",
-        "builtin": True,
-        "boot_config": {
-            "uploads": [],
-            "commands": [
-                {"id": "1", "command": "sudo apt-get update", "order": 0},
-                {"id": "2", "command": "sudo apt-get install -y nvidia-driver-535", "order": 1},
-                {
-                    "id": "3",
-                    "command": (
-                        "wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb && "
-                        "sudo dpkg -i cuda-keyring_1.1-1_all.deb && sudo apt-get update && "
-                        "sudo apt-get install -y cuda-toolkit-12-6"
-                    ),
-                    "order": 2,
-                },
-                {
-                    "id": "4",
-                    "command": "echo 'export PATH=/usr/local/cuda-12.6/bin:$PATH' >> ~/.bashrc && echo 'export LD_LIBRARY_PATH=/usr/local/cuda-12.6/lib64:$LD_LIBRARY_PATH' >> ~/.bashrc",
-                    "order": 3,
-                },
-                {
-                    "id": "5",
-                    "command": "pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121",
-                    "order": 4,
-                },
-            ],
-            "network": [],
-        },
-    },
-    {
-        "name": "NVMe Storage Node",
-        "description": "Ubuntu 22.04 with NVMe P4510 formatted ext4 and mounted at /mnt/nvme. Add an NVME_P4510 component to the node.",
-        "image": "default_ubuntu_22",
-        "builtin": True,
-        "boot_config": {
-            "uploads": [],
-            "commands": [
-                {"id": "1", "command": "sudo apt-get update", "order": 0},
-                {"id": "2", "command": "sudo apt-get install -y nvme-cli", "order": 1},
-                {
-                    "id": "3",
-                    "command": "NVME_DEV=$(lsblk -d -n -o NAME | grep nvme | head -1) && [ -n \"$NVME_DEV\" ] && sudo mkfs.ext4 /dev/$NVME_DEV",
-                    "order": 2,
-                },
-                {
-                    "id": "4",
-                    "command": "NVME_DEV=$(lsblk -d -n -o NAME | grep nvme | head -1) && [ -n \"$NVME_DEV\" ] && sudo mkdir -p /mnt/nvme && sudo mount /dev/$NVME_DEV /mnt/nvme && sudo chown $(whoami):$(whoami) /mnt/nvme",
-                    "order": 3,
-                },
-            ],
-            "network": [],
-        },
-    },
-    {
-        "name": "Prometheus Node Exporter",
-        "description": "Rocky 8 with Docker running Prometheus node_exporter on port 9100 for metrics collection",
-        "image": "default_rocky_8",
-        "builtin": True,
-        "boot_config": {
-            "uploads": [],
-            "commands": [
-                {"id": "1", "command": "sudo dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo", "order": 0},
-                {"id": "2", "command": "sudo dnf install -y docker-ce docker-ce-cli containerd.io", "order": 1},
-                {"id": "3", "command": "sudo systemctl enable docker && sudo systemctl start docker", "order": 2},
-                {
-                    "id": "4",
-                    "command": "sudo docker run -d --name node-exporter --restart always --net host --pid host -v /:/host:ro,rslave prom/node-exporter --path.rootfs=/host",
-                    "order": 3,
-                },
-            ],
-            "network": [],
-        },
-    },
-    {
-        "name": "Ollama LLM Server",
-        "description": "Ubuntu 22.04 with Ollama + Open WebUI. Requires GPU component. Recommended: 16 cores, 32 GB RAM, 100 GB disk.",
-        "image": "default_ubuntu_22",
-        "builtin": True,
-        "boot_config": {
-            "uploads": [],
-            "commands": [
-                {"id": "1", "command": "sudo apt-get update", "order": 0},
-                {"id": "2", "command": "sudo apt-get install -y nvidia-driver-535", "order": 1},
-                {"id": "3", "command": "curl -fsSL https://ollama.com/install.sh | sh", "order": 2},
-                {"id": "4", "command": "ollama pull llama3.2:3b", "order": 3},
-                {"id": "5", "command": "sudo apt-get install -y docker.io && sudo systemctl enable docker && sudo systemctl start docker", "order": 4},
-                {
-                    "id": "6",
-                    "command": "sudo docker run -d --name open-webui --restart always -p 3000:8080 -e OLLAMA_BASE_URL=http://127.0.0.1:11434 -v open-webui:/app/backend/data ghcr.io/open-webui/open-webui:main",
-                    "order": 5,
-                },
-            ],
-            "network": [],
-        },
-    },
-    {
-        "name": "DPDK Host",
-        "description": "Ubuntu 22.04 with DPDK 23.11 built from source and hugepages configured. Needs ConnectX-5/6 SmartNIC component.",
-        "image": "default_ubuntu_22",
-        "builtin": True,
-        "boot_config": {
-            "uploads": [],
-            "commands": [
-                {"id": "1", "command": "sudo apt-get update", "order": 0},
-                {
-                    "id": "2",
-                    "command": "sudo apt-get install -y build-essential meson ninja-build python3-pyelftools libnuma-dev pkg-config",
-                    "order": 1,
-                },
-                {
-                    "id": "3",
-                    "command": (
-                        "cd /opt && sudo wget https://fast.dpdk.org/rel/dpdk-23.11.tar.xz && "
-                        "sudo tar xf dpdk-23.11.tar.xz && cd dpdk-23.11 && "
-                        "sudo meson setup build && cd build && sudo ninja && sudo ninja install && sudo ldconfig"
-                    ),
-                    "order": 2,
-                },
-                {
-                    "id": "4",
-                    "command": "sudo bash -c 'echo 1024 > /sys/kernel/mm/hugepages/hugepages-2048kB/nr_hugepages' && sudo mkdir -p /mnt/huge && sudo mount -t hugetlbfs nodev /mnt/huge",
-                    "order": 3,
-                },
-            ],
-            "network": [],
-        },
-    },
-    {
-        "name": "P4 BMv2 Switch",
-        "description": "Ubuntu 20.04 with P4 behavioral model (BMv2) software switch in Docker. Add NIC_Basic components for data-plane ports.",
-        "image": "default_ubuntu_20",
-        "builtin": True,
-        "boot_config": {
-            "uploads": [],
-            "commands": [
-                {"id": "1", "command": "sudo apt-get update", "order": 0},
-                {"id": "2", "command": "sudo apt-get install -y docker.io && sudo systemctl enable docker && sudo systemctl start docker", "order": 1},
-                {"id": "3", "command": "sudo docker pull pruth/fabric-images:0.0.2j", "order": 2},
-            ],
-            "network": [],
-        },
-    },
-    {
-        "name": "Kubernetes Node",
-        "description": "Ubuntu 22.04 with containerd + kubeadm/kubelet/kubectl installed and ready to join or init a cluster",
-        "image": "default_ubuntu_22",
-        "builtin": True,
-        "_tools": [
-            {
-                "filename": "k8s_setup.sh",
-                "content": """#!/bin/bash
-set -e
-
-# Disable swap
-sudo swapoff -a
-sudo sed -i '/swap/d' /etc/fstab
-
-# Load kernel modules
-cat <<MODEOF | sudo tee /etc/modules-load.d/k8s.conf
-overlay
-br_netfilter
-MODEOF
-sudo modprobe overlay
-sudo modprobe br_netfilter
-
-# Sysctl params
-cat <<SYSEOF | sudo tee /etc/sysctl.d/k8s.conf
-net.bridge.bridge-nf-call-iptables  = 1
-net.bridge.bridge-nf-call-ip6tables = 1
-net.ipv4.ip_forward                 = 1
-SYSEOF
-sudo sysctl --system
-
-# Install containerd
-sudo apt-get update
-sudo apt-get install -y containerd
-sudo mkdir -p /etc/containerd
-containerd config default | sudo tee /etc/containerd/config.toml
-sudo sed -i 's/SystemdCgroup = false/SystemdCgroup = true/' /etc/containerd/config.toml
-sudo systemctl restart containerd
-sudo systemctl enable containerd
-
-# Install kubeadm, kubelet, kubectl
-sudo apt-get install -y apt-transport-https ca-certificates curl gpg
-curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.29/deb/Release.key | sudo gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
-echo 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.29/deb/ /' | sudo tee /etc/apt/sources.list.d/kubernetes.list
-sudo apt-get update
-sudo apt-get install -y kubelet kubeadm kubectl
-sudo apt-mark hold kubelet kubeadm kubectl
-sudo systemctl enable kubelet
-
-echo "Kubernetes node ready. Run 'sudo kubeadm init' on controller or 'sudo kubeadm join ...' on workers."
-""",
-            }
-        ],
-        "boot_config": {
-            "uploads": [],
-            "commands": [
-                {"id": "1", "command": "chmod +x ~/tools/k8s_setup.sh && ~/tools/k8s_setup.sh", "order": 0},
-            ],
-            "network": [],
-        },
-    },
-    {
-        "name": "iPerf3 Test Node",
-        "description": "Rocky 8 with Docker and iperf3 container for network bandwidth testing",
-        "image": "default_rocky_8",
-        "builtin": True,
-        "boot_config": {
-            "uploads": [],
-            "commands": [
-                {"id": "1", "command": "sudo dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo", "order": 0},
-                {"id": "2", "command": "sudo dnf install -y docker-ce docker-ce-cli containerd.io", "order": 1},
-                {"id": "3", "command": "sudo systemctl enable docker && sudo systemctl start docker", "order": 2},
-                {"id": "4", "command": "sudo docker pull networkstatic/iperf3", "order": 3},
-            ],
-            "network": [],
-        },
-    },
-]
-
-
-def _vm_template_hash(tmpl: dict) -> str:
-    """Compute a hash of a builtin VM template for change detection."""
-    hashable = {
-        "image": tmpl.get("image", ""),
-        "boot_config": tmpl.get("boot_config", {}),
-        "_tools": tmpl.get("_tools", []),
-    }
+def _builtin_hash(builtin_dir: str) -> str:
+    """Compute a hash of a builtin VM template directory for change detection."""
+    hashable: dict[str, Any] = {}
+    tmpl_path = os.path.join(builtin_dir, "vm-template.json")
+    if os.path.isfile(tmpl_path):
+        with open(tmpl_path) as f:
+            data = json.load(f)
+        hashable["image"] = data.get("image", "")
+        hashable["boot_config"] = data.get("boot_config", {})
+        hashable["variants"] = data.get("variants", {})
+        hashable["setup_script"] = data.get("setup_script", "")
+        hashable["remote_dir"] = data.get("remote_dir", "")
+        hashable["version"] = data.get("version", "")
+    tools_dir = os.path.join(builtin_dir, "tools")
+    if os.path.isdir(tools_dir):
+        tools = []
+        for fn in sorted(os.listdir(tools_dir)):
+            fp = os.path.join(tools_dir, fn)
+            if os.path.isfile(fp):
+                with open(fp) as f:
+                    tools.append({"filename": fn, "content": f.read()})
+        hashable["_tools"] = tools
+    else:
+        hashable["_tools"] = []
+    # Hash variant subdirectory contents
+    variants = data.get("variants", {}) if os.path.isfile(tmpl_path) else {}
+    for _img_key, vinfo in sorted(variants.items()):
+        vdir = os.path.join(builtin_dir, vinfo.get("dir", ""))
+        if os.path.isdir(vdir):
+            vfiles = []
+            for fn in sorted(os.listdir(vdir)):
+                fp = os.path.join(vdir, fn)
+                if os.path.isfile(fp):
+                    with open(fp) as f:
+                        vfiles.append({"filename": fn, "content": f.read()})
+            hashable[f"_variant_{vinfo['dir']}"] = vfiles
     return hashlib.sha256(json.dumps(hashable, sort_keys=True).encode()).hexdigest()[:16]
 
 
+def _list_builtin_templates() -> list[dict[str, Any]]:
+    """Scan the builtin VM templates directory and return info for each."""
+    bdir = os.path.realpath(_builtin_templates_dir())
+    if not os.path.isdir(bdir):
+        return []
+    results = []
+    for entry in sorted(os.listdir(bdir)):
+        entry_dir = os.path.join(bdir, entry)
+        tmpl_path = os.path.join(entry_dir, "vm-template.json")
+        if os.path.isfile(tmpl_path):
+            with open(tmpl_path) as f:
+                data = json.load(f)
+            data["_dir"] = entry_dir
+            data["_entry"] = entry
+            results.append(data)
+    return results
+
+
 def _seed_if_needed() -> None:
-    """Create or update seed VM templates.
+    """Create or update seed VM templates from the builtin templates directory.
 
     For each builtin template:
-    - Creates it if the directory doesn't exist.
-    - Re-writes it if the on-disk data differs from the code
+    - Creates it if the directory doesn't exist in storage.
+    - Re-writes it if the on-disk data differs from the builtin
       (detected via a hash stored in vm-template.json).
     """
     tdir = _vm_templates_dir()
     os.makedirs(tdir, exist_ok=True)
-    for tmpl in SEED_TEMPLATES:
-        safe = _sanitize_name(tmpl["name"])
-        tmpl_dir = os.path.join(tdir, safe)
-        code_hash = _vm_template_hash(tmpl)
+
+    builtins = _list_builtin_templates()
+
+    for builtin in builtins:
+        entry = builtin["_entry"]
+        builtin_dir = builtin["_dir"]
+        tmpl_dir = os.path.join(tdir, entry)
+        code_hash = _builtin_hash(builtin_dir)
 
         # Check if existing template needs updating
         needs_write = True
@@ -376,24 +150,51 @@ def _seed_if_needed() -> None:
             continue
 
         os.makedirs(tmpl_dir, exist_ok=True)
-        data = {
-            "name": tmpl["name"],
-            "description": tmpl["description"],
-            "image": tmpl["image"],
+
+        # Read source template data
+        with open(os.path.join(builtin_dir, "vm-template.json")) as f:
+            src_data = json.load(f)
+
+        # Determine if this is a new-format (variants) or legacy (image+boot_config) template
+        is_variant = "variants" in src_data
+
+        data: dict[str, Any] = {
+            "name": src_data["name"],
+            "description": src_data["description"],
             "builtin": True,
             "created": datetime.now(timezone.utc).isoformat(),
-            "boot_config": tmpl["boot_config"],
             "model_hash": code_hash,
         }
+        if is_variant:
+            data["variants"] = src_data["variants"]
+            data["setup_script"] = src_data.get("setup_script", "setup.sh")
+            data["remote_dir"] = src_data.get("remote_dir", "")
+            data["version"] = src_data.get("version", "1.0.0")
+        else:
+            data["image"] = src_data["image"]
+            data["boot_config"] = src_data["boot_config"]
+
         with open(os.path.join(tmpl_dir, "vm-template.json"), "w") as f:
             json.dump(data, f, indent=2)
-        # Write tool scripts if present
-        for tool_file in tmpl.get("_tools", []):
-            tool_path = os.path.join(tmpl_dir, "tools", tool_file["filename"])
-            os.makedirs(os.path.dirname(tool_path), exist_ok=True)
-            with open(tool_path, "w") as f:
-                f.write(tool_file["content"])
-            os.chmod(tool_path, 0o755)
+
+        # Copy tools/ directory if present
+        src_tools = os.path.join(builtin_dir, "tools")
+        dst_tools = os.path.join(tmpl_dir, "tools")
+        if os.path.isdir(src_tools):
+            if os.path.isdir(dst_tools):
+                shutil.rmtree(dst_tools)
+            shutil.copytree(src_tools, dst_tools)
+
+        # Copy variant subdirectories if present
+        if is_variant:
+            for _img_key, vinfo in src_data["variants"].items():
+                vdir_name = vinfo.get("dir", "")
+                src_vdir = os.path.join(builtin_dir, vdir_name)
+                dst_vdir = os.path.join(tmpl_dir, vdir_name)
+                if os.path.isdir(src_vdir):
+                    if os.path.isdir(dst_vdir):
+                        shutil.rmtree(dst_vdir)
+                    shutil.copytree(src_vdir, dst_vdir)
 
 
 # ---------------------------------------------------------------------------
@@ -408,9 +209,34 @@ class CreateVMTemplateRequest(BaseModel):
 
 
 class UpdateVMTemplateRequest(BaseModel):
-    description: str | None = None
-    image: str | None = None
-    boot_config: dict | None = None
+    description: Optional[str] = None
+    image: Optional[str] = None
+    boot_config: Optional[dict] = None
+
+
+class ToolFileBody(BaseModel):
+    content: str
+
+
+# ---------------------------------------------------------------------------
+# Helper: list tool files
+# ---------------------------------------------------------------------------
+
+def _list_tools(tmpl_dir: str) -> list[dict[str, str]]:
+    """Return a sorted list of {filename} dicts for tools in a template dir."""
+    tools_dir = os.path.join(tmpl_dir, "tools")
+    if not os.path.isdir(tools_dir):
+        return []
+    return [{"filename": fn} for fn in sorted(os.listdir(tools_dir))
+            if os.path.isfile(os.path.join(tools_dir, fn))]
+
+
+def _validate_tool_filename(filename: str) -> str:
+    """Sanitize and validate a tool filename."""
+    safe = re.sub(r"[^a-zA-Z0-9_\-.]", "_", filename.strip())
+    if not safe or safe.startswith("."):
+        raise HTTPException(status_code=400, detail="Invalid tool filename")
+    return safe
 
 
 # ---------------------------------------------------------------------------
@@ -431,14 +257,22 @@ def list_vm_templates() -> list[dict[str, Any]]:
             try:
                 with open(tmpl_path) as f:
                     data = json.load(f)
-                results.append({
+                variants = data.get("variants", {})
+                summary: dict[str, Any] = {
                     "name": data.get("name", entry),
                     "description": data.get("description", ""),
                     "image": data.get("image", ""),
                     "created": data.get("created", ""),
                     "builtin": data.get("builtin", False),
                     "dir_name": entry,
-                })
+                    "variant_count": len(variants),
+                    "version": data.get("version", ""),
+                }
+                if variants:
+                    summary["images"] = list(variants.keys())
+                else:
+                    summary["images"] = []
+                results.append(summary)
             except Exception:
                 pass
     return results
@@ -457,7 +291,114 @@ def get_vm_template(name: str) -> dict[str, Any]:
     with open(tmpl_path) as f:
         data = json.load(f)
     data["dir_name"] = safe
+    data["tools"] = _list_tools(tmpl_dir)
     return data
+
+
+@router.get("/{name}/variant/{image}")
+def get_vm_template_variant(name: str, image: str) -> dict[str, Any]:
+    """Synthesize a boot_config for a specific variant of a multi-image template.
+
+    Returns an object with ``image``, ``boot_config``, and variant metadata.
+    The boot_config uploads the variant directory to ``remote_dir`` and runs
+    the ``setup_script``.
+    """
+    _seed_if_needed()
+    safe = _sanitize_name(name)
+    tdir = _vm_templates_dir()
+    tmpl_dir = _validate_path(tdir, safe)
+    tmpl_path = os.path.join(tmpl_dir, "vm-template.json")
+    if not os.path.isfile(tmpl_path):
+        raise HTTPException(status_code=404, detail=f"VM template '{name}' not found")
+
+    with open(tmpl_path) as f:
+        data = json.load(f)
+
+    variants = data.get("variants", {})
+    if not variants:
+        raise HTTPException(status_code=400, detail="Template has no variants")
+    if image not in variants:
+        raise HTTPException(status_code=404, detail=f"No variant for image '{image}'")
+
+    vinfo = variants[image]
+    vdir_name = vinfo.get("dir", "")
+    vdir_path = os.path.join(tmpl_dir, vdir_name)
+    setup_script = data.get("setup_script", "setup.sh")
+    remote_dir = data.get("remote_dir", f"~/.fabric/vm-templates/{safe}")
+
+    # Build uploads list from variant directory files
+    uploads = []
+    if os.path.isdir(vdir_path):
+        for fn in sorted(os.listdir(vdir_path)):
+            fp = os.path.join(vdir_path, fn)
+            if os.path.isfile(fp):
+                uploads.append({
+                    "id": f"vt_{fn}",
+                    "source": f".vm_templates/{safe}/{vdir_name}/{fn}",
+                    "dest": f"{remote_dir}/{fn}",
+                })
+
+    # Build commands to make script executable and run it
+    commands = [
+        {
+            "id": "vt_chmod",
+            "command": f"chmod +x {remote_dir}/{setup_script}",
+            "order": 0,
+        },
+        {
+            "id": "vt_run",
+            "command": f"sudo {remote_dir}/{setup_script}",
+            "order": 1,
+        },
+    ]
+
+    return {
+        "image": image,
+        "label": vinfo.get("label", image),
+        "boot_config": {
+            "uploads": uploads,
+            "commands": commands,
+            "network": [],
+        },
+        "template_name": data.get("name", name),
+        "variant_dir": vdir_name,
+        "remote_dir": remote_dir,
+    }
+
+
+@router.post("/resync")
+def resync_vm_templates() -> list[dict[str, Any]]:
+    """Force re-seed builtins, clean corrupted entries, and return updated list."""
+    tdir = _vm_templates_dir()
+    os.makedirs(tdir, exist_ok=True)
+
+    # Remove corrupted entries
+    if os.path.isdir(tdir):
+        for entry in os.listdir(tdir):
+            entry_dir = os.path.join(tdir, entry)
+            if not os.path.isdir(entry_dir):
+                continue
+            tmpl_path = os.path.join(entry_dir, "vm-template.json")
+            if not os.path.isfile(tmpl_path):
+                shutil.rmtree(entry_dir)
+
+    # Clear model hashes to force re-seed
+    builtins = _list_builtin_templates()
+    for builtin in builtins:
+        entry = builtin["_entry"]
+        tmpl_path = os.path.join(tdir, entry, "vm-template.json")
+        if os.path.isfile(tmpl_path):
+            try:
+                with open(tmpl_path) as f:
+                    data = json.load(f)
+                data.pop("model_hash", None)
+                with open(tmpl_path, "w") as f:
+                    json.dump(data, f, indent=2)
+            except Exception:
+                pass
+
+    _seed_if_needed()
+    return list_vm_templates()
 
 
 @router.post("")
@@ -516,8 +457,6 @@ def update_vm_template(name: str, req: UpdateVMTemplateRequest) -> dict[str, Any
 @router.delete("/{name}")
 def delete_vm_template(name: str) -> dict[str, str]:
     """Delete a VM template (builtins cannot be deleted)."""
-    import shutil
-
     safe = _sanitize_name(name)
     tdir = _vm_templates_dir()
     tmpl_dir = _validate_path(tdir, safe)
@@ -528,3 +467,60 @@ def delete_vm_template(name: str) -> dict[str, str]:
 
     shutil.rmtree(tmpl_dir)
     return {"status": "deleted", "name": name}
+
+
+# ---------------------------------------------------------------------------
+# Tool file endpoints
+# ---------------------------------------------------------------------------
+
+@router.get("/{name}/tools/{filename}")
+def read_vm_tool(name: str, filename: str) -> dict[str, str]:
+    """Read a VM template tool file's content."""
+    safe = _sanitize_name(name)
+    safe_file = _validate_tool_filename(filename)
+    tdir = _vm_templates_dir()
+    tmpl_dir = _validate_path(tdir, safe)
+    tool_path = os.path.join(tmpl_dir, "tools", safe_file)
+
+    if not os.path.isfile(tool_path):
+        raise HTTPException(status_code=404, detail=f"Tool file '{filename}' not found")
+
+    with open(tool_path) as f:
+        content = f.read()
+    return {"filename": safe_file, "content": content}
+
+
+@router.put("/{name}/tools/{filename}")
+def write_vm_tool(name: str, filename: str, body: ToolFileBody) -> dict[str, str]:
+    """Create or update a VM template tool file."""
+    safe = _sanitize_name(name)
+    safe_file = _validate_tool_filename(filename)
+    tdir = _vm_templates_dir()
+    tmpl_dir = _validate_path(tdir, safe)
+
+    if not os.path.isdir(tmpl_dir):
+        raise HTTPException(status_code=404, detail=f"VM template '{name}' not found")
+
+    tools_dir = os.path.join(tmpl_dir, "tools")
+    os.makedirs(tools_dir, exist_ok=True)
+    tool_path = os.path.join(tools_dir, safe_file)
+
+    with open(tool_path, "w") as f:
+        f.write(body.content)
+    return {"filename": safe_file, "status": "saved"}
+
+
+@router.delete("/{name}/tools/{filename}")
+def delete_vm_tool(name: str, filename: str) -> dict[str, str]:
+    """Delete a VM template tool file."""
+    safe = _sanitize_name(name)
+    safe_file = _validate_tool_filename(filename)
+    tdir = _vm_templates_dir()
+    tmpl_dir = _validate_path(tdir, safe)
+    tool_path = os.path.join(tmpl_dir, "tools", safe_file)
+
+    if not os.path.isfile(tool_path):
+        raise HTTPException(status_code=404, detail=f"Tool file '{filename}' not found")
+
+    os.remove(tool_path)
+    return {"filename": safe_file, "status": "deleted"}

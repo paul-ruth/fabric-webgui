@@ -190,10 +190,10 @@ export default function TemplatesPanel({
   return (
     <div className="template-panel" data-help-id="templates.panel">
       <div className="template-header" {...(dragHandleProps || {})}>
-        <Tooltip text="Browse and load slice templates or VM templates">
+        <Tooltip text="Browse and load slice templates, VM templates, or recipes">
           <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
             <span className="panel-drag-handle">{'\u283F'}</span>
-            Templates
+            Libraries
           </span>
         </Tooltip>
         <button className="collapse-btn" onClick={(e) => { e.stopPropagation(); onCollapse(); }} title="Collapse">

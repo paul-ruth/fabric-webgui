@@ -1,7 +1,9 @@
 'use client';
-import { useState, useMemo, useCallback, useRef } from 'react';
-import type { SliceData } from '../types/fabric';
+import { useState, useMemo, useCallback, useRef, useEffect } from 'react';
+import type { SliceData, RecipeSummary } from '../types/fabric';
+import type { ContextMenuAction } from './CytoscapeGraph';
 import '../styles/sliver-view.css';
+import '../styles/context-menu.css';
 
 interface SliverViewProps {
   sliceData: SliceData | null;
@@ -9,6 +11,9 @@ interface SliverViewProps {
   onRowClick: (data: Record<string, string>) => void;
   onBackgroundClick: () => void;
   dark: boolean;
+  nodeActivity?: Record<string, string>;
+  onContextAction?: (action: ContextMenuAction) => void;
+  recipes?: RecipeSummary[];
 }
 
 // --- VM rows ---
@@ -74,6 +79,14 @@ const NET_COLUMNS: { key: NetSortKey; label: string }[] = [
   { key: 'interfaceList', label: 'Connected Interfaces' },
 ];
 
+// --- Context menu state ---
+
+interface MenuState {
+  x: number;
+  y: number;
+  rows: Record<string, string>[];
+}
+
 // --- Shared helpers ---
 
 function stateClass(state: string): string {
@@ -109,12 +122,32 @@ function genericSort<T>(rows: T[], column: keyof T, direction: 'asc' | 'desc', n
 
 // --- Main component ---
 
-export default function SliverView({ sliceData, selectedElement, onRowClick, onBackgroundClick }: SliverViewProps) {
+export default function SliverView({ sliceData, selectedElement, onRowClick, onBackgroundClick, nodeActivity, onContextAction, recipes }: SliverViewProps) {
   const [vmSort, setVmSort] = useState<VMSortKey>('name');
   const [vmDir, setVmDir] = useState<'asc' | 'desc'>('asc');
   const [netSort, setNetSort] = useState<NetSortKey>('name');
   const [netDir, setNetDir] = useState<'asc' | 'desc'>('asc');
   const [filterText, setFilterText] = useState('');
+
+  // Multi-selection state
+  const [selectedNames, setSelectedNames] = useState<Set<string>>(new Set());
+  const lastClickedIndexRef = useRef<number | null>(null);
+
+  // Context menu state
+  const [menu, setMenu] = useState<MenuState | null>(null);
+
+  // Close context menu on click-away or Escape
+  useEffect(() => {
+    if (!menu) return;
+    const handleClick = () => setMenu(null);
+    const handleKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setMenu(null); };
+    document.addEventListener('click', handleClick);
+    document.addEventListener('keydown', handleKey);
+    return () => {
+      document.removeEventListener('click', handleClick);
+      document.removeEventListener('keydown', handleKey);
+    };
+  }, [menu]);
 
   // Vertical resize: split percentage for VM panel (0-100)
   const [vmPct, setVmPct] = useState(60);
@@ -273,6 +306,157 @@ export default function SliverView({ sliceData, selectedElement, onRowClick, onB
   const isSelected = (clickData: Record<string, string>) =>
     selectedElement?.name === clickData.name && selectedElement?.element_type === clickData.element_type;
 
+  // --- Multi-selection handlers ---
+
+  const handleVmRowClick = useCallback((e: React.MouseEvent, row: VMRow, index: number) => {
+    if (e.ctrlKey || e.metaKey) {
+      // Toggle individual checkbox
+      setSelectedNames(prev => {
+        const next = new Set(prev);
+        if (next.has(row.name)) next.delete(row.name);
+        else next.add(row.name);
+        return next;
+      });
+      lastClickedIndexRef.current = index;
+    } else if (e.shiftKey && lastClickedIndexRef.current !== null) {
+      // Range select
+      const start = Math.min(lastClickedIndexRef.current, index);
+      const end = Math.max(lastClickedIndexRef.current, index);
+      const rangeNames = sortedVMs.slice(start, end + 1).map(r => r.name);
+      setSelectedNames(prev => {
+        const next = new Set(prev);
+        for (const n of rangeNames) next.add(n);
+        return next;
+      });
+    } else {
+      // Plain click — single select for editor panel, clear multi-select
+      setSelectedNames(new Set());
+      lastClickedIndexRef.current = index;
+      onRowClick(row.clickData);
+    }
+  }, [sortedVMs, onRowClick]);
+
+  const handleSelectAll = useCallback(() => {
+    if (selectedNames.size === sortedVMs.length) {
+      setSelectedNames(new Set());
+    } else {
+      setSelectedNames(new Set(sortedVMs.map(r => r.name)));
+    }
+  }, [sortedVMs, selectedNames.size]);
+
+  // --- Context menu handlers ---
+
+  const handleVmContextMenu = useCallback((e: React.MouseEvent, row: VMRow) => {
+    e.preventDefault();
+    if (!onContextAction) return;
+    // If right-clicking a multi-selected row, use all selected
+    let contextRows: Record<string, string>[];
+    if (selectedNames.has(row.name) && selectedNames.size > 1) {
+      contextRows = sortedVMs.filter(r => selectedNames.has(r.name)).map(r => r.clickData);
+    } else {
+      contextRows = [row.clickData];
+    }
+    setMenu({ x: e.clientX, y: e.clientY, rows: contextRows });
+  }, [onContextAction, selectedNames, sortedVMs]);
+
+  const handleNetContextMenu = useCallback((e: React.MouseEvent, row: NetRow) => {
+    e.preventDefault();
+    if (!onContextAction) return;
+    setMenu({ x: e.clientX, y: e.clientY, rows: [row.clickData] });
+  }, [onContextAction]);
+
+  // --- Render context menu ---
+
+  const renderContextMenu = () => {
+    if (!menu || !onContextAction) return null;
+
+    const rows = menu.rows;
+    const isMulti = rows.length > 1;
+    const allVMs = rows.every(r => r.element_type === 'node');
+    const singleVM = allVMs && rows.length === 1 ? rows[0] : null;
+    const vmsWithIp = rows.filter(r => r.element_type === 'node' && r.management_ip);
+
+    // Compatible recipes (single VM with IP only)
+    let compatibleRecipes: RecipeSummary[] = [];
+    if (singleVM && singleVM.management_ip && recipes && recipes.length > 0) {
+      const vmImage = singleVM.image || '';
+      compatibleRecipes = recipes.filter((r) => {
+        const patterns = r.image_patterns || {};
+        return Object.keys(patterns).some((key) =>
+          key === '*' || vmImage.toLowerCase().includes(key.toLowerCase())
+        );
+      });
+    }
+
+    return (
+      <div
+        className="graph-context-menu"
+        style={{ left: menu.x, top: menu.y }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Open Terminal */}
+        {vmsWithIp.length > 0 && (
+          <button
+            className="graph-context-menu-item"
+            onClick={() => {
+              onContextAction({ type: 'terminal', elements: vmsWithIp });
+              setMenu(null);
+            }}
+          >
+            {'\u{1F4BB}'} Open Terminal{vmsWithIp.length > 1 ? ` (${vmsWithIp.length})` : ''}
+          </button>
+        )}
+
+        {/* Save as VM Template — single VM only */}
+        {singleVM && (
+          <button
+            className="graph-context-menu-item"
+            onClick={() => {
+              onContextAction({ type: 'save-vm-template', elements: [singleVM], nodeName: singleVM.name });
+              setMenu(null);
+            }}
+          >
+            {'\uD83D\uDCBE'} Save as VM Template
+          </button>
+        )}
+
+        {/* Recipes — single VM with IP only */}
+        {compatibleRecipes.length > 0 && (
+          <>
+            <div className="graph-context-menu-sep" />
+            <div className="graph-context-menu-label">Recipes</div>
+            {compatibleRecipes.map((r) => (
+              <button
+                key={r.dir_name}
+                className="graph-context-menu-item"
+                onClick={() => {
+                  onContextAction({ type: 'apply-recipe', elements: [singleVM!], nodeName: singleVM!.name, recipeName: r.dir_name });
+                  setMenu(null);
+                }}
+              >
+                {'\u{1F4DC}'} {r.name}
+              </button>
+            ))}
+          </>
+        )}
+
+        {/* Separator before delete */}
+        <div className="graph-context-menu-sep" />
+
+        {/* Delete */}
+        <button
+          className="graph-context-menu-item danger"
+          onClick={() => {
+            onContextAction({ type: 'delete', elements: rows });
+            setMenu(null);
+          }}
+        >
+          {'\uD83D\uDDD1'} Delete{isMulti ? ` (${rows.length})` : ''}
+        </button>
+      </div>
+    );
+  };
+
   if (!sliceData) {
     return <div className="sliver-view"><div className="sliver-empty">No slice loaded</div></div>;
   }
@@ -314,6 +498,14 @@ export default function SliverView({ sliceData, selectedElement, onRowClick, onB
               <table className="sliver-table">
                 <thead>
                   <tr>
+                    <th className="sliver-checkbox-col">
+                      <input
+                        type="checkbox"
+                        checked={selectedNames.size === sortedVMs.length && sortedVMs.length > 0}
+                        onChange={handleSelectAll}
+                        title="Select all"
+                      />
+                    </th>
                     {VM_COLUMNS.map(col => (
                       <th key={col.key} onClick={() => handleVmHeader(col.key)}>
                         {col.label}
@@ -322,34 +514,68 @@ export default function SliverView({ sliceData, selectedElement, onRowClick, onB
                         </span>
                       </th>
                     ))}
+                    <th>Activity</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {sortedVMs.map(row => (
-                    <tr
-                      key={row.name}
-                      className={isSelected(row.clickData) ? 'selected' : ''}
-                      onClick={() => onRowClick(row.clickData)}
-                    >
-                      <td><span className="sliver-type-badge node">{row.type}</span></td>
-                      <td title={row.name}>{row.name}</td>
-                      <td>{row.site || <span className="sliver-cell-muted">{'\u2014'}</span>}</td>
-                      <td title={row.host}>{row.host || <span className="sliver-cell-muted">{'\u2014'}</span>}</td>
-                      <td>
-                        {row.state
-                          ? <span className={`sliver-state-badge ${stateClass(row.state)}`}>{row.state}</span>
-                          : <span className="sliver-cell-muted">{'\u2014'}</span>
-                        }
-                      </td>
-                      <td>{row.cores || <span className="sliver-cell-muted">{'\u2014'}</span>}</td>
-                      <td>{row.ram || <span className="sliver-cell-muted">{'\u2014'}</span>}</td>
-                      <td>{row.disk || <span className="sliver-cell-muted">{'\u2014'}</span>}</td>
-                      <td title={row.image}>{row.image || <span className="sliver-cell-muted">{'\u2014'}</span>}</td>
-                      <td>{row.mgmtIp || <span className="sliver-cell-muted">{'\u2014'}</span>}</td>
-                      <td title={row.components}>{row.components || <span className="sliver-cell-muted">{'\u2014'}</span>}</td>
-                      <td>{row.interfaces || <span className="sliver-cell-muted">{'\u2014'}</span>}</td>
-                    </tr>
-                  ))}
+                  {sortedVMs.map((row, idx) => {
+                    const multiSelected = selectedNames.has(row.name);
+                    return (
+                      <tr
+                        key={row.name}
+                        className={`${isSelected(row.clickData) ? 'selected' : ''} ${multiSelected ? 'multi-selected' : ''}`}
+                        onClick={(e) => handleVmRowClick(e, row, idx)}
+                        onContextMenu={(e) => handleVmContextMenu(e, row)}
+                      >
+                        <td className="sliver-checkbox-col" onClick={(e) => e.stopPropagation()}>
+                          <input
+                            type="checkbox"
+                            checked={multiSelected}
+                            onChange={() => {
+                              setSelectedNames(prev => {
+                                const next = new Set(prev);
+                                if (next.has(row.name)) next.delete(row.name);
+                                else next.add(row.name);
+                                return next;
+                              });
+                            }}
+                          />
+                        </td>
+                        <td><span className="sliver-type-badge node">{row.type}</span></td>
+                        <td title={row.name}>{row.name}</td>
+                        <td>{row.site || <span className="sliver-cell-muted">{'\u2014'}</span>}</td>
+                        <td title={row.host}>{row.host || <span className="sliver-cell-muted">{'\u2014'}</span>}</td>
+                        <td>
+                          {row.state
+                            ? <span className={`sliver-state-badge ${stateClass(row.state)}`}>{row.state}</span>
+                            : <span className="sliver-cell-muted">{'\u2014'}</span>
+                          }
+                        </td>
+                        <td>{row.cores || <span className="sliver-cell-muted">{'\u2014'}</span>}</td>
+                        <td>{row.ram || <span className="sliver-cell-muted">{'\u2014'}</span>}</td>
+                        <td>{row.disk || <span className="sliver-cell-muted">{'\u2014'}</span>}</td>
+                        <td title={row.image}>{row.image || <span className="sliver-cell-muted">{'\u2014'}</span>}</td>
+                        <td>{row.mgmtIp || <span className="sliver-cell-muted">{'\u2014'}</span>}</td>
+                        <td title={row.components}>{row.components || <span className="sliver-cell-muted">{'\u2014'}</span>}</td>
+                        <td>{row.interfaces || <span className="sliver-cell-muted">{'\u2014'}</span>}</td>
+                        <td>
+                          {(() => {
+                            const activity = nodeActivity?.[row.name];
+                            if (!activity) return <span className="sliver-activity ready">Ready</span>;
+                            const isFailed = activity.toLowerCase().includes('failed');
+                            const isPending = activity.toLowerCase().includes('pending');
+                            return (
+                              <span className={`sliver-activity ${isFailed ? 'error' : isPending ? 'pending' : 'running'}`} title={activity}>
+                                {!isFailed && !isPending && <span className="sliver-activity-spinner">{'\u21BB'}</span>}
+                                {isFailed && <span>{'\u2717'} </span>}
+                                {activity}
+                              </span>
+                            );
+                          })()}
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -384,6 +610,7 @@ export default function SliverView({ sliceData, selectedElement, onRowClick, onB
                         </span>
                       </th>
                     ))}
+                    <th>Activity</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -392,6 +619,7 @@ export default function SliverView({ sliceData, selectedElement, onRowClick, onB
                       key={`${row.type}-${row.name}`}
                       className={isSelected(row.clickData) ? 'selected' : ''}
                       onClick={() => onRowClick(row.clickData)}
+                      onContextMenu={(e) => handleNetContextMenu(e, row)}
                     >
                       <td><span className={`sliver-type-badge ${row.type}`}>{row.typeLabel}</span></td>
                       <td title={row.name}>{row.name}</td>
@@ -401,6 +629,21 @@ export default function SliverView({ sliceData, selectedElement, onRowClick, onB
                       <td>{row.gateway || <span className="sliver-cell-muted">{'\u2014'}</span>}</td>
                       <td>{row.interfaces}</td>
                       <td title={row.interfaceList}>{row.interfaceList || <span className="sliver-cell-muted">{'\u2014'}</span>}</td>
+                      <td>
+                        {(() => {
+                          const activity = nodeActivity?.[row.name];
+                          if (!activity) return <span className="sliver-activity ready">Ready</span>;
+                          const isFailed = activity.toLowerCase().includes('failed');
+                          const isPending = activity.toLowerCase().includes('pending');
+                          return (
+                            <span className={`sliver-activity ${isFailed ? 'error' : isPending ? 'pending' : 'running'}`} title={activity}>
+                              {!isFailed && !isPending && <span className="sliver-activity-spinner">{'\u21BB'}</span>}
+                              {isFailed && <span>{'\u2717'} </span>}
+                              {activity}
+                            </span>
+                          );
+                        })()}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -409,6 +652,9 @@ export default function SliverView({ sliceData, selectedElement, onRowClick, onB
           )}
         </div>
       </div>
+
+      {/* Context menu overlay */}
+      {renderContextMenu()}
     </div>
   );
 }

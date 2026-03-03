@@ -37,9 +37,11 @@ interface EditorPanelProps {
   vmTemplates?: VMTemplateSummary[];
   onSaveVmTemplate?: (nodeName: string) => void;
   onBootConfigErrors?: (errors: Array<{ node: string; type: string; id: string; detail: string }>) => void;
+  monitoringEnabled?: boolean;
+  onToggleMonitoring?: (enabled: boolean) => void;
 }
 
-export default function EditorPanel({ sliceData, sliceName, onSliceUpdated, onCollapse, sites, images, componentModels, selectedElement, dragHandleProps, panelIcon, vmTemplates = [], onSaveVmTemplate, onBootConfigErrors }: EditorPanelProps) {
+export default function EditorPanel({ sliceData, sliceName, onSliceUpdated, onCollapse, sites, images, componentModels, selectedElement, dragHandleProps, panelIcon, vmTemplates = [], onSaveVmTemplate, onBootConfigErrors, monitoringEnabled, onToggleMonitoring }: EditorPanelProps) {
   const [selectedSliverKey, setSelectedSliverKey] = useState('');
   const [addMode, setAddMode] = useState<AddSliverType | null>(null);
   const [loading, setLoading] = useState(false);
@@ -261,6 +263,23 @@ export default function EditorPanel({ sliceData, sliceName, onSliceUpdated, onCo
                   <option key={ks.name} value={ks.name}>{ks.name}</option>
                 ))}
               </select>
+            </div>
+          )}
+
+          {/* Monitoring toggle — show for draft or non-StableOK slices */}
+          {sliceData && !isActive && !isTerminal && (
+            <div className="editor-monitoring-toggle" style={{ marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8 }} data-help-id="editor.monitoring-toggle">
+              <Tooltip text="Installs node_exporter on all VMs when slice reaches StableOK">
+                <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, cursor: 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    checked={monitoringEnabled ?? false}
+                    onChange={(e) => onToggleMonitoring?.(e.target.checked)}
+                    style={{ accentColor: 'var(--fabric-primary)' }}
+                  />
+                  Enable monitoring after submit
+                </label>
+              </Tooltip>
             </div>
           )}
 
@@ -875,16 +894,24 @@ function NodeForm({
   const handleImageSelect = useCallback(async (newImage: string, vmTemplate?: VMTemplateSummary) => {
     setImage(newImage);
     if (vmTemplate) {
-      // Fetch full template to get boot_config
+      // Fetch boot_config — use variant endpoint for multi-variant templates, detail for legacy
       try {
-        const detail = await api.getVmTemplate(vmTemplate.dir_name);
-        if (mode === 'add') {
-          setPendingBootConfig(detail.boot_config);
-          setAppliedTemplateName(vmTemplate.name);
-        } else if (mode === 'edit' && node) {
-          // In edit mode, save boot config immediately
-          await api.saveBootConfig(sliceName, node.name, detail.boot_config);
-          setAppliedTemplateName(vmTemplate.name);
+        let bootConfig: import('../types/fabric').BootConfig | undefined;
+        if (vmTemplate.variant_count > 0) {
+          const variant = await api.getVmTemplateVariant(vmTemplate.dir_name, newImage);
+          bootConfig = variant.boot_config;
+        } else {
+          const detail = await api.getVmTemplate(vmTemplate.dir_name);
+          bootConfig = detail.boot_config;
+        }
+        if (bootConfig) {
+          if (mode === 'add') {
+            setPendingBootConfig(bootConfig);
+            setAppliedTemplateName(vmTemplate.name);
+          } else if (mode === 'edit' && node) {
+            await api.saveBootConfig(sliceName, node.name, bootConfig);
+            setAppliedTemplateName(vmTemplate.name);
+          }
         }
       } catch { /* ignore */ }
     } else {

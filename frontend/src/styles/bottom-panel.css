@@ -427,3 +427,59 @@
   color: #8ac9ef;
   line-height: 1.4;
 }
+
+/* --- Recipe Console --- */
+.bp-recipe-console {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  overflow: hidden;
+}
+.bp-recipe-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  background: var(--fabric-bg-tint);
+  border-bottom: 1px solid var(--fabric-border);
+  color: var(--fabric-text);
+  flex-shrink: 0;
+}
+.bp-recipe-pulse {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--fabric-orange, #ff8542);
+  animation: bp-recipe-pulse-anim 1s infinite;
+}
+@keyframes bp-recipe-pulse-anim {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+.bp-recipe-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px 0;
+  font-family: 'SF Mono', 'Fira Code', Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  background: var(--fabric-white);
+}
+.bp-recipe-line {
+  display: flex;
+  gap: 6px;
+  padding: 1px 12px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.bp-recipe-icon {
+  flex-shrink: 0;
+  width: 14px;
+  text-align: center;
+}
+.bp-recipe-step   { color: var(--fabric-primary); }
+.bp-recipe-output { color: var(--fabric-text-muted); }
+.bp-recipe-error  { color: var(--fabric-coral, #e25241); }

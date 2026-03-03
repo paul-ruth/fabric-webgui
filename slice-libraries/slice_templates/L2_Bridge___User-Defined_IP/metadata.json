@@ -1,0 +1,8 @@
+{
+  "name": "L2 Bridge \u2014 User-Defined IP",
+  "description": "L2 bridge with exact IPs set pre-submit. FABlib configures 192.168.1.1 and .2 during post-boot.",
+  "builtin": true,
+  "order": 3,
+  "node_count": 2,
+  "network_count": 1
+}

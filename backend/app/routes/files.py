@@ -681,12 +681,13 @@ def _load_boot_config(slice_name: str, node_name: str) -> dict:
 
 def _load_boot_config_from_fablib(slice_name: str, node_name: str) -> dict:
     """Read boot config from FABlib node user_data."""
+    import copy
     empty = {"uploads": [], "commands": [], "network": []}
     try:
         from app.routes.slices import _get_slice_obj
         slice_obj = _get_slice_obj(slice_name)
         node = slice_obj.get_node(node_name)
-        user_data = node.get_user_data()
+        user_data = copy.deepcopy(node.get_user_data())
         bc = user_data.get("boot_config")
         if bc and isinstance(bc, dict):
             bc.setdefault("uploads", [])
@@ -712,10 +713,13 @@ def _save_boot_config(slice_name: str, node_name: str, config: dict):
 def _save_boot_config_to_fablib(slice_name: str, node_name: str, config: dict):
     """Write boot config into FABlib node user_data and post_boot_tasks."""
     try:
+        import copy
         from app.routes.slices import _get_slice_obj
         slice_obj = _get_slice_obj(slice_name)
         node = slice_obj.get_node(name=node_name)
-        user_data = node.get_user_data()
+        # Work on a deep copy to avoid "dictionary keys changed during iteration"
+        # when FABlib is concurrently iterating the live user_data dict
+        user_data = copy.deepcopy(node.get_user_data())
 
         # Store full boot_config in user_data for round-tripping
         user_data["boot_config"] = {
@@ -727,8 +731,17 @@ def _save_boot_config_to_fablib(slice_name: str, node_name: str, config: dict):
         # Also set post_boot_tasks using FABlib's native format
         # so FABlib's own post-boot system can execute them on submit
         tasks = []
+        storage = _storage_dir()
         for u in config.get("uploads", []):
-            tasks.append(("upload_directory", u.get("source", ""), u.get("dest", ".")))
+            source = u.get("source", "")
+            dest = u.get("dest", ".")
+            # Resolve relative paths against storage dir
+            abs_source = source if os.path.isabs(source) else os.path.join(storage, source)
+            # Use upload_file for files, upload_directory for directories
+            if os.path.isfile(abs_source):
+                tasks.append(("upload_file", abs_source, dest))
+            else:
+                tasks.append(("upload_directory", abs_source, dest))
         for c in sorted(config.get("commands", []), key=lambda x: x.get("order", 0)):
             tasks.append(("execute", c.get("command", "")))
         if "fablib_data" not in user_data:
@@ -771,16 +784,35 @@ async def execute_boot_config(slice_name: str, node_name: str):
         node_obj = _get_node(slice_name, node_name)
         base = _storage_dir()
 
+        # Resolve ~ to absolute path for SFTP uploads (SFTP doesn't expand ~)
+        home_dir = None
+        def _resolve_remote(path: str) -> str:
+            nonlocal home_dir
+            if "~" not in path:
+                return path
+            if home_dir is None:
+                try:
+                    h, _ = node_obj.execute("echo $HOME", quiet=True)
+                    home_dir = (h or "").strip() or "/root"
+                except Exception:
+                    home_dir = "/root"
+            return path.replace("~", home_dir)
+
         # 1. Process uploads using FABlib
         for upload in config.get("uploads", []):
             uid = upload.get("id", "?")
             try:
                 local_path = _safe_path(base, upload["source"])
+                dest = _resolve_remote(upload["dest"])
+                # Ensure remote parent directory exists
+                parent = os.path.dirname(dest)
+                if parent:
+                    node_obj.execute(f"mkdir -p {parent}", quiet=True)
                 if os.path.isdir(local_path):
-                    node_obj.upload_directory(local_path, upload["dest"])
+                    node_obj.upload_directory(local_path, dest)
                     results.append({"type": "upload", "id": uid, "status": "ok"})
                 elif os.path.isfile(local_path):
-                    node_obj.upload_file(local_path, upload["dest"])
+                    node_obj.upload_file(local_path, dest)
                     results.append({"type": "upload", "id": uid, "status": "ok"})
                 else:
                     results.append({"type": "upload", "id": uid, "status": "error",
