@@ -218,7 +218,7 @@ const LAYOUTS: Record<string, any> = {
 };
 
 export interface ContextMenuAction {
-  type: 'terminal' | 'delete' | 'delete-slice' | 'delete-component' | 'delete-facility-port' | 'save-vm-template' | 'apply-recipe' | 'open-client';
+  type: 'terminal' | 'delete' | 'delete-slice' | 'delete-component' | 'delete-facility-port' | 'save-vm-template' | 'apply-recipe' | 'open-client' | 'open-boot-log';
   elements: Record<string, string>[];
   sliceNames?: string[];
   nodeName?: string;
@@ -246,6 +246,7 @@ interface MenuState {
   x: number;
   y: number;
   selected: Record<string, string>[];
+  sliceName?: string;  // set when right-clicking a slice compound node
 }
 
 export default function CytoscapeGraph({
@@ -414,7 +415,14 @@ export default function CytoscapeGraph({
       const pos = r.projectIntoViewport(e.clientX, e.clientY);
       const near = r.findNearestElement(pos[0], pos[1], true, false);
 
-      if (!near || near.isEdge() || near.hasClass('slice')) return;
+      if (!near || near.isEdge()) return;
+
+      // Right-clicked a slice compound node — show slice-level menu
+      if (near.hasClass('slice')) {
+        const sliceName = near.data('label') || near.data('name') || near.id();
+        setMenu({ x: e.clientX, y: e.clientY, selected: [], sliceName });
+        return;
+      }
 
       // If right-clicked a component badge, target its parent VM instead
       let target = near;
@@ -614,7 +622,23 @@ export default function CytoscapeGraph({
         </label>
       </div>
 
-      {menu && (
+      {menu && menu.sliceName && (
+        <div
+          className="graph-context-menu"
+          style={{ left: menu.x, top: menu.y }}
+          onMouseDown={(e) => e.stopPropagation()}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="graph-context-menu-label">{menu.sliceName}</div>
+          <button className="graph-context-menu-item" onClick={() => {
+            onContextActionRef.current({ type: 'open-boot-log', elements: [], sliceNames: [menu.sliceName!] });
+            setMenu(null);
+          }}>
+            {'\u2630'} Open Build Log
+          </button>
+        </div>
+      )}
+      {menu && !menu.sliceName && (
         <div
           className="graph-context-menu"
           style={{ left: menu.x, top: menu.y }}
@@ -633,7 +657,7 @@ export default function CytoscapeGraph({
           )}
           {singleVm && singleVm.management_ip && (
             <button className="graph-context-menu-item" onClick={() => {
-              onContextAction({ type: 'open-client', elements: [singleVm], port: 3000 });
+              onContextAction({ type: 'open-client', elements: [singleVm], port: 80 });
               setMenu(null);
             }}>
               ▸ Open in Client

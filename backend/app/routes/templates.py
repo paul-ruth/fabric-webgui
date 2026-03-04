@@ -77,6 +77,21 @@ def _builtin_hash(builtin_dir: str) -> str:
         hashable["_tools"] = tools
     else:
         hashable["_tools"] = []
+    # Include build/ directory (scripts, configs, dashboards used by deploy.sh)
+    build_dir = os.path.join(builtin_dir, "build")
+    if os.path.isdir(build_dir):
+        build_files = []
+        for fn in sorted(os.listdir(build_dir)):
+            fp = os.path.join(build_dir, fn)
+            if os.path.isfile(fp):
+                try:
+                    with open(fp) as f:
+                        build_files.append({"filename": fn, "content": f.read()})
+                except Exception:
+                    # Binary or very large files — hash by size + mtime
+                    st = os.stat(fp)
+                    build_files.append({"filename": fn, "size": st.st_size, "mtime": st.st_mtime})
+        hashable["_build"] = build_files
     return hashlib.sha256(json.dumps(hashable, sort_keys=True).encode()).hexdigest()[:16]
 
 
@@ -189,6 +204,14 @@ def _seed_if_needed() -> None:
             if os.path.isdir(dst_tools):
                 shutil.rmtree(dst_tools)
             shutil.copytree(src_tools, dst_tools)
+
+        # Copy build/ directory if present
+        src_build = os.path.join(builtin_dir, "build")
+        dst_build = os.path.join(tmpl_dir, "build")
+        if os.path.isdir(src_build):
+            if os.path.isdir(dst_build):
+                shutil.rmtree(dst_build)
+            shutil.copytree(src_build, dst_build)
 
 
 # ---------------------------------------------------------------------------

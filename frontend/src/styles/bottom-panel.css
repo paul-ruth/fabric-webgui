@@ -161,7 +161,6 @@
   border: 1.5px solid currentColor;
   border-radius: 2px;
 }
-/* Full-width mode: show a full bar (clicking will narrow) */
 .bp-width-icon.full::after {
   content: '';
   position: absolute;
@@ -173,7 +172,6 @@
   background: currentColor;
   border-radius: 1px;
 }
-/* Narrow mode: show a centered short bar (clicking will widen) */
 .bp-width-icon.narrow::after {
   content: '';
   position: absolute;
@@ -184,34 +182,6 @@
   height: 2px;
   background: currentColor;
   border-radius: 1px;
-}
-
-/* Status indicator (progress spinner + message) */
-.bp-status-indicator {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-right: 8px;
-  font-size: 11px;
-  color: var(--fabric-teal);
-}
-.bp-status-spinner {
-  width: 10px;
-  height: 10px;
-  border: 2px solid var(--fabric-border);
-  border-top-color: var(--fabric-teal);
-  border-radius: 50%;
-  animation: bp-spin 0.8s linear infinite;
-  flex-shrink: 0;
-}
-@keyframes bp-spin {
-  to { transform: rotate(360deg); }
-}
-.bp-status-text {
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 300px;
 }
 
 .bp-collapse-btn {
@@ -480,6 +450,7 @@
   width: 14px;
   text-align: center;
 }
+.bp-recipe-build    { color: var(--fabric-primary); font-weight: 600; }
 .bp-recipe-step     { color: var(--fabric-primary); }
 .bp-recipe-progress { color: var(--fabric-teal, #008e7a); font-weight: 600; }
 .bp-recipe-output   { color: var(--fabric-text-muted); }

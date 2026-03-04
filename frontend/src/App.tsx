@@ -14,6 +14,7 @@ import DetailPanel from './components/DetailPanel';
 import GeoView from './components/GeoView';
 import BottomPanel from './components/BottomPanel';
 import type { TerminalTab, RecipeConsoleLine, BootConsoleLine } from './components/BottomPanel';
+import StatusBar from './components/StatusBar';
 import ConfigureView from './components/ConfigureView';
 import FileTransferView from './components/FileTransferView';
 import HelpView from './components/HelpView';
@@ -94,6 +95,13 @@ export default function App() {
         }
         // Migrate: remove old project panel
         delete parsed.project;
+        // Migrate v3: reset to default panel positions
+        if (!parsed._layoutV3) {
+          for (const id of PANEL_IDS) {
+            parsed[id] = { ...defaultLayout[id] };
+          }
+          parsed._layoutV3 = true;
+        }
         return parsed;
       }
     } catch {}
@@ -192,7 +200,19 @@ export default function App() {
   const [consoleFullWidth, setConsoleFullWidth] = useState(true);
   const [consoleExpanded, setConsoleExpanded] = useState(false);
   const [consoleHeight, setConsoleHeight] = useState(260);
+  const [openBootLogSlices, setOpenBootLogSlices] = useState<string[]>([]);
   const [dropIndicator, setDropIndicator] = useState<{ panelId: PanelId; edge: 'left' | 'right' } | null>(null);
+
+  // Track previous slice states for build log state-transition messages
+  const prevSliceStatesRef = useRef<Record<string, string>>({});
+
+  // Append a single line to a slice's build log
+  const appendBuildLog = useCallback((sliceName: string, line: BootConsoleLine) => {
+    setSliceBootLogs(prev => ({
+      ...prev,
+      [sliceName]: [...(prev[sliceName] || []), line],
+    }));
+  }, []);
 
   // --- Global cache: infrastructure ---
   const [infraSites, setInfraSites] = useState<SiteInfo[]>([]);
@@ -263,16 +283,23 @@ export default function App() {
   }, [selectedSliceName]);
 
   // Boot config streaming handler — per-slice, supports concurrent runs across multiple slices
-  const handleRunBootConfigStream = useCallback(async (sliceNameOverride?: string) => {
+  // When calledFromBuildLog=true, doesn't reset logs or touch sliceBootRunning (caller manages lifecycle)
+  const handleRunBootConfigStream = useCallback(async (sliceNameOverride?: string, calledFromBuildLog?: boolean) => {
     const target = sliceNameOverride || selectedSliceName;
-    console.log(`[bootConfigStream] called with override=${sliceNameOverride} selected=${selectedSliceName} target=${target}`);
+    console.log(`[bootConfigStream] called with override=${sliceNameOverride} selected=${selectedSliceName} target=${target} fromBuild=${calledFromBuildLog}`);
     if (!target) return;
 
-    setSliceBootRunning(prev => ({ ...prev, [target]: true }));
-    setSliceBootLogs(prev => ({
-      ...prev,
-      [target]: [{ type: 'step', message: `Starting boot config for slice "${target}" (waiting for SSH)...` }],
-    }));
+    if (!calledFromBuildLog) {
+      // Standalone invocation — manage lifecycle ourselves
+      setSliceBootRunning(prev => ({ ...prev, [target]: true }));
+      setSliceBootLogs(prev => ({
+        ...prev,
+        [target]: [{ type: 'step', message: `Starting boot config for slice "${target}" (waiting for SSH)...` }],
+      }));
+    } else {
+      // Called from build log — just append a separator
+      appendBuildLog(target, { type: 'build', message: 'Running boot config (SSH, uploads, commands)...' });
+    }
 
     const appendLine = (line: BootConsoleLine) => {
       setSliceBootLogs(prev => ({
@@ -285,7 +312,9 @@ export default function App() {
       await api.executeBootConfigStream(target, (evt) => {
         if (evt.event === 'done') {
           appendLine({ type: evt.status === 'ok' ? 'step' : 'error', message: evt.message || `Done — ${evt.status}` });
-          setSliceBootRunning(prev => ({ ...prev, [target]: false }));
+          if (!calledFromBuildLog) {
+            setSliceBootRunning(prev => ({ ...prev, [target]: false }));
+          }
           setSliceBootNodeStatus(prev => {
             const nodeStatus = { ...(prev[target] || {}) };
             for (const k of Object.keys(nodeStatus)) {
@@ -309,9 +338,11 @@ export default function App() {
       });
     } catch (e: any) {
       appendLine({ type: 'error', message: e.message });
-      setSliceBootRunning(prev => ({ ...prev, [target]: false }));
+      if (!calledFromBuildLog) {
+        setSliceBootRunning(prev => ({ ...prev, [target]: false }));
+      }
     }
-  }, [selectedSliceName]);
+  }, [selectedSliceName, appendBuildLog]);
 
   // Check config status on mount
   useEffect(() => {
@@ -658,6 +689,16 @@ export default function App() {
         setListLoaded(true);
         syncStateFromList(list);
 
+        // Log state transitions for slices with active build logs
+        for (const entry of list) {
+          const prev = prevSliceStatesRef.current[entry.name];
+          if (prev && prev !== entry.state) {
+            // Only log transitions for slices that have an active build
+            appendBuildLog(entry.name, { type: 'build', message: `State: ${prev} \u2192 ${entry.state}` });
+          }
+          prevSliceStatesRef.current[entry.name] = entry.state;
+        }
+
         // Also refresh the currently selected slice if it's in a transitional state
         const currentName = selectedSliceRef.current;
         const currentEntry = currentName ? list.find(s => s.name === currentName) : null;
@@ -675,6 +716,7 @@ export default function App() {
           if ((entry.state === 'StableOK' || entry.state === 'Active') && !bootConfigRanRef.current.has(entry.name)) {
             console.log(`[poll] Auto-running boot config for "${entry.name}"`);
             bootConfigRanRef.current.add(entry.name);
+            appendBuildLog(entry.name, { type: 'build', message: `Slice is ready (${entry.state})` });
             // Refresh slice data if it's the currently selected slice
             if (entry.name === currentName) {
               try {
@@ -694,19 +736,23 @@ export default function App() {
               } catch { /* fallback */ }
 
               // Run FABlib's native post_boot_config (assigns IPs/hostnames)
+              appendBuildLog(sliceName, { type: 'build', message: 'Running FABlib post-boot config (networking, routes, hostnames)...' });
               try {
                 await api.runPostBootConfig(sliceName);
+                appendBuildLog(sliceName, { type: 'build', message: 'FABlib post-boot config complete' });
               } catch (e: any) {
+                appendBuildLog(sliceName, { type: 'error', message: `FABlib post-boot config failed: ${e.message}` });
                 addError(`FABlib post_boot_config failed for ${sliceName}: ${e.message}`);
               }
 
               // Run boot configs via streaming endpoint (includes deploy.sh + SSH readiness)
-              await handleRunBootConfigStream(sliceName);
+              await handleRunBootConfigStream(sliceName, true);
 
               // Auto-enable monitoring if user flagged it pre-submit
               if (monitoringPendingRef.current.has(sliceName)) {
                 monitoringPendingRef.current.delete(sliceName);
                 setMonitoringEnabledSlices(prev => { const next = new Set(prev); next.delete(sliceName); return next; });
+                appendBuildLog(sliceName, { type: 'build', message: 'Enabling monitoring...' });
                 if (sliceNodeNames.length > 0) {
                   await enableMonitoringPerNode(sliceName, sliceNodeNames);
                 } else {
@@ -716,7 +762,12 @@ export default function App() {
                     addError(`Auto-enable monitoring failed for ${sliceName}: ${e.message}`);
                   }
                 }
+                appendBuildLog(sliceName, { type: 'build', message: 'Monitoring enabled' });
               }
+
+              // Mark build complete
+              appendBuildLog(sliceName, { type: 'build', message: '\u2713 Build complete' });
+              setSliceBootRunning(prev => ({ ...prev, [sliceName]: false }));
             })();
           }
         }
@@ -734,7 +785,7 @@ export default function App() {
         // Silently ignore polling errors — next poll will retry
       }
     }, POLL_INTERVAL);
-  }, [stopPolling, syncStateFromList, handleRunBootConfigStream]);
+  }, [stopPolling, syncStateFromList, handleRunBootConfigStream, appendBuildLog]);
 
   // Clean up polling on unmount
   useEffect(() => { return () => stopPolling(); }, [stopPolling]);
@@ -861,21 +912,36 @@ export default function App() {
   // Submit handles both new slice creation and modifications to existing slices
   const handleSubmit = useCallback(async () => {
     if (!selectedSliceName) return;
+    const name = selectedSliceName;
     setLoading(true);
     setStatusMessage('Submitting slice to FABRIC...');
+
+    // Open build log tab with a fresh log
+    setOpenBootLogSlices(prev => prev.includes(name) ? prev : [...prev, name]);
+    setConsoleExpanded(true);
+    setSliceBootRunning(prev => ({ ...prev, [name]: true }));
+    setSliceBootLogs(prev => ({ ...prev, [name]: [] }));
+    appendBuildLog(name, { type: 'build', message: 'Submitting slice to FABRIC...' });
+
     try {
-      const data = await api.submitSlice(selectedSliceName);
+      const data = await api.submitSlice(name);
       setSliceData(data);
       setValidationIssues([]);
       setValidationValid(true);
+      appendBuildLog(name, { type: 'build', message: `Slice submitted (state: ${data.state || 'unknown'})` });
+      prevSliceStatesRef.current[name] = data.state || '';
       setStatusMessage('Submitted. Refreshing slice state...');
       let refreshedData = data;
       try {
         // Reload slice data to get updated state from FABRIC
-        const refreshed = await api.refreshSlice(selectedSliceName);
+        const refreshed = await api.refreshSlice(name);
         refreshedData = refreshed;
         setSliceData(refreshed);
-        runValidation(selectedSliceName);
+        runValidation(name);
+        if (refreshed.state && refreshed.state !== data.state) {
+          appendBuildLog(name, { type: 'build', message: `State: ${data.state || 'unknown'} \u2192 ${refreshed.state}` });
+          prevSliceStatesRef.current[name] = refreshed.state;
+        }
       } catch {}
       setStatusMessage('Refreshing slice list...');
       try {
@@ -887,43 +953,57 @@ export default function App() {
       console.log(`[submit] refreshedData.state=${refreshedData.state}`);
       if (refreshedData.state === 'StableOK') {
         console.log(`[submit] StableOK immediate — running post-boot config`);
-        bootConfigRanRef.current.add(selectedSliceName);
+        bootConfigRanRef.current.add(name);
+        appendBuildLog(name, { type: 'build', message: `Slice is ready (${refreshedData.state})` });
         // Run FABlib's native post_boot_config (L3 networking, hostnames, IPs, routes)
         setStatusMessage('Running FABlib post-boot config...');
+        appendBuildLog(name, { type: 'build', message: 'Running FABlib post-boot config (networking, routes, hostnames)...' });
         try {
-          await api.runPostBootConfig(selectedSliceName);
+          await api.runPostBootConfig(name);
+          appendBuildLog(name, { type: 'build', message: 'FABlib post-boot config complete' });
         } catch (e: any) {
+          appendBuildLog(name, { type: 'error', message: `FABlib post-boot config failed: ${e.message}` });
           addError(`FABlib post_boot_config failed: ${e.message}`);
         }
         setStatusMessage('Running post-boot configuration (waiting for SSH)...');
-        await handleRunBootConfigStream(selectedSliceName);
+        await handleRunBootConfigStream(name, true);
         // Auto-enable monitoring if user flagged it pre-submit
-        if (monitoringPendingRef.current.has(selectedSliceName)) {
-          monitoringPendingRef.current.delete(selectedSliceName);
-          setMonitoringEnabledSlices(prev => { const next = new Set(prev); next.delete(selectedSliceName); return next; });
+        if (monitoringPendingRef.current.has(name)) {
+          monitoringPendingRef.current.delete(name);
+          setMonitoringEnabledSlices(prev => { const next = new Set(prev); next.delete(name); return next; });
           setStatusMessage('Enabling monitoring...');
+          appendBuildLog(name, { type: 'build', message: 'Enabling monitoring...' });
           const monitorNodeNames = refreshedData.nodes.map((n: any) => n.name);
           if (monitorNodeNames.length > 0) {
-            await enableMonitoringPerNode(selectedSliceName, monitorNodeNames);
+            await enableMonitoringPerNode(name, monitorNodeNames);
           } else {
             try {
-              await api.enableMonitoring(selectedSliceName);
+              await api.enableMonitoring(name);
             } catch (e: any) {
               addError(`Auto-enable monitoring failed: ${e.message}`);
             }
           }
+          appendBuildLog(name, { type: 'build', message: 'Monitoring enabled' });
         }
+        appendBuildLog(name, { type: 'build', message: '\u2713 Build complete' });
+        setSliceBootRunning(prev => ({ ...prev, [name]: false }));
       } else if (POLL_STATES.has(refreshedData.state || '')) {
         // Slice is still provisioning — start auto-refresh polling
+        appendBuildLog(name, { type: 'build', message: 'Waiting for slice to become ready...' });
         startPolling();
+      } else {
+        // Not a poll state and not StableOK — mark build done
+        setSliceBootRunning(prev => ({ ...prev, [name]: false }));
       }
     } catch (e: any) {
+      appendBuildLog(name, { type: 'error', message: `Submit failed: ${e.message}` });
       addError(e.message);
+      setSliceBootRunning(prev => ({ ...prev, [name]: false }));
     } finally {
       setLoading(false);
       setStatusMessage('');
     }
-  }, [selectedSliceName, runValidation, startPolling, handleRunBootConfigStream]);
+  }, [selectedSliceName, runValidation, startPolling, handleRunBootConfigStream, appendBuildLog]);
 
   const handleRefreshSlices = useCallback(async () => {
     setLoading(true);
@@ -1259,8 +1339,12 @@ export default function App() {
       handleExecuteRecipe(action.recipeName, action.nodeName);
     } else if (action.type === 'open-client' && action.elements.length > 0) {
       const el = action.elements[0];
-      setClientTarget({ sliceName: selectedSliceName, nodeName: el.name, port: action.port || 3000 });
+      setClientTarget({ sliceName: selectedSliceName, nodeName: el.name, port: action.port || 80 });
       setCurrentView('client');
+    } else if (action.type === 'open-boot-log' && action.sliceNames && action.sliceNames.length > 0) {
+      const sn = action.sliceNames[0];
+      setOpenBootLogSlices(prev => prev.includes(sn) ? prev : [...prev, sn]);
+      setConsoleExpanded(true);
     }
   }, [handleOpenTerminals, handleDeleteElements, handleDeleteSliceByName, handleRefreshSlices, handleDeleteComponent, handleDeleteFacilityPort, handleSaveVmTemplate, handleExecuteRecipe, selectedSliceName]);
 
@@ -1322,6 +1406,170 @@ export default function App() {
     });
     runValidation(data.name);
   }, [runValidation]);
+
+  // --- Panel rendering helpers (shared between left/right panel groups) ---
+  const showSidePanels = currentView === 'topology' || currentView === 'sliver';
+
+  const makeDragProps = (id: PanelId) => ({
+    draggable: true,
+    onDragStart: (e: React.DragEvent) => {
+      e.dataTransfer.setData('text/plain', id);
+      setDraggingPanel(id);
+    },
+    onDragEnd: () => setDraggingPanel(null),
+  });
+
+  const renderPanel = (id: PanelId) => {
+    const dragProps = makeDragProps(id);
+    const icon = PANEL_ICONS[id];
+    switch (id) {
+      case 'editor':
+        return (
+          <EditorPanel
+            key="editor"
+            sliceData={sliceData}
+            sliceName={selectedSliceName}
+            onSliceUpdated={handleSliceUpdated}
+            onCollapse={() => toggleCollapse('editor')}
+            sites={infraSites}
+            images={images}
+            componentModels={componentModels}
+            selectedElement={selectedElement}
+            dragHandleProps={dragProps}
+            panelIcon={icon}
+            vmTemplates={vmTemplates}
+            onSaveVmTemplate={handleSaveVmTemplate}
+            onBootConfigErrors={setBootConfigErrors}
+            onRunBootConfig={handleRunBootConfigStream}
+            bootRunning={!!sliceBootRunning[selectedSliceName]}
+            monitoringEnabled={monitoringEnabledSlices.has(selectedSliceName)}
+            onToggleMonitoring={(enabled) => setMonitoringEnabled(selectedSliceName, enabled)}
+          />
+        );
+      case 'template':
+        return (
+          <LibrariesPanel
+            key="template"
+            onSliceImported={handleSliceImported}
+            onCollapse={() => toggleCollapse('template')}
+            dragHandleProps={dragProps}
+            panelIcon={icon}
+            onVmTemplatesChanged={refreshVmTemplates}
+            sliceName={selectedSliceName}
+            sliceData={sliceData}
+            onNodeAdded={updateSliceAndValidate}
+            onExecuteRecipe={handleExecuteRecipe}
+            executingRecipe={executingRecipeName}
+            onRecipesChanged={() => api.listRecipes().then(setRecipes).catch(() => {})}
+          />
+        );
+      case 'detail':
+        return (
+          <DetailPanel
+            key="detail"
+            sliceData={sliceData}
+            selectedElement={selectedElement}
+            onCollapse={() => toggleCollapse('detail')}
+            siteMetricsCache={siteMetricsCache}
+            linkMetricsCache={linkMetricsCache}
+            metricsRefreshRate={metricsRefreshRate}
+            onMetricsRefreshRateChange={setMetricsRefreshRate}
+            onRefreshMetrics={refreshMetrics}
+            metricsLoading={metricsLoading}
+            dragHandleProps={dragProps}
+            panelIcon={icon}
+          />
+        );
+    }
+  };
+
+  const sortByOrder = (ids: PanelId[]) => [...ids].sort((a, b) => panelLayout[a].order - panelLayout[b].order);
+
+  const renderPanelGroup = (panels: PanelId[], side: 'left' | 'right') => {
+    const findTargetPanel = (groupEl: HTMLElement, clientX: number, ps: PanelId[]): { panelId: PanelId; edge: 'left' | 'right' } | null => {
+      const wrappers = groupEl.querySelectorAll<HTMLElement>('.panel-wrapper');
+      for (let i = 0; i < wrappers.length; i++) {
+        const rect = wrappers[i].getBoundingClientRect();
+        if (clientX >= rect.left && clientX <= rect.right) {
+          const panelId = ps[i];
+          if (!panelId || panelId === draggingPanel) return null;
+          const midX = rect.left + rect.width / 2;
+          return { panelId, edge: clientX < midX ? 'left' : 'right' };
+        }
+      }
+      return null;
+    };
+    return (
+      <div
+        className={`panel-group ${side}`}
+        onDragOver={(e) => {
+          if (!draggingPanel) return;
+          e.preventDefault();
+          setDropIndicator(findTargetPanel(e.currentTarget as HTMLElement, e.clientX, panels));
+        }}
+        onDragLeave={(e) => {
+          if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+            setDropIndicator(null);
+          }
+        }}
+        onDrop={(e) => {
+          if (!draggingPanel) return;
+          e.preventDefault();
+          const target = findTargetPanel(e.currentTarget as HTMLElement, e.clientX, panels);
+          if (target) {
+            const targetIdx = panels.indexOf(target.panelId);
+            const beforeId = target.edge === 'left' ? target.panelId : (targetIdx + 1 < panels.length ? panels[targetIdx + 1] : null);
+            movePanelToPosition(draggingPanel, side, beforeId);
+          }
+          setDraggingPanel(null);
+          setDropIndicator(null);
+        }}
+      >
+        {side === 'right' && (
+          <div
+            className="panel-resize-handle"
+            onMouseDown={(e) => startResize(panels[0], false, e)}
+          />
+        )}
+        {panels.map((id, i) => {
+          const isDragging = draggingPanel === id;
+          const showLeftIndicator = dropIndicator?.panelId === id && dropIndicator?.edge === 'left';
+          const showRightIndicator = dropIndicator?.panelId === id && dropIndicator?.edge === 'right';
+          return (
+            <React.Fragment key={id}>
+              {i > 0 && !draggingPanel && (
+                <div
+                  className="panel-resize-handle"
+                  onMouseDown={(e) => startResize(
+                    side === 'left' ? panels[i - 1] : panels[i],
+                    side === 'left',
+                    e
+                  )}
+                />
+              )}
+              <div
+                className={`panel-wrapper${isDragging ? ' dragging' : ''}${showLeftIndicator ? ' drop-left' : ''}${showRightIndicator ? ' drop-right' : ''}`}
+                style={{ width: panelLayout[id].width }}
+              >
+                {renderPanel(id)}
+              </div>
+            </React.Fragment>
+          );
+        })}
+        {side === 'left' && (
+          <div
+            className="panel-resize-handle"
+            onMouseDown={(e) => startResize(panels[panels.length - 1], true, e)}
+          />
+        )}
+      </div>
+    );
+  };
+
+  const leftExpanded = sortByOrder(PANEL_IDS.filter(id => panelLayout[id].side === 'left' && !panelLayout[id].collapsed));
+  const rightExpanded = sortByOrder(PANEL_IDS.filter(id => panelLayout[id].side === 'right' && !panelLayout[id].collapsed));
+  const leftCollapsed = sortByOrder(PANEL_IDS.filter(id => panelLayout[id].side === 'left' && panelLayout[id].collapsed));
+  const rightCollapsed = sortByOrder(PANEL_IDS.filter(id => panelLayout[id].side === 'right' && panelLayout[id].collapsed));
 
   return (
     <>
@@ -1439,325 +1687,201 @@ export default function App() {
         </div>
       )}
 
-      <div style={{ flex: 1, display: (settingsOpen || helpOpen) ? 'none' : 'flex', overflow: 'hidden' }}>
-        {currentView === 'ai' ? (
-          <AICompanionView />
-        ) : currentView === 'client' ? (
-          <ClientView
-            slices={slices}
-            selectedSliceName={selectedSliceName}
-            sliceData={sliceData}
-            clientTarget={clientTarget}
-            onTargetChange={setClientTarget}
-          />
-        ) : currentView === 'monitoring' ? (
-          <MonitoringView sliceName={selectedSliceName || null} sliceData={sliceData} monitoringPending={monitoringEnabledSlices.has(selectedSliceName)} nodeActivity={nodeActivity} />
-        ) : currentView === 'libraries' ? (
-          <LibrariesView onLoadSlice={(data) => { setSliceData(data); setSelectedSliceName(data.name); refreshSliceList(); setCurrentView('topology'); }} />
-        ) : currentView === 'files' ? (
-          <FileTransferView
-            sliceName={selectedSliceName}
-            sliceData={sliceData}
-          />
-        ) : currentView === 'topology' || currentView === 'sliver' ? (
-          (() => {
-            const makeDragProps = (id: PanelId) => ({
-              draggable: true,
-              onDragStart: (e: React.DragEvent) => {
-                e.dataTransfer.setData('text/plain', id);
-                setDraggingPanel(id);
-              },
-              onDragEnd: () => setDraggingPanel(null),
-            });
-
-            const renderPanel = (id: PanelId) => {
-              const dragProps = makeDragProps(id);
-              const icon = PANEL_ICONS[id];
-              switch (id) {
-                case 'editor':
-                  return (
-                    <EditorPanel
-                      key="editor"
-                      sliceData={sliceData}
-                      sliceName={selectedSliceName}
-                      onSliceUpdated={handleSliceUpdated}
-                      onCollapse={() => toggleCollapse('editor')}
-                      sites={infraSites}
-                      images={images}
-                      componentModels={componentModels}
-                      selectedElement={selectedElement}
-                      dragHandleProps={dragProps}
-                      panelIcon={icon}
-                      vmTemplates={vmTemplates}
-                      onSaveVmTemplate={handleSaveVmTemplate}
-                      onBootConfigErrors={setBootConfigErrors}
-                      onRunBootConfig={handleRunBootConfigStream}
-                      bootRunning={!!sliceBootRunning[selectedSliceName]}
-                      monitoringEnabled={monitoringEnabledSlices.has(selectedSliceName)}
-                      onToggleMonitoring={(enabled) => setMonitoringEnabled(selectedSliceName, enabled)}
-                    />
-                  );
-                case 'template':
-                  return (
-                    <LibrariesPanel
-                      key="template"
-                      onSliceImported={handleSliceImported}
-                      onCollapse={() => toggleCollapse('template')}
-                      dragHandleProps={dragProps}
-                      panelIcon={icon}
-                      onVmTemplatesChanged={refreshVmTemplates}
-                      sliceName={selectedSliceName}
-                      sliceData={sliceData}
-                      onNodeAdded={updateSliceAndValidate}
-                      onExecuteRecipe={handleExecuteRecipe}
-                      executingRecipe={executingRecipeName}
-                      onRecipesChanged={() => api.listRecipes().then(setRecipes).catch(() => {})}
-                    />
-                  );
-                case 'detail':
-                  return (
-                    <DetailPanel
-                      key="detail"
-                      sliceData={sliceData}
-                      selectedElement={selectedElement}
-                      onCollapse={() => toggleCollapse('detail')}
-                      siteMetricsCache={siteMetricsCache}
-                      linkMetricsCache={linkMetricsCache}
-                      metricsRefreshRate={metricsRefreshRate}
-                      onMetricsRefreshRateChange={setMetricsRefreshRate}
-                      onRefreshMetrics={refreshMetrics}
-                      metricsLoading={metricsLoading}
-                      dragHandleProps={dragProps}
-                      panelIcon={icon}
-                    />
-                  );
-              }
-            };
-
-            const sortByOrder = (ids: PanelId[]) => [...ids].sort((a, b) => panelLayout[a].order - panelLayout[b].order);
-            const leftExpanded = sortByOrder(PANEL_IDS.filter(id => panelLayout[id].side === 'left' && !panelLayout[id].collapsed));
-            const rightExpanded = sortByOrder(PANEL_IDS.filter(id => panelLayout[id].side === 'right' && !panelLayout[id].collapsed));
-            const leftCollapsed = sortByOrder(PANEL_IDS.filter(id => panelLayout[id].side === 'left' && panelLayout[id].collapsed));
-            const rightCollapsed = sortByOrder(PANEL_IDS.filter(id => panelLayout[id].side === 'right' && panelLayout[id].collapsed));
-
-            // Helper: find which panel the cursor is over by checking child element bounds
-            const findTargetPanel = (groupEl: HTMLElement, clientX: number, panels: PanelId[]): { panelId: PanelId; edge: 'left' | 'right' } | null => {
-              const wrappers = groupEl.querySelectorAll<HTMLElement>('.panel-wrapper');
-              for (let i = 0; i < wrappers.length; i++) {
-                const rect = wrappers[i].getBoundingClientRect();
-                if (clientX >= rect.left && clientX <= rect.right) {
-                  const panelId = panels[i];
-                  if (!panelId || panelId === draggingPanel) return null;
-                  const midX = rect.left + rect.width / 2;
-                  return { panelId, edge: clientX < midX ? 'left' : 'right' };
-                }
-              }
-              return null;
-            };
-
-            const handleGroupDragOver = (e: React.DragEvent, panels: PanelId[], side: 'left' | 'right') => {
-              if (!draggingPanel) return;
-              e.preventDefault();
-              const target = findTargetPanel(e.currentTarget as HTMLElement, e.clientX, panels);
-              setDropIndicator(target);
-            };
-
-            const handleGroupDrop = (e: React.DragEvent, panels: PanelId[], side: 'left' | 'right') => {
-              if (!draggingPanel) return;
-              e.preventDefault();
-              const target = findTargetPanel(e.currentTarget as HTMLElement, e.clientX, panels);
-              if (target) {
-                const targetIdx = panels.indexOf(target.panelId);
-                const beforeId = target.edge === 'left' ? target.panelId : (targetIdx + 1 < panels.length ? panels[targetIdx + 1] : null);
-                movePanelToPosition(draggingPanel, side, beforeId);
-              }
-              setDraggingPanel(null);
-              setDropIndicator(null);
-            };
-
-            const renderPanelGroup = (panels: PanelId[], side: 'left' | 'right') => {
-              return (
-              <div
-                className={`panel-group ${side}`}
-                onDragOver={(e) => handleGroupDragOver(e, panels, side)}
-                onDragLeave={(e) => {
-                  if (!e.currentTarget.contains(e.relatedTarget as Node)) {
-                    setDropIndicator(null);
-                  }
-                }}
-                onDrop={(e) => handleGroupDrop(e, panels, side)}
-              >
-                {/* Right-side group: edge handle on the left (facing graph) */}
-                {side === 'right' && (
-                  <div
-                    className="panel-resize-handle"
-                    onMouseDown={(e) => startResize(panels[0], false, e)}
-                  />
-                )}
-                {panels.map((id, i) => {
-                  const isDragging = draggingPanel === id;
-                  const showLeftIndicator = dropIndicator?.panelId === id && dropIndicator?.edge === 'left';
-                  const showRightIndicator = dropIndicator?.panelId === id && dropIndicator?.edge === 'right';
-                  return (
-                  <React.Fragment key={id}>
-                    {i > 0 && !draggingPanel && (
-                      <div
-                        className="panel-resize-handle"
-                        onMouseDown={(e) => startResize(
-                          side === 'left' ? panels[i - 1] : panels[i],
-                          side === 'left',
-                          e
-                        )}
-                      />
-                    )}
-                    <div
-                      className={`panel-wrapper${isDragging ? ' dragging' : ''}${showLeftIndicator ? ' drop-left' : ''}${showRightIndicator ? ' drop-right' : ''}`}
-                      style={{ width: panelLayout[id].width }}
-                    >
-                      {renderPanel(id)}
-                    </div>
-                  </React.Fragment>
-                  );
-                })}
-                {/* Left-side group: edge handle on the right (facing graph) */}
-                {side === 'left' && (
-                  <div
-                    className="panel-resize-handle"
-                    onMouseDown={(e) => startResize(panels[panels.length - 1], true, e)}
-                  />
-                )}
-              </div>
-              );
-            };
-
-            return (
-              <>
-                {leftExpanded.length > 0 && renderPanelGroup(leftExpanded, 'left')}
-                <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, overflow: 'hidden', position: 'relative' }}>
-                  {/* Collapsed panel icon tabs - left side */}
-                  {leftCollapsed.map((id, i) => (
-                    <button
-                      key={id}
-                      className="panel-icon-tab left"
-                      style={{ top: 12 + i * 36 }}
-                      onClick={() => toggleCollapse(id)}
-                      title={`Show ${PANEL_LABELS[id]}`}
-                    >
-                      {PANEL_ICONS[id]}
-                    </button>
-                  ))}
-                  {/* Collapsed panel icon tabs - right side */}
-                  {rightCollapsed.map((id, i) => (
-                    <button
-                      key={id}
-                      className="panel-icon-tab right"
-                      style={{ top: 12 + i * 36 }}
-                      onClick={() => toggleCollapse(id)}
-                      title={`Show ${PANEL_LABELS[id]}`}
-                    >
-                      {PANEL_ICONS[id]}
-                    </button>
-                  ))}
-                  {/* Drop zones when dragging */}
-                  {draggingPanel && (
-                    <>
-                      <div
-                        className="panel-drop-zone left active"
-                        onDragOver={(e) => { e.preventDefault(); e.currentTarget.classList.add('hover'); }}
-                        onDragLeave={(e) => e.currentTarget.classList.remove('hover')}
-                        onDrop={(e) => { e.preventDefault(); movePanel(draggingPanel, 'left'); setDraggingPanel(null); }}
-                      />
-                      <div
-                        className="panel-drop-zone right active"
-                        onDragOver={(e) => { e.preventDefault(); e.currentTarget.classList.add('hover'); }}
-                        onDragLeave={(e) => e.currentTarget.classList.remove('hover')}
-                        onDrop={(e) => { e.preventDefault(); movePanel(draggingPanel, 'right'); setDraggingPanel(null); }}
-                      />
-                    </>
-                  )}
-                  {currentView === 'topology' ? (
-                    <CytoscapeGraph
-                      graph={sliceData?.graph ?? null}
-                      layout={layout}
-                      dark={dark}
-                      sliceData={sliceData}
-                      recipes={recipes}
-                      bootNodeStatus={sliceBootNodeStatus[selectedSliceName] ?? {}}
-                      onLayoutChange={setLayout}
-                      onNodeClick={handleNodeClick}
-                      onEdgeClick={handleEdgeClick}
-                      onBackgroundClick={handleBackgroundClick}
-                      onContextAction={handleContextAction}
-                    />
-                  ) : (
-                    <AllSliversView
-                      slices={slices}
-                      dark={dark}
-                      onSliceSelect={(name) => {
-                        setSelectedSliceName(name);
-                        setCurrentView('topology');
-                      }}
-                      onDeleteSlice={handleDeleteSliceByName}
-                      onRefreshSlices={handleRefreshSlices}
-                      onContextAction={handleContextAction}
-                      nodeActivity={nodeActivity}
-                      recipes={recipes}
-                    />
-                  )}
-                </div>
-                {rightExpanded.length > 0 && renderPanelGroup(rightExpanded, 'right')}
-              </>
-            );
-          })()
-        ) : (
-          <GeoView
-            sliceData={sliceData}
-            selectedElement={selectedElement}
-            onNodeClick={handleNodeClick}
-            sites={infraSites}
-            links={infraLinks}
-            linksLoading={infraLoading}
-            siteMetricsCache={siteMetricsCache}
-            linkMetricsCache={linkMetricsCache}
-            metricsRefreshRate={metricsRefreshRate}
-            onMetricsRefreshRateChange={setMetricsRefreshRate}
-            onRefreshMetrics={refreshMetrics}
-            metricsLoading={metricsLoading}
-          />
+      <div style={{
+        flex: 1,
+        display: (settingsOpen || helpOpen) ? 'none' : 'grid',
+        overflow: 'hidden',
+        gridTemplateColumns: showSidePanels ? 'auto 1fr auto' : '1fr',
+        gridTemplateRows: '1fr auto',
+      }}>
+        {/* Left side panels (topology/sliver views only) */}
+        {showSidePanels && (
+          <div style={{
+            gridColumn: 1,
+            gridRow: consoleFullWidth ? '1' : '1 / -1',
+            display: 'flex',
+            overflow: 'hidden',
+          }}>
+            {leftExpanded.length > 0 && renderPanelGroup(leftExpanded, 'left')}
+          </div>
         )}
+
+        {/* Center column: view content */}
+        <div style={{ gridColumn: showSidePanels ? 2 : 1, gridRow: 1, display: 'flex', flexDirection: 'column', minWidth: 0, overflow: 'hidden', position: 'relative' }}>
+          {/* Collapsed panel icon tabs (topology/sliver views only) */}
+          {showSidePanels && (
+            <>
+              {leftCollapsed.map((id, i) => (
+                <button
+                  key={id}
+                  className="panel-icon-tab left"
+                  style={{ top: 12 + i * 36 }}
+                  onClick={() => toggleCollapse(id)}
+                  title={`Show ${PANEL_LABELS[id]}`}
+                >
+                  {PANEL_ICONS[id]}
+                </button>
+              ))}
+              {rightCollapsed.map((id, i) => (
+                <button
+                  key={id}
+                  className="panel-icon-tab right"
+                  style={{ top: 12 + i * 36 }}
+                  onClick={() => toggleCollapse(id)}
+                  title={`Show ${PANEL_LABELS[id]}`}
+                >
+                  {PANEL_ICONS[id]}
+                </button>
+              ))}
+              {draggingPanel && (
+                <>
+                  <div
+                    className="panel-drop-zone left active"
+                    onDragOver={(e) => { e.preventDefault(); e.currentTarget.classList.add('hover'); }}
+                    onDragLeave={(e) => e.currentTarget.classList.remove('hover')}
+                    onDrop={(e) => { e.preventDefault(); movePanel(draggingPanel, 'left'); setDraggingPanel(null); }}
+                  />
+                  <div
+                    className="panel-drop-zone right active"
+                    onDragOver={(e) => { e.preventDefault(); e.currentTarget.classList.add('hover'); }}
+                    onDragLeave={(e) => e.currentTarget.classList.remove('hover')}
+                    onDrop={(e) => { e.preventDefault(); movePanel(draggingPanel, 'right'); setDraggingPanel(null); }}
+                  />
+                </>
+              )}
+            </>
+          )}
+
+          {/* View content */}
+          {currentView === 'ai' ? (
+            <AICompanionView />
+          ) : currentView === 'client' ? (
+            <ClientView
+              slices={slices}
+              selectedSliceName={selectedSliceName}
+              sliceData={sliceData}
+              clientTarget={clientTarget}
+              onTargetChange={setClientTarget}
+            />
+          ) : currentView === 'monitoring' ? (
+            <MonitoringView sliceName={selectedSliceName || null} sliceData={sliceData} monitoringPending={monitoringEnabledSlices.has(selectedSliceName)} nodeActivity={nodeActivity} />
+          ) : currentView === 'libraries' ? (
+            <LibrariesView onLoadSlice={(data) => { setSliceData(data); setSelectedSliceName(data.name); refreshSliceList(); setCurrentView('topology'); }} />
+          ) : currentView === 'files' ? (
+            <FileTransferView
+              sliceName={selectedSliceName}
+              sliceData={sliceData}
+            />
+          ) : currentView === 'map' ? (
+            <GeoView
+              sliceData={sliceData}
+              selectedElement={selectedElement}
+              onNodeClick={handleNodeClick}
+              sites={infraSites}
+              links={infraLinks}
+              linksLoading={infraLoading}
+              siteMetricsCache={siteMetricsCache}
+              linkMetricsCache={linkMetricsCache}
+              metricsRefreshRate={metricsRefreshRate}
+              onMetricsRefreshRateChange={setMetricsRefreshRate}
+              onRefreshMetrics={refreshMetrics}
+              metricsLoading={metricsLoading}
+            />
+          ) : currentView === 'topology' ? (
+            <CytoscapeGraph
+              graph={sliceData?.graph ?? null}
+              layout={layout}
+              dark={dark}
+              sliceData={sliceData}
+              recipes={recipes}
+              bootNodeStatus={sliceBootNodeStatus[selectedSliceName] ?? {}}
+              onLayoutChange={setLayout}
+              onNodeClick={handleNodeClick}
+              onEdgeClick={handleEdgeClick}
+              onBackgroundClick={handleBackgroundClick}
+              onContextAction={handleContextAction}
+            />
+          ) : (
+            <AllSliversView
+              slices={slices}
+              dark={dark}
+              onSliceSelect={(name) => {
+                setSelectedSliceName(name);
+                setCurrentView('topology');
+              }}
+              onDeleteSlice={handleDeleteSliceByName}
+              onRefreshSlices={handleRefreshSlices}
+              onContextAction={handleContextAction}
+              nodeActivity={nodeActivity}
+              recipes={recipes}
+            />
+          )}
+
+        </div>
+
+        {/* Right side panels (topology/sliver views only) */}
+        {showSidePanels && (
+          <div style={{
+            gridColumn: 3,
+            gridRow: consoleFullWidth ? '1' : '1 / -1',
+            display: 'flex',
+            overflow: 'hidden',
+          }}>
+            {rightExpanded.length > 0 && renderPanelGroup(rightExpanded, 'right')}
+          </div>
+        )}
+
+        {/* BottomPanel — grid row 2, spans all columns when fullWidth, center column only when narrow */}
+        <div style={{
+          gridColumn: showSidePanels ? ((consoleFullWidth) ? '1 / -1' : '2') : '1',
+          gridRow: 2,
+          minHeight: 0,
+          overflow: 'hidden',
+        }}>
+          <BottomPanel
+            terminals={terminalTabs}
+            onCloseTerminal={handleCloseTerminal}
+            validationIssues={validationIssues}
+            validationValid={validationValid}
+            sliceState={sliceData?.state ?? ''}
+            dirty={sliceData?.dirty ?? false}
+            errors={errors}
+            onClearErrors={() => { setErrors([]); setValidationIssues([]); setValidationValid(false); }}
+            sliceErrors={sliceData?.error_messages ?? []}
+            bootConfigErrors={bootConfigErrors}
+            onClearBootConfigErrors={() => setBootConfigErrors([])}
+            fullWidth={consoleFullWidth || !showSidePanels}
+            onToggleFullWidth={() => setConsoleFullWidth(fw => !fw)}
+            showWidthToggle={showSidePanels}
+            expanded={consoleExpanded}
+            onExpandedChange={setConsoleExpanded}
+            panelHeight={consoleHeight}
+            onPanelHeightChange={setConsoleHeight}
+            recipeConsole={recipeConsole}
+            recipeRunning={recipeRunning}
+            onClearRecipeConsole={() => setRecipeConsole([])}
+            sliceBootLogs={sliceBootLogs}
+            sliceBootRunning={sliceBootRunning}
+            onClearSliceBootLog={(sn) => setSliceBootLogs(prev => { const next = { ...prev }; delete next[sn]; return next; })}
+            openBootLogSlices={openBootLogSlices}
+            onOpenBootLog={(sn) => setOpenBootLogSlices(prev => prev.includes(sn) ? prev : [...prev, sn])}
+            onCloseBootLog={(sn) => setOpenBootLogSlices(prev => prev.filter(s => s !== sn))}
+          />
+        </div>
       </div>
 
-      {/* Always render BottomPanel to preserve terminal connections across view switches */}
-      <div style={{ display: (settingsOpen || helpOpen || currentView === 'files') ? 'none' : undefined }}>
-        <BottomPanel
-          terminals={terminalTabs}
-          onCloseTerminal={handleCloseTerminal}
-          validationIssues={validationIssues}
-          validationValid={validationValid}
-          sliceState={sliceData?.state ?? ''}
-          dirty={sliceData?.dirty ?? false}
-          errors={errors}
-          onClearErrors={() => { setErrors([]); setValidationIssues([]); setValidationValid(false); }}
-          sliceErrors={sliceData?.error_messages ?? []}
-          bootConfigErrors={bootConfigErrors}
-          onClearBootConfigErrors={() => setBootConfigErrors([])}
-          fullWidth={consoleFullWidth || (currentView !== 'topology' && currentView !== 'sliver')}
-          onToggleFullWidth={() => setConsoleFullWidth(fw => !fw)}
-          showWidthToggle={currentView === 'topology' || currentView === 'sliver'}
-          expanded={consoleExpanded}
-          onExpandedChange={setConsoleExpanded}
-          panelHeight={consoleHeight}
-          onPanelHeightChange={setConsoleHeight}
-          statusMessage={statusMessage}
-          loading={loading}
-          recipeConsole={recipeConsole}
-          recipeRunning={recipeRunning}
-          onClearRecipeConsole={() => setRecipeConsole([])}
-          sliceBootLogs={sliceBootLogs}
-          sliceBootRunning={sliceBootRunning}
-          onClearSliceBootLog={(sn) => setSliceBootLogs(prev => { const next = { ...prev }; delete next[sn]; return next; })}
-        />
-      </div>
+      {/* StatusBar — always visible, full width */}
+      <StatusBar
+        statusMessage={statusMessage}
+        loading={loading}
+        sliceState={sliceData?.state ?? ''}
+        errorCount={errors.length + (sliceData?.error_messages?.length ?? 0)}
+        validationErrorCount={validationIssues.filter(i => i.severity === 'error').length}
+        warnCount={validationIssues.filter(i => i.severity === 'warning').length}
+        terminalCount={terminalTabs.length}
+        recipeRunning={recipeRunning}
+        bootRunning={Object.values(sliceBootRunning).some(Boolean)}
+      />
 
       {/* Save Template Modal (slice or VM) */}
       {saveTemplateModal && (

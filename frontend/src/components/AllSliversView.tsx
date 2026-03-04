@@ -350,6 +350,19 @@ export default function AllSliversView({
           </button>
         )}
 
+        {/* Open Build Log */}
+        {hasSlices && sliceNames!.length === 1 && (
+          <button
+            className="graph-context-menu-item"
+            onClick={() => {
+              onContextAction({ type: 'open-boot-log', elements: [], sliceNames });
+              setMenu(null);
+            }}
+          >
+            {'\u2630'} Open Build Log
+          </button>
+        )}
+
         {/* Open Terminal */}
         {vmsWithIp.length > 0 && (
           <button

@@ -19,6 +19,7 @@
 }
 
 .ai-card {
+  cursor: pointer;
   background: var(--bg-secondary);
   border: 1px solid var(--border);
   border-radius: 10px;

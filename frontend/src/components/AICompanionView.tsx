@@ -147,7 +147,7 @@ export default function AICompanionView() {
                 : { cls: 'key-required', text: 'Key Required' };
 
             return (
-              <div className="ai-card" key={tool.id}>
+              <div className="ai-card" key={tool.id} onDoubleClick={() => { if (!tool.needsKey || ready) handleLaunch(tool); }}>
                 <div className="ai-card-header">
                   <div className={`ai-card-icon ${tool.iconClass}`}>{tool.icon}</div>
                   <div className="ai-card-name">{tool.name}</div>
