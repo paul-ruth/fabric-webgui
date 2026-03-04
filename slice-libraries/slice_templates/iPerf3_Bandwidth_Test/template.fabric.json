@@ -8,14 +8,19 @@
       "cores": 4,
       "ram": 8,
       "disk": 10,
-      "vm_template": "iPerf3 Test Node",
+      "image": "default_ubuntu_22",
       "boot_config": {
         "uploads": [],
         "commands": [
           {
-            "id": "run-server",
-            "command": "sudo docker run -d --name iperf3-server --restart always --net host networkstatic/iperf3 -s",
-            "order": 10
+            "id": "1",
+            "command": "sudo apt-get update && sudo apt-get install -y iperf3",
+            "order": 0
+          },
+          {
+            "id": "2",
+            "command": "nohup iperf3 -s -D",
+            "order": 1
           }
         ],
         "network": []
@@ -33,7 +38,18 @@
       "cores": 4,
       "ram": 8,
       "disk": 10,
-      "vm_template": "iPerf3 Test Node",
+      "image": "default_ubuntu_22",
+      "boot_config": {
+        "uploads": [],
+        "commands": [
+          {
+            "id": "1",
+            "command": "sudo apt-get update && sudo apt-get install -y iperf3",
+            "order": 0
+          }
+        ],
+        "network": []
+      },
       "components": [
         {
           "name": "FABNET",

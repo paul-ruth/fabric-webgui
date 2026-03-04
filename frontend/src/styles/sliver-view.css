@@ -452,3 +452,258 @@
   animation: sliver-spin 1s linear infinite;
   margin-right: 3px;
 }
+
+/* ====== AllSliversView styles ====== */
+
+.all-slivers-view {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  font-family: 'Montserrat', sans-serif;
+  margin-left: 28px;
+  margin-right: 28px;
+}
+
+/* Action / filter bar */
+.sliver-action-bar {
+  display: flex;
+  align-items: center;
+  padding: 6px 10px;
+  border-bottom: 1px solid #d0d7de;
+  background: #f6f8fa;
+  flex-shrink: 0;
+  gap: 8px;
+}
+
+.sliver-action-filter {
+  flex: 1;
+  padding: 5px 10px;
+  border: 1px solid #d0d7de;
+  border-radius: 4px;
+  font-size: 12px;
+  font-family: 'Montserrat', sans-serif;
+  background: #fff;
+  color: #24292f;
+  outline: none;
+}
+.sliver-action-filter:focus {
+  border-color: #5798bc;
+  box-shadow: 0 0 0 2px rgba(87, 152, 188, 0.2);
+}
+
+.sliver-selection-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.sliver-selection-count {
+  font-size: 11px;
+  font-weight: 600;
+  color: #5798bc;
+  white-space: nowrap;
+}
+
+.sliver-action-btn {
+  padding: 3px 10px;
+  border: 1px solid #d0d7de;
+  border-radius: 4px;
+  background: #fff;
+  color: #24292f;
+  font-size: 11px;
+  font-family: 'Montserrat', sans-serif;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.sliver-action-btn:hover {
+  background: #f0f3f6;
+}
+.sliver-action-btn.danger {
+  color: #e25241;
+  border-color: #e25241;
+}
+.sliver-action-btn.danger:hover {
+  background: rgba(226, 82, 65, 0.08);
+}
+.sliver-action-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Slice rows */
+.slice-row {
+  font-weight: 600;
+  background: #f9fafb;
+}
+.slice-row:hover {
+  background: #f0f6fc !important;
+}
+
+.slice-name-cell {
+  cursor: pointer;
+  color: #1f6a8c;
+}
+.slice-name-cell:hover {
+  text-decoration: underline;
+}
+
+.slice-expand-col {
+  width: 28px;
+  min-width: 28px;
+  max-width: 28px;
+  text-align: center;
+  padding: 4px 2px !important;
+}
+
+.slice-expand-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 10px;
+  color: #57606a;
+  padding: 2px 4px;
+  border-radius: 3px;
+  transition: transform 0.15s ease;
+  display: inline-block;
+}
+.slice-expand-btn:hover {
+  background: rgba(87, 152, 188, 0.1);
+  color: #1f6a8c;
+}
+.slice-expand-btn.expanded {
+  transform: rotate(90deg);
+}
+
+.slice-refresh-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 12px;
+  color: #8b949e;
+  padding: 0 4px;
+  margin-left: 6px;
+  border-radius: 3px;
+}
+.slice-refresh-btn:hover {
+  color: #5798bc;
+  background: rgba(87, 152, 188, 0.1);
+}
+.slice-refresh-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  animation: sliver-spin 1s linear infinite;
+}
+
+.sliver-error-count {
+  color: #e25241;
+  font-weight: 600;
+}
+
+/* Section headers inside expanded slice */
+.sliver-section-header td {
+  background: #eef2f6;
+  padding: 4px 10px !important;
+  font-size: 11px;
+  font-weight: 600;
+  color: #57606a;
+  border-bottom: 1px solid #d0d7de;
+}
+
+/* Indented sliver rows */
+.sliver-row {
+  font-weight: 400;
+}
+.sliver-row td {
+  font-size: 11px;
+}
+td.sliver-indent {
+  padding-left: 24px !important;
+}
+
+/* All-sliver table column tweaks */
+.all-sliver-table th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+
+/* ---- Dark theme: AllSliversView ---- */
+[data-theme="dark"] .all-slivers-view {
+  background: #0f0f23;
+}
+
+[data-theme="dark"] .sliver-action-bar {
+  background: #1a1a2e;
+  border-bottom-color: #3a3a5a;
+}
+
+[data-theme="dark"] .sliver-action-filter {
+  background: #16213e;
+  border-color: #3a3a5a;
+  color: #e0e0e0;
+}
+[data-theme="dark"] .sliver-action-filter:focus {
+  border-color: #5798bc;
+  box-shadow: 0 0 0 2px rgba(87, 152, 188, 0.3);
+}
+
+[data-theme="dark"] .sliver-selection-count {
+  color: #5bb8d9;
+}
+
+[data-theme="dark"] .sliver-action-btn {
+  background: #16213e;
+  border-color: #3a3a5a;
+  color: #e0e0e0;
+}
+[data-theme="dark"] .sliver-action-btn:hover {
+  background: #1e2d4a;
+}
+[data-theme="dark"] .sliver-action-btn.danger {
+  color: #e87c6f;
+  border-color: #e87c6f;
+}
+
+[data-theme="dark"] .slice-row {
+  background: #16213e;
+}
+[data-theme="dark"] .slice-row:hover {
+  background: rgba(87, 152, 188, 0.12) !important;
+}
+
+[data-theme="dark"] .slice-name-cell {
+  color: #5bb8d9;
+}
+
+[data-theme="dark"] .slice-expand-btn {
+  color: #8888aa;
+}
+[data-theme="dark"] .slice-expand-btn:hover {
+  color: #5bb8d9;
+  background: rgba(87, 152, 188, 0.15);
+}
+
+[data-theme="dark"] .slice-refresh-btn {
+  color: #6a6a8a;
+}
+[data-theme="dark"] .slice-refresh-btn:hover {
+  color: #5bb8d9;
+}
+
+[data-theme="dark"] .sliver-error-count {
+  color: #e87c6f;
+}
+
+[data-theme="dark"] .sliver-section-header td {
+  background: #1a1a2e;
+  border-bottom-color: #3a3a5a;
+  color: #8888aa;
+}
+
+[data-theme="dark"] .sliver-row td {
+  color: #e0e0e0;
+}

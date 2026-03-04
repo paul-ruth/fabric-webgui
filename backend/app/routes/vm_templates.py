@@ -173,6 +173,7 @@ def _seed_if_needed() -> None:
         else:
             data["image"] = src_data["image"]
             data["boot_config"] = src_data["boot_config"]
+            data["version"] = src_data.get("version", "")
 
         with open(os.path.join(tmpl_dir, "vm-template.json"), "w") as f:
             json.dump(data, f, indent=2)

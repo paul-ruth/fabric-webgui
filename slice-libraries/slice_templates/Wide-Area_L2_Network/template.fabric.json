@@ -35,6 +35,8 @@
     {
       "name": "wan-l2",
       "type": "L2STS",
+      "subnet": "10.10.1.0/24",
+      "ip_mode": "auto",
       "interfaces": [
         "node-a-nic1-p1",
         "node-b-nic1-p1"

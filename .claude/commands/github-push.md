@@ -18,13 +18,17 @@ If `$ARGUMENTS` is provided, use it as the commit message. Otherwise, analyze th
    - Always append the co-author line.
 
 4. **Create a GPG-signed commit**
-   - Pre-load the GPG passphrase into the agent so signing doesn't hang waiting for input:
+   - Create a temporary GPG wrapper that feeds the passphrase via loopback mode:
      ```bash
-     gpg-connect-agent "PRESET_PASSPHRASE $(gpg --list-secret-keys --with-keygrip --with-colons 2>/dev/null | awk -F: '/^grp/ {print $10; exit}') -1 $(cat ~/.gnupg_passphrase | od -An -tx1 | tr -d ' \n' | tr 'a-f' 'A-F')" /bye
+     cat > /tmp/gpg-sign.sh << 'SCRIPT'
+     #!/bin/bash
+     gpg --batch --pinentry-mode loopback --passphrase-file ~/.gnupg_passphrase "$@"
+     SCRIPT
+     chmod +x /tmp/gpg-sign.sh
      ```
-   - Then commit with signing:
+   - Then commit with signing using the wrapper:
      ```bash
-     git commit -S -m "<message>"
+     git -c gpg.program=/tmp/gpg-sign.sh commit -S -m "<message>"
      ```
    - If the commit fails, diagnose and report the error. Do NOT retry with `--no-gpg-sign`.
 

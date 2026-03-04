@@ -400,3 +400,18 @@
 .recipe-console-error {
   color: var(--fabric-coral, #e25241);
 }
+
+/* Recipe star toggle */
+.recipe-star-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 16px;
+  color: #ff8542;
+  padding: 0 2px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+.recipe-star-btn:hover {
+  transform: scale(1.2);
+}

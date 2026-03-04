@@ -76,6 +76,8 @@ _draft_slices: dict[str, Any] = {}
 _draft_is_new: dict[str, bool] = {}
 # Track site group membership: slice_name -> {node_name: "@group"}
 _draft_site_groups: dict[str, dict[str, str]] = {}
+# Track IP hints for L3 networks: slice_name -> {net_name -> {iface_name -> hint}}
+_draft_ip_hints: dict[str, dict[str, dict[str, dict]]] = {}
 # Track which project a draft belongs to
 _draft_project_id: dict[str, str] = {}
 
@@ -107,6 +109,9 @@ def _persist_draft(name: str, slice_obj: Any) -> None:
         groups = _draft_site_groups.get(name, {})
         if groups:
             meta["site_groups"] = groups
+        ip_hints = _draft_ip_hints.get(name, {})
+        if ip_hints:
+            meta["ip_hints"] = ip_hints
         pid = _draft_project_id.get(name, os.environ.get("FABRIC_PROJECT_ID", ""))
         if pid:
             meta["project_id"] = pid
@@ -152,6 +157,7 @@ def _load_persistent_drafts() -> None:
         # Read metadata
         name = entry  # fallback to dir name
         groups: dict[str, str] = {}
+        ip_hints: dict[str, dict[str, dict]] = {}
         draft_pid = ""
         if os.path.isfile(meta_path):
             try:
@@ -159,6 +165,7 @@ def _load_persistent_drafts() -> None:
                     meta = json.load(f)
                 name = meta.get("name", entry)
                 groups = meta.get("site_groups", {})
+                ip_hints = meta.get("ip_hints", {})
                 draft_pid = meta.get("project_id", "")
             except Exception:
                 pass
@@ -178,6 +185,8 @@ def _load_persistent_drafts() -> None:
             _draft_is_new[name] = True
             if groups:
                 _draft_site_groups[name] = groups
+            if ip_hints:
+                _draft_ip_hints[name] = ip_hints
             if draft_pid:
                 _draft_project_id[name] = draft_pid
             register_slice(name, state="Draft", project_id=draft_pid)
@@ -202,6 +211,7 @@ def _pop_draft(name: str) -> tuple[Any | None, bool]:
         obj = _draft_slices.pop(name, None)
         is_new = _draft_is_new.pop(name, True)
         _draft_site_groups.pop(name, None)
+        _draft_ip_hints.pop(name, None)
         _draft_project_id.pop(name, None)
         return obj, is_new
 
@@ -238,6 +248,26 @@ def _get_site_groups(name: str) -> dict[str, str]:
         return dict(_draft_site_groups.get(name, {}))
 
 
+def _store_ip_hints(name: str, net_name: str, hints: dict[str, dict]) -> None:
+    """Store IP hints for a specific network in a slice."""
+    with _draft_lock:
+        if name not in _draft_ip_hints:
+            _draft_ip_hints[name] = {}
+        _draft_ip_hints[name][net_name] = hints
+
+
+def _get_ip_hints(name: str, net_name: str) -> dict[str, dict]:
+    """Get IP hints for a specific network (empty dict if none)."""
+    with _draft_lock:
+        return dict(_draft_ip_hints.get(name, {}).get(net_name, {}))
+
+
+def _get_all_ip_hints(name: str) -> dict[str, dict[str, dict]]:
+    """Get all IP hints for a slice (net_name → {iface → hint})."""
+    with _draft_lock:
+        return {k: dict(v) for k, v in _draft_ip_hints.get(name, {}).items()}
+
+
 def _get_slice_obj(name: str):
     """Return the slice object — draft first, then UUID lookup, then name."""
     draft = _get_draft(name)
@@ -270,6 +300,13 @@ def _serialize(slice_obj, dirty: bool = False) -> dict[str, Any]:
             grp = site_groups.get(node["name"])
             if grp:
                 node["site_group"] = grp
+    # Annotate networks with IP hints
+    all_hints = _get_all_ip_hints(name)
+    if all_hints:
+        for net in data.get("networks", []):
+            net_hints = all_hints.get(net["name"])
+            if net_hints:
+                net["ip_hints"] = net_hints
     # Re-persist new drafts to disk when modified
     if dirty and is_new:
         _persist_draft(name, slice_obj)
@@ -728,10 +765,18 @@ async def submit_slice(slice_name: str) -> dict[str, Any]:
                 node_defs = []
                 for node in data.get("nodes", []):
                     grp = site_groups.get(node["name"])
-                    if grp:
-                        site = grp  # pass @group tag for group resolution
+                    current_site = node.get("site", "")
+
+                    if current_site and not current_site.startswith("@") and current_site != "auto":
+                        # User explicitly set this site (or it was resolved
+                        # earlier and the user kept it) — honour it as-is.
+                        site = current_site
+                    elif grp:
+                        # Still in a group with no concrete site — pass @group for resolution
+                        site = grp
                     else:
-                        site = node.get("site", "auto")
+                        # No site set — auto-resolve
+                        site = "auto"
                     node_defs.append({
                         "name": node["name"],
                         "site": site,
@@ -743,18 +788,21 @@ async def submit_slice(slice_name: str) -> dict[str, Any]:
 
                 resolved_defs, _ = resolve_sites(node_defs, fresh_sites)
 
-                # Apply resolved sites to draft nodes
+                # Apply resolved sites to draft nodes — only if the site
+                # actually changed (skip user-defined mappings).
                 for nd in resolved_defs:
                     try:
                         fab_node = draft.get_node(name=nd["name"])
-                        fab_node.set_site(nd["site"])
-                        logger.info("Submit: node '%s' -> site '%s'", nd["name"], nd["site"])
+                        old_site = str(fab_node.get_site()) if fab_node.get_site() else ""
+                        if nd["site"] and nd["site"] != old_site:
+                            fab_node.set_site(nd["site"])
+                            logger.info("Submit: node '%s' -> site '%s'", nd["name"], nd["site"])
                     except Exception as ex:
                         logger.warning("Submit re-resolve: could not set site for %s: %s", nd["name"], ex)
 
                 submit_error = None
                 try:
-                    draft.submit()
+                    draft.submit(wait=False)
                 except Exception as e:
                     submit_error = e
                     logger.warning("Submit: draft.submit() threw for '%s': %s", slice_name, e)
@@ -1142,6 +1190,55 @@ def validate_slice(slice_name: str) -> dict[str, Any]:
                         "remedy": "Connect the interface to a network, or remove the component if unused.",
                     })
 
+    # Validate IP hints for L3 networks
+    l3_net_types = {"FABNetv4", "FABNetv6", "FABNetv4Ext", "FABNetv6Ext",
+                    "IPv4", "IPv6", "IPv4Ext", "IPv6Ext"}
+    all_hints = _get_all_ip_hints(slice_name)
+    for net in networks:
+        net_name = net.get("name", "?")
+        net_type = net.get("type", "")
+        hints = all_hints.get(net_name, {})
+        if not hints:
+            continue
+        if net_type not in l3_net_types:
+            issues.append({
+                "severity": "error",
+                "message": f"IP hints on '{net_name}' ({net_type}) are only valid for FABNetv4/v6 networks.",
+                "remedy": f"Remove IP hints from non-L3 network '{net_name}'.",
+            })
+            continue
+        seen_octets: dict[int, str] = {}
+        for iface_name, hint in hints.items():
+            octet = hint.get("last_octet")
+            if octet is not None:
+                if not isinstance(octet, int) or not (1 <= octet <= 254):
+                    issues.append({
+                        "severity": "error",
+                        "message": f"IP hint for '{iface_name}' on '{net_name}': last_octet {octet} must be 1-254.",
+                        "remedy": f"Fix the last octet value for '{iface_name}'.",
+                    })
+                elif octet in seen_octets:
+                    issues.append({
+                        "severity": "error",
+                        "message": f"Duplicate last_octet {octet} on '{net_name}': '{seen_octets[octet]}' and '{iface_name}'.",
+                        "remedy": f"Choose unique last octets for each interface on '{net_name}'.",
+                    })
+                else:
+                    seen_octets[octet] = iface_name
+            range_str = hint.get("last_octet_range", "")
+            if range_str:
+                try:
+                    parts = range_str.split("-")
+                    lo, hi = int(parts[0]), int(parts[1])
+                    if not (1 <= lo <= 254 and 1 <= hi <= 254 and lo <= hi):
+                        raise ValueError("out of range")
+                except (ValueError, IndexError):
+                    issues.append({
+                        "severity": "error",
+                        "message": f"IP hint for '{iface_name}' on '{net_name}': invalid range '{range_str}'.",
+                        "remedy": "Use format 'LOW-HIGH' where both are 1-254 and LOW <= HIGH.",
+                    })
+
     return {
         "valid": len([i for i in issues if i["severity"] == "error"]) == 0,
         "issues": issues,
@@ -1376,6 +1473,164 @@ def remove_network(slice_name: str, net_name: str) -> dict[str, Any]:
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# --- IP Hints for L3 (FABNetv4/v6) networks ---
+
+class IpHintsRequest(BaseModel):
+    hints: Dict[str, Dict[str, Any]]  # {iface_name: {last_octet?: int, last_octet_range?: str}}
+
+
+@router.get("/slices/{slice_name}/networks/{net_name}/ip-hints")
+def get_ip_hints(slice_name: str, net_name: str) -> dict[str, Any]:
+    """Get IP hints for a L3 network."""
+    return {"network": net_name, "hints": _get_ip_hints(slice_name, net_name)}
+
+
+@router.put("/slices/{slice_name}/networks/{net_name}/ip-hints")
+def set_ip_hints(slice_name: str, net_name: str, req: IpHintsRequest) -> dict[str, Any]:
+    """Save IP hints for a L3 network."""
+    _store_ip_hints(slice_name, net_name, req.hints)
+    # Re-persist draft if it's a new draft
+    if _is_draft(slice_name) and _is_new_draft(slice_name):
+        draft = _get_draft(slice_name)
+        if draft:
+            _persist_draft(slice_name, draft)
+    return {"network": net_name, "hints": req.hints, "status": "ok"}
+
+
+@router.post("/slices/{slice_name}/networks/{net_name}/apply-ip-hints")
+async def apply_ip_hints(slice_name: str, net_name: str) -> dict[str, Any]:
+    """Compute IPs from subnet + hints, write boot config entries.
+
+    For active slices where FABNetv4 subnet is already assigned.
+    """
+    def _do():
+        slice_obj = _get_slice_obj(slice_name)
+        data = slice_to_dict(slice_obj)
+
+        # Find the network
+        net_data = None
+        for n in data.get("networks", []):
+            if n["name"] == net_name:
+                net_data = n
+                break
+        if not net_data:
+            raise HTTPException(status_code=404, detail=f"Network '{net_name}' not found")
+
+        subnet_str = net_data.get("subnet", "")
+        if not subnet_str:
+            raise HTTPException(status_code=400, detail="Network has no subnet assigned yet")
+
+        # Parse the subnet to extract prefix
+        import ipaddress
+        try:
+            network = ipaddress.IPv4Network(subnet_str, strict=False)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Invalid subnet '{subnet_str}': {e}")
+
+        prefix_parts = str(network.network_address).rsplit(".", 1)
+        prefix = prefix_parts[0]  # e.g. "10.128.1"
+
+        hints = _get_ip_hints(slice_name, net_name)
+        if not hints:
+            return {"network": net_name, "assignments": {}, "message": "No hints configured"}
+
+        assignments: dict[str, str] = {}
+        used_octets: set[int] = set()
+
+        # Collect gateway octet to avoid conflicts
+        gw = net_data.get("gateway", "")
+        if gw:
+            try:
+                gw_octet = int(gw.rsplit(".", 1)[1])
+                used_octets.add(gw_octet)
+            except (ValueError, IndexError):
+                pass
+
+        # Collect already-assigned IPs to avoid conflicts
+        for iface in net_data.get("interfaces", []):
+            ip = iface.get("ip_addr", "")
+            if ip:
+                try:
+                    octet = int(ip.rsplit(".", 1)[1])
+                    used_octets.add(octet)
+                except (ValueError, IndexError):
+                    pass
+
+        # First pass: fixed last_octet assignments
+        for iface_name, hint in hints.items():
+            octet = hint.get("last_octet")
+            if octet is not None:
+                if not (1 <= octet <= 254):
+                    continue
+                assignments[iface_name] = f"{prefix}.{octet}"
+                used_octets.add(octet)
+
+        # Second pass: last_octet_range assignments
+        for iface_name, hint in hints.items():
+            if iface_name in assignments:
+                continue
+            range_str = hint.get("last_octet_range", "")
+            if not range_str:
+                continue
+            try:
+                parts = range_str.split("-")
+                lo, hi = int(parts[0]), int(parts[1])
+            except (ValueError, IndexError):
+                continue
+            lo = max(1, lo)
+            hi = min(254, hi)
+            for candidate in range(lo, hi + 1):
+                if candidate not in used_octets:
+                    assignments[iface_name] = f"{prefix}.{candidate}"
+                    used_octets.add(candidate)
+                    break
+
+        # Write boot config network entries for each assignment
+        cidr_prefix = str(network.prefixlen)
+        for iface_name, ip_str in assignments.items():
+            # Find the node this interface belongs to
+            node_name = None
+            for iface in net_data.get("interfaces", []):
+                if iface["name"] == iface_name:
+                    node_name = iface.get("node_name")
+                    break
+            if not node_name:
+                continue
+
+            try:
+                fab_node = slice_obj.get_node(name=node_name)
+                ud = dict(fab_node.get_user_data())
+                bc = ud.get("boot_config", {"uploads": [], "commands": [], "network": []})
+                if not isinstance(bc, dict):
+                    bc = {"uploads": [], "commands": [], "network": []}
+
+                # Remove any existing entry for this interface
+                bc["network"] = [e for e in bc.get("network", [])
+                                 if e.get("iface") != iface_name]
+
+                bc["network"].append({
+                    "id": f"ip-hint-{iface_name}",
+                    "iface": iface_name,
+                    "mode": "manual",
+                    "ip": f"{ip_str}/{cidr_prefix}",
+                    "order": 100,
+                })
+                ud["boot_config"] = bc
+                fab_node.set_user_data(ud)
+            except Exception as ex:
+                logger.warning("apply_ip_hints: failed to set boot config for %s/%s: %s",
+                               node_name, iface_name, ex)
+
+        return {"network": net_name, "assignments": assignments, "status": "ok"}
+
+    try:
+        return await asyncio.to_thread(_do)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # --- Post-boot config ---
 
 @router.put("/slices/{slice_name}/nodes/{node_name}/post-boot")
@@ -1397,6 +1652,35 @@ def set_post_boot_config(slice_name: str, node_name: str, req: PostBootConfigReq
             raise HTTPException(status_code=500, detail=str(e2))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/slices/{slice_name}/post-boot-config")
+async def run_post_boot_config(slice_name: str) -> dict[str, Any]:
+    """Run FABlib's native post_boot_config() on a submitted slice.
+
+    This configures L3 networking (hostnames, IPs, routes, VLAN interfaces)
+    and any other post-boot tasks that FABlib manages internally.
+    Should be called after the slice reaches StableOK/Active state.
+    """
+    def _do():
+        slice_obj = _get_slice_obj(slice_name)
+        state = str(slice_obj.get_state()) if slice_obj.get_state() else ""
+        if state not in ("StableOK", "Active"):
+            logger.warning("post_boot_config: slice '%s' in state '%s', expected StableOK/Active", slice_name, state)
+        logger.info("post_boot_config: running on slice '%s' (state=%s)", slice_name, state)
+        try:
+            slice_obj.post_boot_config()
+            logger.info("post_boot_config: completed successfully for '%s'", slice_name)
+        except Exception as e:
+            logger.error("post_boot_config: failed for '%s': %s", slice_name, e)
+            raise
+        return _serialize(slice_obj)
+    try:
+        return await asyncio.to_thread(_do)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"post_boot_config failed: {e}")
 
 
 # --- Clone slice ---
@@ -1524,8 +1808,16 @@ async def clone_slice(slice_name: str, new_name: str) -> dict[str, Any]:
                      new_name, len(model_data["nodes"]), len(model_data["networks"]))
         fablib = get_fablib()
 
-        # Resolve sites (@group and auto) with fresh availability data
-        model_data["nodes"], clone_groups = resolve_sites(model_data["nodes"], get_cached_sites())
+        # Extract @group tags without resolving — defer until user action or submit
+        clone_groups: dict[str, str] = {}
+        for nd in model_data["nodes"]:
+            site = nd.get("site", "")
+            if isinstance(site, str) and site.startswith("@"):
+                clone_groups[nd["name"]] = site
+                nd["site"] = ""  # Leave unset
+            elif not site or site == "auto":
+                nd["site"] = ""  # Leave unset
+            # else: explicit site stays as-is
 
         new_slice = fablib.new_slice(name=new_name)
 
@@ -1654,6 +1946,22 @@ async def clone_slice(slice_name: str, new_name: str) -> dict[str, Any]:
         # Store resolved group membership for the clone
         if clone_groups:
             _store_site_groups(new_name, clone_groups)
+        # Carry over IP hints from source slice
+        src_all_hints = _get_all_ip_hints(slice_name)
+        for net_name, net_hints in src_all_hints.items():
+            _store_ip_hints(new_name, net_name, net_hints)
+
+        # Persist boot configs to disk so they survive the submit cycle
+        from app.routes.files import _save_boot_config
+        for node in new_slice.get_nodes():
+            try:
+                ud = node.get_user_data()
+                bc = ud.get("boot_config")
+                if bc and isinstance(bc, dict):
+                    _save_boot_config(new_name, node.get_name(), bc)
+            except Exception:
+                pass
+
         result = _serialize(new_slice)
         logger.info("Clone: successfully created draft '%s'", new_name)
         return result
@@ -1720,6 +2028,7 @@ def build_slice_model(slice_name: str) -> dict:
             })
         model["nodes"].append(node_model)
 
+    all_hints = _get_all_ip_hints(slice_name)
     for net in data.get("networks", []):
         net_model: dict[str, Any] = {
             "name": net["name"],
@@ -1738,6 +2047,10 @@ def build_slice_model(slice_name: str) -> dict:
             net_model["interface_ips"] = {
                 i["name"]: i["ip_addr"] for i in ifaces if i.get("ip_addr")
             }
+        # Export IP hints if present
+        net_hints = all_hints.get(net["name"])
+        if net_hints:
+            net_model["ip_hints"] = net_hints
         model["networks"].append(net_model)
 
     return model
@@ -1765,9 +2078,17 @@ def import_slice(model: SliceModelImport) -> dict[str, Any]:
         fablib = get_fablib()
         slice_obj = fablib.new_slice(name=model.name)
 
-        # --- Resolve site references (@group, auto) using resource availability ---
+        # --- Extract @group tags without resolving — defer until user action or submit ---
         node_defs = [dict(nd) for nd in model.nodes]
-        node_defs, node_groups = resolve_sites(node_defs, get_cached_sites())
+        node_groups: dict[str, str] = {}
+        for nd in node_defs:
+            site = nd.get("site", "")
+            if isinstance(site, str) and site.startswith("@"):
+                node_groups[nd["name"]] = site
+                nd["site"] = ""  # Leave unset
+            elif not site or site == "auto":
+                nd["site"] = ""  # Leave unset
+            # else: explicit site stays as-is
 
         # Add nodes and components
         for node_def in node_defs:
@@ -1891,6 +2212,24 @@ def import_slice(model: SliceModelImport) -> dict[str, Any]:
         _store_draft(model.name, slice_obj, is_new=True)
         if node_groups:
             _store_site_groups(model.name, node_groups)
+        # Restore IP hints from imported model
+        for net_def in model.networks:
+            net_hints = net_def.get("ip_hints")
+            if net_hints and isinstance(net_hints, dict):
+                _store_ip_hints(model.name, net_def["name"], net_hints)
+
+        # Persist boot configs to disk so they survive the submit cycle
+        # (FABlib user_data may not round-trip through FABRIC control framework)
+        from app.routes.files import _save_boot_config
+        for node in slice_obj.get_nodes():
+            try:
+                ud = node.get_user_data()
+                bc = ud.get("boot_config")
+                if bc and isinstance(bc, dict):
+                    _save_boot_config(model.name, node.get_name(), bc)
+            except Exception:
+                pass
+
         return _serialize(slice_obj)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

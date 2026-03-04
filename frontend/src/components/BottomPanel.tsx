@@ -28,6 +28,11 @@ export interface RecipeConsoleLine {
   message: string;
 }
 
+export interface BootConsoleLine {
+  type: string;   // 'node' | 'step' | 'output' | 'error'
+  message: string;
+}
+
 interface BottomPanelProps {
   terminals: TerminalTab[];
   onCloseTerminal: (id: string) => void;
@@ -53,6 +58,10 @@ interface BottomPanelProps {
   recipeConsole: RecipeConsoleLine[];
   recipeRunning: boolean;
   onClearRecipeConsole: () => void;
+  // Boot config console
+  bootConsole: BootConsoleLine[];
+  bootRunning: boolean;
+  onClearBootConsole: () => void;
 }
 
 const TERM_THEME = {
@@ -78,7 +87,7 @@ const TERM_THEME = {
   brightWhite: '#ffffff',
 };
 
-export default function BottomPanel({ terminals, onCloseTerminal, validationIssues, validationValid, sliceState, dirty, errors, onClearErrors, sliceErrors, bootConfigErrors, onClearBootConfigErrors, fullWidth = true, onToggleFullWidth, showWidthToggle = false, expanded, onExpandedChange, panelHeight, onPanelHeightChange, statusMessage, loading, recipeConsole, recipeRunning, onClearRecipeConsole }: BottomPanelProps) {
+export default function BottomPanel({ terminals, onCloseTerminal, validationIssues, validationValid, sliceState, dirty, errors, onClearErrors, sliceErrors, bootConfigErrors, onClearBootConfigErrors, fullWidth = true, onToggleFullWidth, showWidthToggle = false, expanded, onExpandedChange, panelHeight, onPanelHeightChange, statusMessage, loading, recipeConsole, recipeRunning, onClearRecipeConsole, bootConsole, bootRunning, onClearBootConsole }: BottomPanelProps) {
   const setExpanded = onExpandedChange;
   const setPanelHeight = onPanelHeightChange;
   const [activeTab, setActiveTab] = useState('validation');
@@ -131,6 +140,16 @@ export default function BottomPanel({ terminals, onCloseTerminal, validationIssu
     prevRecipeRunning.current = recipeRunning;
   }, [recipeRunning, setExpanded]);
 
+  // Auto-switch to boot config tab when execution starts
+  const prevBootRunning = useRef(bootRunning);
+  useEffect(() => {
+    if (bootRunning && !prevBootRunning.current) {
+      setActiveTab('boot-config');
+      setExpanded(true);
+    }
+    prevBootRunning.current = bootRunning;
+  }, [bootRunning, setExpanded]);
+
   // Auto-scroll recipe console
   const recipeConsoleEndRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -138,6 +157,14 @@ export default function BottomPanel({ terminals, onCloseTerminal, validationIssu
       recipeConsoleEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }
   }, [recipeConsole, activeTab]);
+
+  // Auto-scroll boot config console
+  const bootConsoleEndRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (activeTab === 'boot-config') {
+      bootConsoleEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [bootConsole, activeTab]);
 
   // If active tab was closed, switch to validation
   useEffect(() => {
@@ -148,6 +175,7 @@ export default function BottomPanel({ terminals, onCloseTerminal, validationIssu
       activeTab !== 'local-terminal' &&
       activeTab !== 'slice-errors' &&
       activeTab !== 'recipes' &&
+      activeTab !== 'boot-config' &&
       !terminals.find((t) => t.id === activeTab)
     ) {
       setActiveTab('validation');
@@ -204,6 +232,7 @@ export default function BottomPanel({ terminals, onCloseTerminal, validationIssu
           {termCount > 0 && <span className="bottom-panel-badge">{termCount} terminal{termCount !== 1 ? 's' : ''}</span>}
           {containerTermActive && <span className="bottom-panel-badge">local</span>}
           {recipeRunning && <span className="bottom-panel-badge warn">recipe running</span>}
+          {bootRunning && <span className="bottom-panel-badge warn">boot config running</span>}
         </span>
         <span className="bottom-panel-collapsed-actions">
           {statusMessage && (
@@ -269,6 +298,14 @@ export default function BottomPanel({ terminals, onCloseTerminal, validationIssu
           Recipes
           {recipeRunning && <span className="bp-tab-indicator warn" />}
           {!recipeRunning && recipeConsole.length > 0 && <span className="bp-tab-indicator ok" />}
+        </button>
+        <button
+          className={`bp-tab ${activeTab === 'boot-config' ? 'active' : ''}`}
+          onClick={() => setActiveTab('boot-config')}
+        >
+          Boot Config
+          {bootRunning && <span className="bp-tab-indicator warn" />}
+          {!bootRunning && bootConsole.length > 0 && <span className="bp-tab-indicator ok" />}
         </button>
         <button
           className={`bp-tab bp-tab-container ${activeTab === 'local-terminal' ? 'active' : ''}`}
@@ -346,6 +383,14 @@ export default function BottomPanel({ terminals, onCloseTerminal, validationIssu
             endRef={recipeConsoleEndRef}
           />
         </div>
+        <div style={{ display: activeTab === 'boot-config' ? 'flex' : 'none', flex: 1, overflow: 'hidden' }}>
+          <BootConsoleView
+            lines={bootConsole}
+            running={bootRunning}
+            onClear={onClearBootConsole}
+            endRef={bootConsoleEndRef}
+          />
+        </div>
         <div style={{ display: activeTab === 'local-terminal' ? 'flex' : 'none', flex: 1, overflow: 'hidden' }}>
           {containerTermActive && <ContainerTerminalView />}
         </div>
@@ -381,6 +426,41 @@ function RecipeConsoleView({ lines, running, onClear, endRef }: { lines: RecipeC
       <div className="bp-recipe-body">
         {lines.map((line, i) => (
           <div key={i} className={`bp-recipe-line bp-recipe-${line.type}`}>
+            {line.type === 'step'   && <span className="bp-recipe-icon">{'\u25B6'}</span>}
+            {line.type === 'output' && <span className="bp-recipe-icon">{' '}</span>}
+            {line.type === 'error'  && <span className="bp-recipe-icon">{'\u2716'}</span>}
+            <span>{line.message}</span>
+          </div>
+        ))}
+        <div ref={endRef} />
+      </div>
+    </div>
+  );
+}
+
+// --- Boot Config Console View ---
+function BootConsoleView({ lines, running, onClear, endRef }: { lines: BootConsoleLine[]; running: boolean; onClear: () => void; endRef: React.RefObject<HTMLDivElement> }) {
+  if (lines.length === 0) {
+    return (
+      <div className="bp-validation-container">
+        <div className="bp-validation-empty">No boot config output. Run boot config from the Editor panel to see execution output here.</div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="bp-recipe-console">
+      <div className="bp-recipe-header">
+        <span>{running ? 'Boot config running...' : 'Boot config complete'}</span>
+        {!running && (
+          <button className="bp-errors-clear" onClick={onClear}>Clear</button>
+        )}
+        {running && <span className="bp-recipe-pulse" />}
+      </div>
+      <div className="bp-recipe-body">
+        {lines.map((line, i) => (
+          <div key={i} className={`bp-recipe-line bp-recipe-${line.type}`}>
+            {line.type === 'node'   && <span className="bp-recipe-icon">{'\u25A0'}</span>}
             {line.type === 'step'   && <span className="bp-recipe-icon">{'\u25B6'}</span>}
             {line.type === 'output' && <span className="bp-recipe-icon">{' '}</span>}
             {line.type === 'error'  && <span className="bp-recipe-icon">{'\u2716'}</span>}

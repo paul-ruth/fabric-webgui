@@ -133,13 +133,25 @@ def _seed_if_needed() -> None:
 
         os.makedirs(recipe_dir, exist_ok=True)
 
+        # Preserve user-set starred preference across re-seeds
+        prev_starred = True
+        prev_recipe_path = os.path.join(recipe_dir, "recipe.json")
+        if os.path.isfile(prev_recipe_path):
+            try:
+                with open(prev_recipe_path) as f:
+                    prev_starred = json.load(f).get("starred", True)
+            except Exception:
+                pass
+
         with open(os.path.join(builtin_dir, "recipe.json")) as f:
             src_data = json.load(f)
 
         data = {
             "name": src_data["name"],
+            "version": src_data.get("version", ""),
             "description": src_data.get("description", ""),
             "builtin": True,
+            "starred": prev_starred,
             "image_patterns": src_data.get("image_patterns", {}),
             "steps": src_data.get("steps", []),
             "post_actions": src_data.get("post_actions", []),
@@ -192,9 +204,11 @@ def list_recipes() -> list[dict[str, Any]]:
                     data = json.load(f)
                 results.append({
                     "name": data.get("name", entry),
+                    "version": data.get("version", ""),
                     "description": data.get("description", ""),
                     "image_patterns": data.get("image_patterns", {}),
                     "builtin": data.get("builtin", False),
+                    "starred": data.get("starred", True),
                     "dir_name": entry,
                 })
             except Exception:
@@ -214,6 +228,26 @@ def get_recipe(name: str) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail=f"Recipe '{name}' not found")
     with open(recipe_path) as f:
         data = json.load(f)
+    data["dir_name"] = safe
+    return data
+
+
+@router.patch("/{name}")
+def update_recipe(name: str, body: dict[str, Any]) -> dict[str, Any]:
+    """Update mutable recipe fields (currently only 'starred')."""
+    _seed_if_needed()
+    safe = _sanitize_name(name)
+    rdir = _recipes_dir()
+    recipe_dir = _validate_path(rdir, safe)
+    recipe_path = os.path.join(recipe_dir, "recipe.json")
+    if not os.path.isfile(recipe_path):
+        raise HTTPException(status_code=404, detail=f"Recipe '{name}' not found")
+    with open(recipe_path) as f:
+        data = json.load(f)
+    if "starred" in body:
+        data["starred"] = bool(body["starred"])
+    with open(recipe_path, "w") as f:
+        json.dump(data, f, indent=2)
     data["dir_name"] = safe
     return data
 

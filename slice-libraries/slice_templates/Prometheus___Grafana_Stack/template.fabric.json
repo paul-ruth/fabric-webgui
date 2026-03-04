@@ -8,19 +8,14 @@
       "cores": 4,
       "ram": 16,
       "disk": 50,
-      "image": "default_rocky_8",
+      "image": "default_ubuntu_22",
       "boot_config": {
         "uploads": [],
         "commands": [
           {
             "id": "1",
-            "command": "chmod +x ~/tools/*.sh && ~/tools/install-docker.sh",
+            "command": "chmod +x ~/tools/*.sh && ~/tools/setup-monitor.sh",
             "order": 0
-          },
-          {
-            "id": "2",
-            "command": "~/tools/setup-monitor.sh",
-            "order": 1
           }
         ],
         "network": []
@@ -33,24 +28,19 @@
       ]
     },
     {
-      "name": "target1",
+      "name": "worker1",
       "site": "@cluster",
       "cores": 2,
       "ram": 8,
       "disk": 10,
-      "image": "default_rocky_8",
+      "image": "default_ubuntu_22",
       "boot_config": {
         "uploads": [],
         "commands": [
           {
             "id": "1",
-            "command": "chmod +x ~/tools/*.sh && ~/tools/install-docker.sh",
+            "command": "chmod +x ~/tools/*.sh && ~/tools/setup-exporter.sh",
             "order": 0
-          },
-          {
-            "id": "2",
-            "command": "~/tools/setup-exporter.sh",
-            "order": 1
           }
         ],
         "network": []
@@ -63,24 +53,19 @@
       ]
     },
     {
-      "name": "target2",
+      "name": "worker2",
       "site": "@cluster",
       "cores": 2,
       "ram": 8,
       "disk": 10,
-      "image": "default_rocky_8",
+      "image": "default_ubuntu_22",
       "boot_config": {
         "uploads": [],
         "commands": [
           {
             "id": "1",
-            "command": "chmod +x ~/tools/*.sh && ~/tools/install-docker.sh",
+            "command": "chmod +x ~/tools/*.sh && ~/tools/setup-exporter.sh",
             "order": 0
-          },
-          {
-            "id": "2",
-            "command": "~/tools/setup-exporter.sh",
-            "order": 1
           }
         ],
         "network": []
@@ -99,8 +84,8 @@
       "type": "FABNetv4",
       "interfaces": [
         "monitor-FABNET-p1",
-        "target1-FABNET-p1",
-        "target2-FABNET-p1"
+        "worker1-FABNET-p1",
+        "worker2-FABNET-p1"
       ]
     }
   ]

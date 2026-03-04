@@ -85,7 +85,7 @@ const gettingStarted: TourDef = {
       id: 'load-template',
       title: 'Load a Template',
       content:
-        'Open the Slice Templates panel and find the "Hello FABRIC" template. Click "Load" to create a new draft slice with a pre-built topology. Templates give you a quick starting point for experiments.',
+        'Open the Slice Templates panel and find the "Hello, FABRIC" template. Click "Load" to create a new draft slice with a pre-built topology. Templates give you a quick starting point for experiments.',
       targetSelector: '.template-panel',
       requiredView: 'main',
       tooltipPosition: 'left',

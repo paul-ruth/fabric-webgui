@@ -1,6 +1,6 @@
 /** API client for the FABRIC Web GUI backend. */
 
-import type { SliceSummary, SliceData, SiteInfo, SiteDetail, LinkInfo, ComponentModel, ConfigStatus, ProjectsResponse, ValidationResult, SiteMetrics, LinkMetrics, FileEntry, ProvisionRule, BootConfig, BootExecResult, SliceKeySet, VMTemplateSummary, VMTemplateDetail, VMTemplateVariantDetail, HostInfo, ProjectDetails, ToolFile, RecipeSummary, RecipeExecResult } from '../types/fabric';
+import type { SliceSummary, SliceData, SiteInfo, SiteDetail, LinkInfo, ComponentModel, ConfigStatus, ProjectsResponse, ValidationResult, SiteMetrics, LinkMetrics, FileEntry, ProvisionRule, BootConfig, BootExecResult, SliceKeySet, VMTemplateSummary, VMTemplateDetail, VMTemplateVariantDetail, HostInfo, ProjectDetails, ToolFile, RecipeSummary, RecipeExecResult, UpdateInfo, IpHint } from '../types/fabric';
 
 const BASE = '/api';
 
@@ -185,6 +185,25 @@ export function removeNetwork(sliceName: string, netName: string): Promise<Slice
   );
 }
 
+// --- IP Hints (L3 networks) ---
+
+export function getIpHints(sliceName: string, netName: string): Promise<{ network: string; hints: Record<string, IpHint> }> {
+  return fetchJson(`/slices/${encodeURIComponent(sliceName)}/networks/${encodeURIComponent(netName)}/ip-hints`);
+}
+
+export function setIpHints(sliceName: string, netName: string, hints: Record<string, IpHint>): Promise<{ network: string; hints: Record<string, IpHint>; status: string }> {
+  return fetchJson(`/slices/${encodeURIComponent(sliceName)}/networks/${encodeURIComponent(netName)}/ip-hints`, {
+    method: 'PUT',
+    body: JSON.stringify({ hints }),
+  });
+}
+
+export function applyIpHints(sliceName: string, netName: string): Promise<{ network: string; assignments: Record<string, string>; status: string }> {
+  return fetchJson(`/slices/${encodeURIComponent(sliceName)}/networks/${encodeURIComponent(netName)}/apply-ip-hints`, {
+    method: 'POST',
+  });
+}
+
 // --- Post-boot config ---
 
 export function setPostBootConfig(
@@ -196,6 +215,12 @@ export function setPostBootConfig(
     `/slices/${encodeURIComponent(sliceName)}/nodes/${encodeURIComponent(nodeName)}/post-boot`,
     { method: 'PUT', body: JSON.stringify({ script }) }
   );
+}
+
+// --- FABlib post_boot_config ---
+
+export function runPostBootConfig(sliceName: string): Promise<SliceData> {
+  return fetchJson(`/slices/${encodeURIComponent(sliceName)}/post-boot-config`, { method: 'POST' });
 }
 
 // --- Slice export/import ---
@@ -251,6 +276,7 @@ export interface SliceModel {
     gateway?: string;
     ip_mode?: string;
     interface_ips?: Record<string, string>;
+    ip_hints?: Record<string, IpHint>;
   }>;
 }
 
@@ -802,6 +828,48 @@ export function executeAllBootConfigs(sliceName: string): Promise<Record<string,
   });
 }
 
+export interface BootConfigStreamEvent {
+  event: 'node' | 'step' | 'output' | 'error' | 'done';
+  node?: string;
+  type?: string;
+  id?: string;
+  message: string;
+  status?: string;
+}
+
+export async function executeBootConfigStream(
+  sliceName: string,
+  onEvent: (evt: BootConfigStreamEvent) => void,
+): Promise<void> {
+  const res = await fetch(`${BASE}/files/boot-config/${encodeURIComponent(sliceName)}/execute-all-stream`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+  });
+  if (!res.ok) {
+    const detail = await res.text();
+    throw new Error(`API error ${res.status}: ${detail}`);
+  }
+  const reader = res.body?.getReader();
+  if (!reader) throw new Error('No response body');
+  const decoder = new TextDecoder();
+  let buffer = '';
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop() || '';
+    for (const line of lines) {
+      if (line.startsWith('data: ')) {
+        try {
+          const evt = JSON.parse(line.slice(6)) as BootConfigStreamEvent;
+          onEvent(evt);
+        } catch { /* skip malformed */ }
+      }
+    }
+  }
+}
+
 // --- Project Details (UIS API) ---
 
 export function getProjectDetails(uuid: string): Promise<ProjectDetails> {
@@ -877,6 +945,13 @@ export function listRecipes(): Promise<RecipeSummary[]> {
   return fetchJson('/recipes');
 }
 
+export function toggleRecipeStar(name: string, starred: boolean): Promise<RecipeSummary> {
+  return fetchJson(`/recipes/${encodeURIComponent(name)}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ starred }),
+  });
+}
+
 export function executeRecipe(name: string, sliceName: string, nodeName: string): Promise<RecipeExecResult> {
   return fetchJson(`/recipes/${encodeURIComponent(name)}/execute/${encodeURIComponent(sliceName)}/${encodeURIComponent(nodeName)}`, {
     method: 'POST',
@@ -926,6 +1001,10 @@ export async function executeRecipeStream(
 }
 
 // -- Storage ---------------------------------------------------------------
+
+export function checkForUpdate(): Promise<UpdateInfo> {
+  return fetchJson('/config/check-update');
+}
 
 export function rebuildStorage(): Promise<{
   status: string;

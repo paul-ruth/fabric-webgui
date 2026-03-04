@@ -5,6 +5,7 @@ import Toolbar from './components/Toolbar';
 import CytoscapeGraph from './components/CytoscapeGraph';
 import type { ContextMenuAction } from './components/CytoscapeGraph';
 import SliverView from './components/SliverView';
+import AllSliversView from './components/AllSliversView';
 import EditorPanel from './components/EditorPanel';
 import LibrariesPanel from './components/LibrariesPanel';
 import ProjectView from './components/ProjectView';
@@ -13,10 +14,12 @@ import LibrariesView from './components/LibrariesView';
 import DetailPanel from './components/DetailPanel';
 import GeoView from './components/GeoView';
 import BottomPanel from './components/BottomPanel';
-import type { TerminalTab, RecipeConsoleLine } from './components/BottomPanel';
+import type { TerminalTab, RecipeConsoleLine, BootConsoleLine } from './components/BottomPanel';
 import ConfigureView from './components/ConfigureView';
 import FileTransferView from './components/FileTransferView';
 import HelpView from './components/HelpView';
+import ClientView from './components/ClientView';
+import type { ClientTarget } from './components/ClientView';
 import HelpContextMenu from './components/HelpContextMenu';
 import GuidedTour from './components/GuidedTour';
 import { tours } from './data/tourSteps';
@@ -36,7 +39,11 @@ export default function App() {
   const [recipeConsole, setRecipeConsole] = useState<RecipeConsoleLine[]>([]);
   const [recipeRunning, setRecipeRunning] = useState(false);
   const [executingRecipeName, setExecutingRecipeName] = useState<string | null>(null);
-  const [currentView, setCurrentView] = useState<'topology' | 'sliver' | 'map' | 'files' | 'libraries' | 'project' | 'monitoring'>('topology');
+  const [bootConsole, setBootConsole] = useState<BootConsoleLine[]>([]);
+  const [bootRunning, setBootRunning] = useState(false);
+  const [bootNodeStatus, setBootNodeStatus] = useState<Record<string, 'pending' | 'running' | 'done' | 'error'>>({});
+  const [currentView, setCurrentView] = useState<'topology' | 'sliver' | 'map' | 'files' | 'libraries' | 'project' | 'monitoring' | 'client'>('topology');
+  const [clientTarget, setClientTarget] = useState<ClientTarget | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [isConfigured, setIsConfigured] = useState<boolean | null>(null);
   const [layout, setLayout] = useState('dagre');
@@ -254,6 +261,57 @@ export default function App() {
       setExecutingRecipeName(null);
     }
   }, [selectedSliceName]);
+
+  // Boot config streaming handler — optionally accepts a slice name for auto-run scenarios
+  const handleRunBootConfigStream = useCallback(async (sliceNameOverride?: string) => {
+    const target = sliceNameOverride || selectedSliceName;
+    console.log(`[bootConfigStream] called with override=${sliceNameOverride} selected=${selectedSliceName} target=${target}`);
+    if (!target) return;
+    setBootRunning(true);
+    // Initialize all nodes as pending
+    if (sliceData?.nodes) {
+      const initial: Record<string, 'pending' | 'running' | 'done' | 'error'> = {};
+      for (const n of sliceData.nodes) initial[n.name] = 'pending';
+      setBootNodeStatus(initial);
+    }
+    setBootConsole([{ type: 'step', message: `Starting boot config for slice "${target}" (waiting for SSH)...` }]);
+    try {
+      await api.executeBootConfigStream(target, (evt) => {
+        if (evt.event === 'done') {
+          setBootConsole(prev => [...prev, {
+            type: evt.status === 'ok' ? 'step' : 'error',
+            message: evt.message || `Done — ${evt.status}`
+          }]);
+          setBootRunning(false);
+          // Mark any remaining 'running' nodes as 'done'
+          setBootNodeStatus(prev => {
+            const next = { ...prev };
+            for (const k of Object.keys(next)) {
+              if (next[k] === 'running' || next[k] === 'pending') next[k] = 'done';
+            }
+            return next;
+          });
+        } else if (evt.event === 'node' && evt.node) {
+          // A 'node' event with status means that node finished
+          if (evt.status === 'ok') {
+            setBootNodeStatus(prev => ({ ...prev, [evt.node!]: 'done' }));
+          } else {
+            // Starting a new node
+            setBootNodeStatus(prev => ({ ...prev, [evt.node!]: 'running' }));
+          }
+          setBootConsole(prev => [...prev, { type: evt.event, message: evt.message || '' }]);
+        } else if (evt.event === 'error' && evt.node) {
+          setBootNodeStatus(prev => ({ ...prev, [evt.node!]: 'error' }));
+          setBootConsole(prev => [...prev, { type: evt.event, message: evt.message || '' }]);
+        } else {
+          setBootConsole(prev => [...prev, { type: evt.event, message: evt.message || '' }]);
+        }
+      });
+    } catch (e: any) {
+      setBootConsole(prev => [...prev, { type: 'error', message: e.message }]);
+      setBootRunning(false);
+    }
+  }, [selectedSliceName, sliceData?.nodes]);
 
   // Check config status on mount
   useEffect(() => {
@@ -586,6 +644,7 @@ export default function App() {
   }, [addError]);
 
   const startPolling = useCallback(() => {
+    console.log(`[startPolling] called, autoRefresh=${autoRefreshRef.current}`);
     stopPolling();
     if (!autoRefreshRef.current) return;
 
@@ -612,7 +671,9 @@ export default function App() {
         // Auto-run boot configs for slices that just reached StableOK
         // Runs for any slice the webui sees transition to stable for the first time
         for (const entry of list) {
+          console.log(`[poll] Slice "${entry.name}" state=${entry.state} bootConfigRan=${bootConfigRanRef.current.has(entry.name)}`);
           if ((entry.state === 'StableOK' || entry.state === 'Active') && !bootConfigRanRef.current.has(entry.name)) {
+            console.log(`[poll] Auto-running boot config for "${entry.name}"`);
             bootConfigRanRef.current.add(entry.name);
             // Refresh slice data if it's the currently selected slice
             if (entry.name === currentName) {
@@ -629,18 +690,17 @@ export default function App() {
               if (entry.name === currentName) setSliceData(sd);
             } catch { /* fallback: empty list, will use batch call */ }
 
-            // Run boot configs per-node with progress
-            setStatusMessage(`Running post-boot config on ${entry.name}...`);
-            if (sliceNodeNames.length > 0) {
-              await runBootConfigsPerNode(entry.name, sliceNodeNames);
-            } else {
-              // Fallback to batch call if we couldn't get node names
-              try {
-                await api.executeAllBootConfigs(entry.name);
-              } catch (e: any) {
-                addError(`Post-boot config failed for ${entry.name}: ${e.message}`);
-              }
+            // Run FABlib's native post_boot_config (L3 networking, hostnames, IPs, routes)
+            setStatusMessage(`Running FABlib post-boot config on ${entry.name}...`);
+            try {
+              await api.runPostBootConfig(entry.name);
+            } catch (e: any) {
+              addError(`FABlib post_boot_config failed for ${entry.name}: ${e.message}`);
             }
+
+            // Run boot configs via streaming endpoint (includes SSH readiness check)
+            setStatusMessage(`Running post-boot config on ${entry.name} (waiting for SSH)...`);
+            await handleRunBootConfigStream(entry.name);
 
             // Auto-enable monitoring if user flagged it pre-submit
             if (monitoringPendingRef.current.has(entry.name)) {
@@ -667,13 +727,14 @@ export default function App() {
           return st === 'Draft' || STABLE_STATES.has(st) || TERMINAL_STATES_SET.has(st);
         });
         if (allSettled) {
+          console.log(`[poll] All slices settled, stopping polling`);
           stopPolling();
         }
       } catch {
         // Silently ignore polling errors — next poll will retry
       }
     }, POLL_INTERVAL);
-  }, [stopPolling, syncStateFromList]);
+  }, [stopPolling, syncStateFromList, handleRunBootConfigStream]);
 
   // Clean up polling on unmount
   useEffect(() => { return () => stopPolling(); }, [stopPolling]);
@@ -696,6 +757,14 @@ export default function App() {
       const list = await api.listSlices();
       setSlices(list);
       setListLoaded(true);
+
+      // Pre-seed bootConfigRanRef with already-stable slices so we only
+      // auto-run boot config for slices that *newly* transition to stable
+      for (const s of list) {
+        if (STABLE_STATES.has(s.state) || TERMINAL_STATES_SET.has(s.state)) {
+          bootConfigRanRef.current.add(s.name);
+        }
+      }
 
       // If the currently selected slice changed state, reload it
       const currentName = selectedSliceRef.current;
@@ -815,20 +884,27 @@ export default function App() {
         setListLoaded(true);
       } catch {}
       // If slice reached StableOK immediately, run boot configs now
+      console.log(`[submit] refreshedData.state=${refreshedData.state}`);
       if (refreshedData.state === 'StableOK') {
+        console.log(`[submit] StableOK immediate — running post-boot config`);
         bootConfigRanRef.current.add(selectedSliceName);
-        const nodeNames = refreshedData.nodes.map((n: any) => n.name);
-        setStatusMessage('Running post-boot configuration on all nodes...');
-        if (nodeNames.length > 0) {
-          await runBootConfigsPerNode(selectedSliceName, nodeNames);
+        // Run FABlib's native post_boot_config (L3 networking, hostnames, IPs, routes)
+        setStatusMessage('Running FABlib post-boot config...');
+        try {
+          await api.runPostBootConfig(selectedSliceName);
+        } catch (e: any) {
+          addError(`FABlib post_boot_config failed: ${e.message}`);
         }
+        setStatusMessage('Running post-boot configuration (waiting for SSH)...');
+        await handleRunBootConfigStream(selectedSliceName);
         // Auto-enable monitoring if user flagged it pre-submit
         if (monitoringPendingRef.current.has(selectedSliceName)) {
           monitoringPendingRef.current.delete(selectedSliceName);
           setMonitoringEnabledSlices(prev => { const next = new Set(prev); next.delete(selectedSliceName); return next; });
           setStatusMessage('Enabling monitoring...');
-          if (nodeNames.length > 0) {
-            await enableMonitoringPerNode(selectedSliceName, nodeNames);
+          const monitorNodeNames = refreshedData.nodes.map((n: any) => n.name);
+          if (monitorNodeNames.length > 0) {
+            await enableMonitoringPerNode(selectedSliceName, monitorNodeNames);
           } else {
             try {
               await api.enableMonitoring(selectedSliceName);
@@ -847,7 +923,7 @@ export default function App() {
       setLoading(false);
       setStatusMessage('');
     }
-  }, [selectedSliceName, runValidation, startPolling]);
+  }, [selectedSliceName, runValidation, startPolling, handleRunBootConfigStream]);
 
   const handleRefreshSlices = useCallback(async () => {
     setLoading(true);
@@ -955,6 +1031,27 @@ export default function App() {
       setStatusMessage('');
     }
   }, [selectedSliceName, sliceData?.state]);
+
+  // Delete a slice by name (used by AllSliversView)
+  const handleDeleteSliceByName = useCallback(async (name: string) => {
+    const slice = slices.find(s => s.name === name);
+    const wasDraft = slice?.state === 'Draft';
+    await api.deleteSlice(name);
+    // If deleting the currently-selected slice, clear selection
+    if (name === selectedSliceName) {
+      setSliceData(null);
+      setSelectedSliceName('');
+      setSelectedElement(null);
+      setValidationIssues([]);
+      setValidationValid(false);
+    }
+    if (wasDraft) {
+      setSlices(prev => prev.filter(s => s.name !== name));
+    } else {
+      setSlices(prev => prev.map(s => s.name === name ? { ...s, state: 'Dead' } : s));
+    }
+  }, [slices, selectedSliceName]);
+
 
   const handleArchiveSlice = useCallback(async () => {
     if (!selectedSliceName) return;
@@ -1145,6 +1242,13 @@ export default function App() {
       handleOpenTerminals(action.elements);
     } else if (action.type === 'delete') {
       handleDeleteElements(action.elements);
+    } else if (action.type === 'delete-slice' && action.sliceNames) {
+      (async () => {
+        for (const name of action.sliceNames!) {
+          try { await handleDeleteSliceByName(name); } catch (e: any) { addError(e.message); }
+        }
+        handleRefreshSlices();
+      })();
     } else if (action.type === 'delete-component' && action.nodeName && action.componentName) {
       handleDeleteComponent(action.nodeName, action.componentName);
     } else if (action.type === 'delete-facility-port' && action.fpName) {
@@ -1153,8 +1257,12 @@ export default function App() {
       handleSaveVmTemplate(action.nodeName);
     } else if (action.type === 'apply-recipe' && action.recipeName && action.nodeName) {
       handleExecuteRecipe(action.recipeName, action.nodeName);
+    } else if (action.type === 'open-client' && action.elements.length > 0) {
+      const el = action.elements[0];
+      setClientTarget({ sliceName: selectedSliceName, nodeName: el.name, port: action.port || 3000 });
+      setCurrentView('client');
     }
-  }, [handleOpenTerminals, handleDeleteElements, handleDeleteComponent, handleDeleteFacilityPort, handleSaveVmTemplate, handleExecuteRecipe]);
+  }, [handleOpenTerminals, handleDeleteElements, handleDeleteSliceByName, handleRefreshSlices, handleDeleteComponent, handleDeleteFacilityPort, handleSaveVmTemplate, handleExecuteRecipe, selectedSliceName]);
 
   const handleCloseTerminal = useCallback((id: string) => {
     setTerminalTabs((prev) => prev.filter((t) => t.id !== id));
@@ -1332,7 +1440,15 @@ export default function App() {
       )}
 
       <div style={{ flex: 1, display: (settingsOpen || helpOpen) ? 'none' : 'flex', overflow: 'hidden' }}>
-        {currentView === 'project' ? (
+        {currentView === 'client' ? (
+          <ClientView
+            slices={slices}
+            selectedSliceName={selectedSliceName}
+            sliceData={sliceData}
+            clientTarget={clientTarget}
+            onTargetChange={setClientTarget}
+          />
+        ) : currentView === 'project' ? (
           <ProjectView projectId={projectId} slices={slices} onRefreshSlices={refreshSliceList} />
         ) : currentView === 'monitoring' ? (
           <MonitoringView sliceName={selectedSliceName || null} sliceData={sliceData} monitoringPending={monitoringEnabledSlices.has(selectedSliceName)} nodeActivity={nodeActivity} />
@@ -1375,6 +1491,8 @@ export default function App() {
                       vmTemplates={vmTemplates}
                       onSaveVmTemplate={handleSaveVmTemplate}
                       onBootConfigErrors={setBootConfigErrors}
+                      onRunBootConfig={handleRunBootConfigStream}
+                      bootRunning={bootRunning}
                       monitoringEnabled={monitoringEnabledSlices.has(selectedSliceName)}
                       onToggleMonitoring={(enabled) => setMonitoringEnabled(selectedSliceName, enabled)}
                     />
@@ -1393,6 +1511,7 @@ export default function App() {
                       onNodeAdded={updateSliceAndValidate}
                       onExecuteRecipe={handleExecuteRecipe}
                       executingRecipe={executingRecipeName}
+                      onRecipesChanged={() => api.listRecipes().then(setRecipes).catch(() => {})}
                     />
                   );
                 case 'detail':
@@ -1563,6 +1682,7 @@ export default function App() {
                       dark={dark}
                       sliceData={sliceData}
                       recipes={recipes}
+                      bootNodeStatus={bootNodeStatus}
                       onLayoutChange={setLayout}
                       onNodeClick={handleNodeClick}
                       onEdgeClick={handleEdgeClick}
@@ -1570,14 +1690,17 @@ export default function App() {
                       onContextAction={handleContextAction}
                     />
                   ) : (
-                    <SliverView
-                      sliceData={sliceData}
-                      selectedElement={selectedElement}
-                      onRowClick={handleNodeClick}
-                      onBackgroundClick={handleBackgroundClick}
+                    <AllSliversView
+                      slices={slices}
                       dark={dark}
-                      nodeActivity={nodeActivity}
+                      onSliceSelect={(name) => {
+                        setSelectedSliceName(name);
+                        setCurrentView('topology');
+                      }}
+                      onDeleteSlice={handleDeleteSliceByName}
+                      onRefreshSlices={handleRefreshSlices}
                       onContextAction={handleContextAction}
+                      nodeActivity={nodeActivity}
                       recipes={recipes}
                     />
                   )}
@@ -1606,6 +1729,9 @@ export default function App() {
                       recipeConsole={recipeConsole}
                       recipeRunning={recipeRunning}
                       onClearRecipeConsole={() => setRecipeConsole([])}
+                      bootConsole={bootConsole}
+                      bootRunning={bootRunning}
+                      onClearBootConsole={() => setBootConsole([])}
                     />
                   )}
                 </div>
@@ -1656,6 +1782,9 @@ export default function App() {
           recipeConsole={recipeConsole}
           recipeRunning={recipeRunning}
           onClearRecipeConsole={() => setRecipeConsole([])}
+          bootConsole={bootConsole}
+          bootRunning={bootRunning}
+          onClearBootConsole={() => setBootConsole([])}
         />
       )}
 

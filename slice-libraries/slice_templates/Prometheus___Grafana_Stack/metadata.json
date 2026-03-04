@@ -1,6 +1,6 @@
 {
   "name": "Prometheus + Grafana Stack",
-  "description": "3-node monitoring stack: 1 monitor (Prometheus + Grafana in Docker) and 2 target nodes running node_exporter. Docker is installed via boot config.",
+  "description": "3-node monitoring stack: 1 monitor node running Prometheus + Grafana (native install) with auto-discovery of worker node_exporter targets via FABNetv4, and 2 worker nodes running node_exporter.",
   "builtin": true,
   "order": 6,
   "node_count": 3,

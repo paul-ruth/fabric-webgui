@@ -1,6 +1,6 @@
 'use client';
 import { useState, useEffect, useCallback, useRef } from 'react';
-import type { SliceData, SiteInfo, ComponentModel, SliceNode, SliceNetwork, SliceFacilityPort, BootConfig, BootUpload, BootCommand, BootExecResult, FileEntry, SliceKeySet, VMTemplateSummary, HostInfo } from '../types/fabric';
+import type { SliceData, SiteInfo, ComponentModel, SliceNode, SliceNetwork, SliceFacilityPort, BootConfig, BootUpload, BootCommand, BootExecResult, FileEntry, SliceKeySet, VMTemplateSummary, HostInfo, IpHint } from '../types/fabric';
 import * as api from '../api/client';
 import Tooltip from './Tooltip';
 import SliverComboBox from './editor/SliverComboBox';
@@ -37,11 +37,13 @@ interface EditorPanelProps {
   vmTemplates?: VMTemplateSummary[];
   onSaveVmTemplate?: (nodeName: string) => void;
   onBootConfigErrors?: (errors: Array<{ node: string; type: string; id: string; detail: string }>) => void;
+  onRunBootConfig?: () => void;
+  bootRunning?: boolean;
   monitoringEnabled?: boolean;
   onToggleMonitoring?: (enabled: boolean) => void;
 }
 
-export default function EditorPanel({ sliceData, sliceName, onSliceUpdated, onCollapse, sites, images, componentModels, selectedElement, dragHandleProps, panelIcon, vmTemplates = [], onSaveVmTemplate, onBootConfigErrors, monitoringEnabled, onToggleMonitoring }: EditorPanelProps) {
+export default function EditorPanel({ sliceData, sliceName, onSliceUpdated, onCollapse, sites, images, componentModels, selectedElement, dragHandleProps, panelIcon, vmTemplates = [], onSaveVmTemplate, onBootConfigErrors, onRunBootConfig, bootRunning, monitoringEnabled, onToggleMonitoring }: EditorPanelProps) {
   const [selectedSliverKey, setSelectedSliverKey] = useState('');
   const [addMode, setAddMode] = useState<AddSliverType | null>(null);
   const [loading, setLoading] = useState(false);
@@ -125,28 +127,10 @@ export default function EditorPanel({ sliceData, sliceName, onSliceUpdated, onCo
   const isDraft = sliceData?.state === 'Draft';
   const isTerminal = sliceData?.state !== undefined && ['Dead', 'Closing', 'StableError'].includes(sliceData.state);
   const isActive = sliceData?.state !== undefined && ['StableOK', 'Active', 'ModifyOK'].includes(sliceData.state);
-  const [runningBootConfig, setRunningBootConfig] = useState(false);
-
-  const handleRunBootConfig = async () => {
+  const handleRunBootConfig = () => {
     if (!sliceName) return;
-    setRunningBootConfig(true);
-    setError('');
-    try {
-      const results = await api.executeAllBootConfigs(sliceName);
-      // Collect errors and report to parent
-      const bootErrors: Array<{ node: string; type: string; id: string; detail: string }> = [];
-      for (const [nodeName, nodeResults] of Object.entries(results)) {
-        for (const r of nodeResults) {
-          if (r.status === 'error') {
-            bootErrors.push({ node: nodeName, type: r.type, id: r.id, detail: r.detail || 'Unknown error' });
-          }
-        }
-      }
-      onBootConfigErrors?.(bootErrors);
-    } catch (e: any) {
-      setError(`Boot config failed: ${e.message}`);
-    } finally {
-      setRunningBootConfig(false);
+    if (onRunBootConfig) {
+      onRunBootConfig();
     }
   };
 
@@ -227,9 +211,9 @@ export default function EditorPanel({ sliceData, sliceName, onSliceUpdated, onCo
                   className="site-mapping-auto-btn"
                   style={{ width: '100%', fontSize: 11, padding: '5px 0' }}
                   onClick={handleRunBootConfig}
-                  disabled={runningBootConfig}
+                  disabled={bootRunning}
                 >
-                  {runningBootConfig ? '\u21BB Running...' : '\u25B6 Run Boot Config'}
+                  {bootRunning ? '\u21BB Running...' : '\u25B6 Run Boot Config'}
                 </button>
               </Tooltip>
             </div>
@@ -668,10 +652,13 @@ function SiteMappingView({
               </div>
               <div className="site-mapping-select-row">
                 <select
-                  value={currentSite}
+                  value={currentSite || ''}
                   onChange={(e) => handleGroupSiteChange(group, e.target.value)}
                   disabled={resolving}
                 >
+                  {!currentSite && (
+                    <option value="" disabled>-- Not assigned --</option>
+                  )}
                   {activeSites.map(s => (
                     <option key={s.name} value={s.name}>
                       {s.name} ({s.cores_available}c / {s.ram_available}G)
@@ -2246,6 +2233,203 @@ function FacilityPortForm({
 }
 
 
+// --- L3 IP Hints Editor (FABNetv4/v6 networks) ---
+type HintMode = 'auto' | 'fixed' | 'range';
+
+function L3IpHintsEditor({
+  network, sliceName, isDraft, loading,
+}: {
+  network: SliceNetwork;
+  sliceName: string;
+  isDraft: boolean;
+  loading: boolean;
+}) {
+  const [hints, setHints] = useState<Record<string, IpHint>>(network.ip_hints || {});
+  const [saving, setSaving] = useState(false);
+  const [applying, setApplying] = useState(false);
+  const [error, setError] = useState('');
+  const [assignments, setAssignments] = useState<Record<string, string>>({});
+
+  // Reset when network changes
+  useEffect(() => {
+    setHints(network.ip_hints || {});
+    setError('');
+    setAssignments({});
+  }, [network.name, network.ip_hints]);
+
+  const getMode = (iface: string): HintMode => {
+    const h = hints[iface];
+    if (!h) return 'auto';
+    if (h.last_octet !== undefined) return 'fixed';
+    if (h.last_octet_range) return 'range';
+    return 'auto';
+  };
+
+  const setMode = (iface: string, mode: HintMode) => {
+    setHints(prev => {
+      const next = { ...prev };
+      if (mode === 'auto') {
+        delete next[iface];
+      } else if (mode === 'fixed') {
+        next[iface] = { last_octet: 10 };
+      } else {
+        next[iface] = { last_octet_range: '10-50' };
+      }
+      return next;
+    });
+  };
+
+  const setValue = (iface: string, value: string) => {
+    setHints(prev => {
+      const next = { ...prev };
+      const mode = getMode(iface);
+      if (mode === 'fixed') {
+        const n = parseInt(value);
+        next[iface] = { last_octet: isNaN(n) ? undefined : n };
+      } else if (mode === 'range') {
+        next[iface] = { last_octet_range: value };
+      }
+      return next;
+    });
+  };
+
+  const handleSave = async () => {
+    setSaving(true);
+    setError('');
+    try {
+      await api.setIpHints(sliceName, network.name, hints);
+    } catch (e: any) {
+      setError(e.message || 'Failed to save hints');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleApply = async () => {
+    setApplying(true);
+    setError('');
+    try {
+      const result = await api.applyIpHints(sliceName, network.name);
+      setAssignments(result.assignments || {});
+    } catch (e: any) {
+      setError(e.message || 'Failed to apply hints');
+    } finally {
+      setApplying(false);
+    }
+  };
+
+  const hasSubnet = !!network.subnet;
+
+  return (
+    <>
+      {hasSubnet && (
+        <>
+          <div className="readonly-field">
+            <span className="readonly-label">Subnet</span>
+            <span className="readonly-value">{network.subnet}</span>
+          </div>
+          {network.gateway && (
+            <div className="readonly-field">
+              <span className="readonly-label">Gateway</span>
+              <span className="readonly-value">{network.gateway}</span>
+            </div>
+          )}
+        </>
+      )}
+
+      {!hasSubnet && isDraft && (
+        <div style={{ fontSize: 11, color: 'var(--fabric-text-muted)', marginTop: 4, marginBottom: 8 }}>
+          Subnet will be assigned by FABRIC at submit time. Set last-octet preferences below.
+        </div>
+      )}
+
+      {network.interfaces.length > 0 && (
+        <>
+          <div className="editor-section-divider" />
+          <div className="editor-section-label">
+            <Tooltip text="Control the last octet of IPs on this FABNet network">IP Hints</Tooltip>
+          </div>
+          {network.interfaces.map((iface) => {
+            const mode = getMode(iface.name);
+            const h = hints[iface.name];
+            const assigned = assignments[iface.name];
+            return (
+              <div key={iface.name} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4, fontSize: '0.82em' }}>
+                <span style={{ minWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={iface.name}>
+                  {iface.name}
+                </span>
+                <select
+                  value={mode}
+                  onChange={(e) => setMode(iface.name, e.target.value as HintMode)}
+                  style={{ width: 72, fontSize: '0.95em' }}
+                  disabled={loading}
+                >
+                  <option value="auto">Auto</option>
+                  <option value="fixed">Fixed</option>
+                  <option value="range">Range</option>
+                </select>
+                {mode === 'fixed' && (
+                  <input
+                    type="number"
+                    min={1}
+                    max={254}
+                    value={h?.last_octet ?? ''}
+                    onChange={(e) => setValue(iface.name, e.target.value)}
+                    style={{ width: 56, fontSize: '0.95em' }}
+                    placeholder="1-254"
+                    disabled={loading}
+                  />
+                )}
+                {mode === 'range' && (
+                  <input
+                    type="text"
+                    value={h?.last_octet_range ?? ''}
+                    onChange={(e) => setValue(iface.name, e.target.value)}
+                    style={{ width: 72, fontSize: '0.95em' }}
+                    placeholder="10-50"
+                    disabled={loading}
+                  />
+                )}
+                {mode === 'auto' && <span style={{ width: 56 }} />}
+                {assigned && (
+                  <span style={{ color: 'var(--fabric-teal, #008e7a)', fontWeight: 600 }}>{assigned}</span>
+                )}
+                {!assigned && iface.ip_addr && (
+                  <span style={{ color: 'var(--fabric-text-muted)' }}>{iface.ip_addr}</span>
+                )}
+              </div>
+            );
+          })}
+
+          {error && <div className="form-error" style={{ marginTop: 4 }}>{error}</div>}
+
+          <div style={{ display: 'flex', gap: 6, marginTop: 6, marginBottom: 8 }}>
+            <button
+              className="primary-btn"
+              disabled={saving || loading}
+              onClick={handleSave}
+              style={{ flex: 1 }}
+            >
+              {saving ? 'Saving…' : 'Save Hints'}
+            </button>
+            {hasSubnet && (
+              <button
+                className="primary-btn"
+                disabled={applying || loading}
+                onClick={handleApply}
+                style={{ flex: 1 }}
+              >
+                {applying ? 'Applying…' : 'Apply IP Hints'}
+              </button>
+            )}
+          </div>
+        </>
+      )}
+    </>
+  );
+}
+
+
 // --- Network read-only view (existing networks) ---
 function NetworkReadOnlyView({
   network, loading, isDraft, sliceName, onSliceUpdated, onDelete,
@@ -2406,23 +2590,15 @@ function NetworkReadOnlyView({
           )}
         </>
       ) : (
-        <>
-          {network.subnet && (
-            <div className="readonly-field">
-              <span className="readonly-label">Subnet</span>
-              <span className="readonly-value">{network.subnet}</span>
-            </div>
-          )}
-          {network.gateway && (
-            <div className="readonly-field">
-              <span className="readonly-label">Gateway</span>
-              <span className="readonly-value">{network.gateway}</span>
-            </div>
-          )}
-        </>
+        <L3IpHintsEditor
+          network={network}
+          sliceName={sliceName}
+          isDraft={isDraft}
+          loading={loading}
+        />
       )}
 
-      {network.interfaces.length > 0 && (
+      {network.interfaces.length > 0 && network.layer === 'L2' && (
         <>
           <div className="editor-section-divider" />
           <div className="editor-section-label">Interfaces</div>

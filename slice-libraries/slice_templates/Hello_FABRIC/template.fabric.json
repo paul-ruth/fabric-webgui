@@ -1,6 +1,6 @@
 {
   "format": "fabric-slice-v1",
-  "name": "Hello FABRIC",
+  "name": "Hello, FABRIC",
   "nodes": [
     {
       "name": "node1",

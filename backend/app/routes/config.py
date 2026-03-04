@@ -5,12 +5,15 @@ import base64
 import json
 import logging
 import os
+import re
 import shutil
 import stat
+import time
 from typing import Optional
 from urllib.parse import urlencode
 
 import paramiko
+import requests as http_requests
 from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
@@ -30,6 +33,16 @@ from app.fablib_manager import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+# Current application version (keep in sync with frontend/src/version.ts)
+CURRENT_VERSION = "0.1.6"
+
+DOCKER_HUB_REPO = "pruth/fabric-webui"
+DOCKER_HUB_TAGS_URL = f"https://hub.docker.com/v2/repositories/{DOCKER_HUB_REPO}/tags/"
+
+# Simple in-memory cache for update checks (1 hour TTL)
+_update_cache: dict = {"result": None, "timestamp": 0.0}
+_UPDATE_CACHE_TTL = 3600  # seconds
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -805,3 +818,83 @@ def rebuild_storage():
         "slice_templates_total": len(slice_builtins),
         "vm_templates_total": len(vm_builtins),
     }
+
+
+# ---------------------------------------------------------------------------
+# GET /api/config/check-update — check Docker Hub for newer version
+# ---------------------------------------------------------------------------
+
+def _parse_semver(tag: str) -> tuple:
+    """Parse a semver-like tag into a comparable tuple. Returns () on failure."""
+    m = re.match(r"^v?(\d+)\.(\d+)\.(\d+)(?:-(.+))?$", tag)
+    if not m:
+        return ()
+    major, minor, patch = int(m.group(1)), int(m.group(2)), int(m.group(3))
+    pre = m.group(4) or ""
+    # Pre-release sorts before release: "beta" < "" (no pre-release)
+    # Use (0, pre) for pre-release, (1, "") for release so release > pre-release
+    pre_tuple = (0, pre) if pre else (1, "")
+    return (major, minor, patch, pre_tuple)
+
+
+@router.get("/api/config/check-update")
+def check_update():
+    """Check Docker Hub for a newer version of the application image."""
+    now = time.time()
+
+    # Return cached result if still fresh
+    if _update_cache["result"] and (now - _update_cache["timestamp"]) < _UPDATE_CACHE_TTL:
+        return _update_cache["result"]
+
+    current_parsed = _parse_semver(CURRENT_VERSION)
+
+    try:
+        resp = http_requests.get(
+            DOCKER_HUB_TAGS_URL,
+            params={"page_size": 25, "ordering": "last_updated"},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        tags_data = resp.json().get("results", [])
+    except Exception as e:
+        logger.debug("Docker Hub check failed: %s", e)
+        result = {
+            "current_version": CURRENT_VERSION,
+            "latest_version": CURRENT_VERSION,
+            "update_available": False,
+            "docker_hub_url": f"https://hub.docker.com/r/{DOCKER_HUB_REPO}",
+            "published_at": None,
+        }
+        _update_cache["result"] = result
+        _update_cache["timestamp"] = now
+        return result
+
+    # Find the latest semver tag
+    best_tag = ""
+    best_parsed: tuple = ()
+    best_date = None
+    for entry in tags_data:
+        tag_name = entry.get("name", "")
+        parsed = _parse_semver(tag_name)
+        if not parsed:
+            continue
+        if parsed > best_parsed:
+            best_parsed = parsed
+            best_tag = tag_name
+            best_date = entry.get("last_updated")
+
+    if not best_tag:
+        best_tag = CURRENT_VERSION
+
+    update_available = best_parsed > current_parsed if best_parsed and current_parsed else False
+
+    result = {
+        "current_version": CURRENT_VERSION,
+        "latest_version": best_tag,
+        "update_available": update_available,
+        "docker_hub_url": f"https://hub.docker.com/r/{DOCKER_HUB_REPO}",
+        "published_at": best_date,
+    }
+    _update_cache["result"] = result
+    _update_cache["timestamp"] = now
+    return result

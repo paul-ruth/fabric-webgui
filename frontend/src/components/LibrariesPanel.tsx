@@ -24,6 +24,8 @@ interface LibrariesPanelProps {
   // Recipe execution callback (lifted to App for BottomPanel console)
   onExecuteRecipe: (recipeDirName: string, nodeName: string) => void;
   executingRecipe: string | null;
+  // Notify parent when recipes change (star toggled) so context menu stays in sync
+  onRecipesChanged?: () => void;
   // Panel chrome
   onCollapse: () => void;
   dragHandleProps?: DragHandleProps;
@@ -34,7 +36,7 @@ type TabId = 'slice' | 'vm' | 'recipes';
 
 export default function LibrariesPanel({
   onSliceImported, onVmTemplatesChanged, sliceName, sliceData, onNodeAdded,
-  onExecuteRecipe, executingRecipe,
+  onExecuteRecipe, executingRecipe, onRecipesChanged,
   onCollapse, dragHandleProps, panelIcon,
 }: LibrariesPanelProps) {
   const [activeTab, setActiveTab] = useState<TabId>('slice');
@@ -164,6 +166,16 @@ export default function LibrariesPanel({
   const handleExecuteRecipe = (recipeDirName: string, nodeName: string) => {
     setRecipeNodePicker(null);
     onExecuteRecipe(recipeDirName, nodeName);
+  };
+
+  const handleToggleRecipeStar = async (dirName: string, starred: boolean) => {
+    try {
+      await api.toggleRecipeStar(dirName, starred);
+      setRecipes((prev) => prev.map((r) => r.dir_name === dirName ? { ...r, starred } : r));
+      onRecipesChanged?.();
+    } catch {
+      // ignore
+    }
   };
 
   const generateNodeName = useCallback((baseName: string): string => {
@@ -548,6 +560,13 @@ export default function LibrariesPanel({
               .map((r) => (
               <div className="vmt-card" key={r.dir_name}>
                 <div className="vmt-card-header">
+                  <button
+                    className="recipe-star-btn"
+                    title={r.starred ? 'Unstar (hide from context menu)' : 'Star (show in context menu)'}
+                    onClick={() => handleToggleRecipeStar(r.dir_name, !r.starred)}
+                  >
+                    {r.starred ? '\u2605' : '\u2606'}
+                  </button>
                   <span className="vmt-card-name">{r.name}</span>
                   {r.builtin && <span className="vmt-badge-builtin">built-in</span>}
                 </div>

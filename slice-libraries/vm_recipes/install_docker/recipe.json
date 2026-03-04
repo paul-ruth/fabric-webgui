@@ -1,5 +1,6 @@
 {
   "name": "Install Docker",
+  "version": "1.0.0",
   "description": "Installs Docker Engine and adds the default user to the docker group.",
   "builtin": true,
   "image_patterns": {
@@ -9,8 +10,13 @@
     "debian": "install_docker_debian.sh"
   },
   "steps": [
-    { "type": "upload_scripts" },
-    { "type": "execute", "command": "chmod +x ~/.fabric/recipes/install_docker/*.sh && sudo bash ~/.fabric/recipes/install_docker/{script}" }
+    {
+      "type": "upload_scripts"
+    },
+    {
+      "type": "execute",
+      "command": "chmod +x ~/.fabric/recipes/install_docker/*.sh && sudo bash ~/.fabric/recipes/install_docker/{script}"
+    }
   ],
   "post_actions": []
 }

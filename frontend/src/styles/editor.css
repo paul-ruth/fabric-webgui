@@ -562,6 +562,7 @@
   color: var(--fabric-primary, #5798bc);
 }
 
+
 /* Center: cytoscape graph */
 .graph-panel {
   flex: 1;

@@ -13,7 +13,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from app.routes.slices import build_slice_model, import_slice, SliceModelImport
+from app.routes.slices import build_slice_model, import_slice, SliceModelImport, _get_site_groups, _get_draft, _store_site_groups, _serialize
 
 router = APIRouter(prefix="/api/templates", tags=["templates"])
 
@@ -376,7 +376,51 @@ def load_template(name: str, req: LoadTemplateRequest) -> dict[str, Any]:
                 })
 
     model = SliceModelImport(**model_data)
-    return import_slice(model)
+    result = import_slice(model)
+
+    # Auto-resolve site groups so the user sees candidate sites immediately
+    site_groups = _get_site_groups(slice_name)
+    if site_groups:
+        try:
+            from app.site_resolver import resolve_sites
+            from app.routes.resources import get_cached_sites
+            from app.routes.slices import slice_to_dict
+
+            draft = _get_draft(slice_name)
+            if draft is not None:
+                data = slice_to_dict(draft)
+                node_defs = []
+                for node in data.get("nodes", []):
+                    grp = site_groups.get(node["name"])
+                    site = grp if grp else (node.get("site", "") or "auto")
+                    node_defs.append({
+                        "name": node["name"],
+                        "site": site,
+                        "cores": node.get("cores", 2),
+                        "ram": node.get("ram", 8),
+                        "disk": node.get("disk", 10),
+                        "components": node.get("components", []),
+                    })
+
+                sites = get_cached_sites()
+                resolved_defs, new_groups = resolve_sites(node_defs, sites)
+
+                for nd in resolved_defs:
+                    try:
+                        fab_node = draft.get_node(name=nd["name"])
+                        fab_node.set_site(site=nd["site"])
+                    except Exception:
+                        pass
+
+                merged_groups = dict(site_groups)
+                merged_groups.update(new_groups)
+                _store_site_groups(slice_name, merged_groups)
+
+                result = _serialize(draft, dirty=True)
+        except Exception:
+            pass  # Non-critical — user can still manually assign
+
+    return result
 
 
 @router.delete("/{name}")

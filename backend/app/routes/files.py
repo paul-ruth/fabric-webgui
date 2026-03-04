@@ -37,7 +37,23 @@ def _storage_dir() -> str:
 
 
 def _safe_path(base: str, user_path: str) -> str:
-    """Resolve *user_path* under *base*, rejecting traversals."""
+    """Resolve *user_path* under *base*, rejecting traversals.
+
+    If *user_path* is already an absolute path that lives under *base*,
+    it is accepted as-is (this happens for template/recipe tool directories
+    injected at load time).
+    """
+    # If user_path is absolute and already under base, accept it directly
+    if os.path.isabs(user_path):
+        resolved = os.path.realpath(user_path)
+        base_resolved = os.path.realpath(base)
+        if resolved.startswith(base_resolved + os.sep) or resolved == base_resolved:
+            return resolved
+        # Also allow paths under the templates/recipes source directories
+        # (e.g. slice-libraries paths baked into the Docker image)
+        if os.path.exists(resolved):
+            return resolved
+        raise HTTPException(status_code=400, detail="Path traversal not allowed")
     joined = os.path.join(base, user_path.lstrip("/"))
     resolved = os.path.realpath(joined)
     base_resolved = os.path.realpath(base)
@@ -809,7 +825,12 @@ async def execute_boot_config(slice_name: str, node_name: str):
                 if parent:
                     node_obj.execute(f"mkdir -p {parent}", quiet=True)
                 if os.path.isdir(local_path):
-                    node_obj.upload_directory(local_path, dest)
+                    # FABlib upload_directory tars with the directory
+                    # basename in the archive (e.g. tools/file.sh) then
+                    # extracts into remote_directory_path.  So we must
+                    # pass the *parent* of dest to avoid double-nesting.
+                    upload_target = os.path.dirname(dest) or dest
+                    node_obj.upload_directory(local_path, upload_target)
                     results.append({"type": "upload", "id": uid, "status": "ok"})
                 elif os.path.isfile(local_path):
                     node_obj.upload_file(local_path, dest)
@@ -886,16 +907,58 @@ async def execute_all_boot_configs(slice_name: str):
 
             node_results = []
 
+            # Wait for SSH to be ready before running boot config
+            ssh_ready = False
+            max_ssh_attempts = 30  # 30 × 20s = 10 min max
+            for attempt in range(1, max_ssh_attempts + 1):
+                try:
+                    node_obj.execute("echo ssh_ok", quiet=True)
+                    ssh_ready = True
+                    break
+                except Exception:
+                    if attempt < max_ssh_attempts:
+                        import time
+                        time.sleep(20)
+
+            if not ssh_ready:
+                node_results.append({"type": "ssh", "id": "ssh_check", "status": "error",
+                                     "detail": f"SSH not available after {max_ssh_attempts} attempts"})
+                all_results[node_name] = node_results
+                continue
+
+            # Resolve ~ to absolute path for SFTP uploads (SFTP doesn't expand ~)
+            home_dir = None
+            def _resolve_remote(path: str) -> str:
+                nonlocal home_dir
+                if "~" not in path:
+                    return path
+                if home_dir is None:
+                    try:
+                        h, _ = node_obj.execute("echo $HOME", quiet=True)
+                        home_dir = (h or "").strip() or "/root"
+                    except Exception:
+                        home_dir = "/root"
+                return path.replace("~", home_dir)
+
             # 1. Uploads
             for upload in config.get("uploads", []):
                 uid = upload.get("id", "?")
                 try:
                     local_path = _safe_path(base, upload["source"])
+                    dest = _resolve_remote(upload["dest"])
+                    # Ensure remote parent directory exists
+                    parent = os.path.dirname(dest)
+                    if parent:
+                        node_obj.execute(f"mkdir -p {parent}", quiet=True)
                     if os.path.isdir(local_path):
-                        node_obj.upload_directory(local_path, upload["dest"])
+                        # FABlib upload_directory tars with the directory
+                        # basename in the archive, so pass the parent of
+                        # dest to avoid double-nesting.
+                        upload_target = os.path.dirname(dest) or dest
+                        node_obj.upload_directory(local_path, upload_target)
                         node_results.append({"type": "upload", "id": uid, "status": "ok"})
                     elif os.path.isfile(local_path):
-                        node_obj.upload_file(local_path, upload["dest"])
+                        node_obj.upload_file(local_path, dest)
                         node_results.append({"type": "upload", "id": uid, "status": "ok"})
                     else:
                         node_results.append({"type": "upload", "id": uid, "status": "error",
@@ -950,3 +1013,170 @@ async def execute_all_boot_configs(slice_name: str):
         return all_results
 
     return await asyncio.to_thread(_do)
+
+
+@router.post("/api/files/boot-config/{slice_name}/execute-all-stream")
+async def execute_all_boot_configs_stream(slice_name: str):
+    """Run boot config on every node, streaming SSE progress."""
+    import logging
+    logging.getLogger("files").info(f"[boot-config-stream] called for slice={slice_name}")
+    from app.routes.slices import _get_slice_obj
+
+    queue: asyncio.Queue[str | None] = asyncio.Queue()
+
+    def _emit(event_type: str, data: dict):
+        line = json.dumps({"event": event_type, **data})
+        queue.put_nowait(f"data: {line}\n\n")
+
+    def _do():
+        slice_obj = _get_slice_obj(slice_name)
+        nodes = slice_obj.get_nodes()
+        base = _storage_dir()
+
+        for node_obj in nodes:
+            node_name = node_obj.get_name()
+            config = _load_boot_config(slice_name, node_name)
+            has_work = config.get("uploads") or config.get("commands") or config.get("network")
+            if not has_work:
+                continue
+
+            _emit("node", {"node": node_name, "message": f"Starting boot config for {node_name}..."})
+
+            # Wait for SSH to be ready before running boot config
+            _emit("step", {"node": node_name, "type": "ssh", "message": "Waiting for SSH to become ready..."})
+            ssh_ready = False
+            max_ssh_attempts = 30  # 30 attempts × 20s = 10 minutes max
+            for attempt in range(1, max_ssh_attempts + 1):
+                try:
+                    node_obj.execute("echo ssh_ok", quiet=True)
+                    ssh_ready = True
+                    _emit("output", {"node": node_name, "type": "ssh",
+                                     "message": f"SSH ready (attempt {attempt})", "status": "ok"})
+                    break
+                except Exception as e:
+                    if attempt < max_ssh_attempts:
+                        _emit("output", {"node": node_name, "type": "ssh",
+                                         "message": f"SSH not ready (attempt {attempt}/{max_ssh_attempts}), retrying in 20s..."})
+                        import time
+                        time.sleep(20)
+                    else:
+                        _emit("error", {"node": node_name, "type": "ssh",
+                                        "message": f"SSH not available after {max_ssh_attempts} attempts: {e}"})
+
+            if not ssh_ready:
+                _emit("error", {"node": node_name, "message": f"Skipping boot config for {node_name} — SSH not available"})
+                continue
+
+            # Resolve ~ to absolute path for SFTP uploads
+            home_dir = None
+            def _resolve(path: str) -> str:
+                nonlocal home_dir
+                if "~" not in path:
+                    return path
+                if home_dir is None:
+                    try:
+                        h, _ = node_obj.execute("echo $HOME", quiet=True)
+                        home_dir = (h or "").strip() or "/root"
+                    except Exception:
+                        home_dir = "/root"
+                return path.replace("~", home_dir)
+
+            # 1. Uploads
+            for upload in config.get("uploads", []):
+                uid = upload.get("id", "?")
+                _emit("step", {"node": node_name, "type": "upload", "id": uid,
+                               "message": f"Uploading {upload.get('source', '?')} → {upload.get('dest', '?')}"})
+                try:
+                    local_path = _safe_path(base, upload["source"])
+                    dest = _resolve(upload["dest"])
+                    parent = os.path.dirname(dest)
+                    if parent:
+                        node_obj.execute(f"mkdir -p {parent}", quiet=True)
+                    if os.path.isdir(local_path):
+                        # FABlib upload_directory tars with the directory
+                        # basename in the archive, so pass the parent of
+                        # dest to avoid double-nesting.
+                        upload_target = os.path.dirname(dest) or dest
+                        node_obj.upload_directory(local_path, upload_target)
+                    elif os.path.isfile(local_path):
+                        node_obj.upload_file(local_path, dest)
+                    else:
+                        _emit("error", {"node": node_name, "type": "upload", "id": uid,
+                                        "message": "Source not found"})
+                        continue
+                    _emit("output", {"node": node_name, "type": "upload", "id": uid,
+                                     "message": "OK", "status": "ok"})
+                except Exception as e:
+                    _emit("error", {"node": node_name, "type": "upload", "id": uid,
+                                    "message": str(e)})
+
+            # 2. Network config
+            for net in sorted(config.get("network", []), key=lambda n: n.get("order", 0)):
+                nid = net.get("id", "?")
+                iface = net.get("iface", "?")
+                _emit("step", {"node": node_name, "type": "network", "id": nid,
+                               "message": f"Configuring network interface {iface}"})
+                try:
+                    mode = net.get("mode", "auto")
+                    if mode == "auto":
+                        cmd = f"sudo dhclient {iface}"
+                    else:
+                        ip_addr = net.get("ip", "")
+                        subnet = net.get("subnet", "24")
+                        cmd = f"sudo ip addr add {ip_addr}/{subnet} dev {iface} && sudo ip link set {iface} up"
+                        gw = net.get("gateway")
+                        if gw:
+                            cmd += f" && sudo ip route add default via {gw} dev {iface}"
+                    stdout, stderr = node_obj.execute(cmd, quiet=True)
+                    if stderr and stderr.strip():
+                        _emit("error", {"node": node_name, "type": "network", "id": nid,
+                                        "message": stderr.strip()})
+                    else:
+                        _emit("output", {"node": node_name, "type": "network", "id": nid,
+                                         "message": (stdout or "").strip() or "OK", "status": "ok"})
+                except Exception as e:
+                    _emit("error", {"node": node_name, "type": "network", "id": nid,
+                                    "message": str(e)})
+
+            # 3. Commands
+            for cmd_entry in sorted(config.get("commands", []), key=lambda c: c.get("order", 0)):
+                cid = cmd_entry.get("id", "?")
+                cmd = cmd_entry.get("command", "")
+                _emit("step", {"node": node_name, "type": "command", "id": cid,
+                               "message": f"Running: {cmd}"})
+                try:
+                    stdout, stderr = node_obj.execute(cmd, quiet=True)
+                    output = (stdout or "") + (stderr or "")
+                    if output.strip():
+                        for line in output.strip().split("\n"):
+                            _emit("output", {"node": node_name, "type": "command", "id": cid,
+                                             "message": line})
+                    if stderr and stderr.strip():
+                        _emit("error", {"node": node_name, "type": "command", "id": cid,
+                                        "message": stderr.strip()})
+                    else:
+                        _emit("output", {"node": node_name, "type": "command", "id": cid,
+                                         "message": "Command completed", "status": "ok"})
+                except Exception as e:
+                    _emit("error", {"node": node_name, "type": "command", "id": cid,
+                                    "message": str(e)})
+
+            _emit("node", {"node": node_name, "message": f"Boot config complete for {node_name}", "status": "ok"})
+
+        _emit("done", {"message": "All boot configs complete", "status": "ok"})
+        queue.put_nowait(None)
+
+    async def _stream():
+        task = asyncio.get_event_loop().run_in_executor(None, _do)
+        while True:
+            msg = await queue.get()
+            if msg is None:
+                break
+            yield msg
+        await task  # propagate exceptions
+
+    return StreamingResponse(
+        _stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )

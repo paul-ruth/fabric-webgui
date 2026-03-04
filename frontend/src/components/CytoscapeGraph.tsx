@@ -50,6 +50,27 @@ function buildStylesheet(dark: boolean): any[] {
       'font-size': '10px', 'text-wrap': 'wrap', 'text-max-width': '170px',
       'color': vmText, 'font-family': 'Montserrat, sans-serif',
     }},
+    // Boot config status overlays on VM nodes
+    { selector: '.boot-pending', style: {
+      'border-style': 'dashed',
+      'border-color': dark ? '#ffb74d' : '#ff8542',
+      'border-width': 3,
+    }},
+    { selector: '.boot-running', style: {
+      'border-style': 'dashed',
+      'border-color': dark ? '#ffb74d' : '#ff8542',
+      'border-width': 3,
+    }},
+    { selector: '.boot-done', style: {
+      'border-width': 3,
+      'border-color': dark ? '#4dd0b8' : '#008e7a',
+      'border-style': 'double',
+    }},
+    { selector: '.boot-error', style: {
+      'border-width': 3,
+      'border-color': dark ? '#ff6b6b' : '#b00020',
+      'border-style': 'double',
+    }},
     // Component badge nodes — small pills that sit at VM edges
     { selector: '.component', style: {
       'shape': 'roundrectangle', 'width': 'label', 'height': 20,
@@ -175,12 +196,14 @@ const LAYOUTS: Record<string, any> = {
 };
 
 export interface ContextMenuAction {
-  type: 'terminal' | 'delete' | 'delete-component' | 'delete-facility-port' | 'save-vm-template' | 'apply-recipe';
+  type: 'terminal' | 'delete' | 'delete-slice' | 'delete-component' | 'delete-facility-port' | 'save-vm-template' | 'apply-recipe' | 'open-client';
   elements: Record<string, string>[];
+  sliceNames?: string[];
   nodeName?: string;
   componentName?: string;
   fpName?: string;
   recipeName?: string;
+  port?: number;
 }
 
 interface CytoscapeGraphProps {
@@ -189,6 +212,7 @@ interface CytoscapeGraphProps {
   dark: boolean;
   sliceData: SliceData | null;
   recipes?: RecipeSummary[];
+  bootNodeStatus?: Record<string, 'pending' | 'running' | 'done' | 'error'>;
   onLayoutChange: (layout: string) => void;
   onNodeClick: (data: Record<string, string>) => void;
   onEdgeClick: (data: Record<string, string>) => void;
@@ -208,6 +232,7 @@ export default function CytoscapeGraph({
   dark,
   sliceData,
   recipes,
+  bootNodeStatus,
   onLayoutChange,
   onNodeClick,
   onEdgeClick,
@@ -437,6 +462,20 @@ export default function CytoscapeGraph({
     lay.run();
   }, [graph, layout]);
 
+  // Apply boot config status classes to VM nodes
+  useEffect(() => {
+    const cy = cyRef.current;
+    if (!cy || !bootNodeStatus) return;
+    const bootClasses = ['boot-pending', 'boot-running', 'boot-done', 'boot-error'];
+    cy.nodes('.vm').forEach((node) => {
+      const name = node.data('name');
+      const status = bootNodeStatus[name];
+      // Remove all boot classes first
+      for (const cls of bootClasses) node.removeClass(cls);
+      if (status) node.addClass(`boot-${status}`);
+    });
+  }, [bootNodeStatus, graph]);
+
   // Toggle component visibility
   useEffect(() => {
     const cy = cyRef.current;
@@ -550,6 +589,14 @@ export default function CytoscapeGraph({
               ▸ Open Terminal{vmsWithIp.length > 1 ? ` (${vmsWithIp.length})` : ''}
             </button>
           )}
+          {singleVm && singleVm.management_ip && (
+            <button className="graph-context-menu-item" onClick={() => {
+              onContextAction({ type: 'open-client', elements: [singleVm], port: 3000 });
+              setMenu(null);
+            }}>
+              ▸ Open in Client
+            </button>
+          )}
           {vmComponents.length > 0 && vmsWithIp.length > 0 && (
             <div className="graph-context-menu-sep" />
           )}
@@ -587,6 +634,7 @@ export default function CytoscapeGraph({
           {singleVm && singleVm.management_ip && recipes && recipes.length > 0 && (() => {
             const vmImage = singleVm.image || '';
             const compatible = recipes.filter((r) => {
+              if (!r.starred) return false;
               const patterns = r.image_patterns || {};
               return Object.keys(patterns).some((key) =>
                 key === '*' || vmImage.toLowerCase().includes(key.toLowerCase())

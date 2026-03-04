@@ -44,6 +44,11 @@ export interface SliceNode {
   interfaces: SliceInterface[];
 }
 
+export interface IpHint {
+  last_octet?: number;
+  last_octet_range?: string;
+}
+
 export interface SliceNetwork {
   name: string;
   type: string;
@@ -51,6 +56,7 @@ export interface SliceNetwork {
   subnet: string;
   gateway: string;
   interfaces: SliceInterface[];
+  ip_hints?: Record<string, IpHint>;
 }
 
 export interface CyNode {
@@ -308,6 +314,15 @@ export interface BootExecResult {
   detail?: string;
 }
 
+export interface BootConfigStreamEvent {
+  event: 'node' | 'step' | 'output' | 'error' | 'done';
+  node?: string;
+  type?: string;
+  id?: string;
+  message: string;
+  status?: string;
+}
+
 export interface ProjectPerson {
   name: string;
   email: string;
@@ -386,6 +401,7 @@ export interface RecipeSummary {
   image_patterns: Record<string, string>;
   dir_name: string;
   builtin: boolean;
+  starred: boolean;
 }
 
 export interface RecipeExecResult {
@@ -393,6 +409,14 @@ export interface RecipeExecResult {
   node: string;
   results: Array<{ type: string; status: 'ok' | 'error'; detail?: string }>;
   status: 'ok' | 'partial' | 'error';
+}
+
+export interface UpdateInfo {
+  current_version: string;
+  latest_version: string;
+  update_available: boolean;
+  docker_hub_url: string;
+  published_at: string | null;
 }
 
 export interface InfrastructureMetrics {
