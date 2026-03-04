@@ -1,7 +1,7 @@
 {
   "name": "Ollama LLM Server",
   "version": "1.0.0",
-  "description": "Ubuntu 22.04 with Ollama + Open WebUI + auto GPU detection. Requires GPU component. Recommended: 16 cores, 32 GB RAM, 100 GB disk.",
+  "description": "Ubuntu 22.04 with Ollama + Open WebUI (no login). GPU auto-detected at boot — works with or without GPU. Recommended: 16 cores, 32 GB RAM, 100 GB disk.",
   "image": "default_ubuntu_22",
   "builtin": true,
   "boot_config": {
@@ -14,7 +14,7 @@
       },
       {
         "id": "2",
-        "command": "if lspci | grep -i nvidia > /dev/null 2>&1; then sudo apt-get install -y nvidia-driver-535 && curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg && curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list > /dev/null && sudo apt-get update && sudo apt-get install -y nvidia-container-toolkit && sudo nvidia-ctk runtime configure --runtime=docker && sudo systemctl restart docker; fi",
+        "command": "if lspci | grep -qi nvidia; then sudo apt-get install -y nvidia-driver-535 && curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg && curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list > /dev/null && sudo apt-get update && sudo apt-get install -y nvidia-container-toolkit && sudo nvidia-ctk runtime configure --runtime=docker && sudo systemctl restart docker; fi",
         "order": 1
       },
       {
@@ -29,7 +29,7 @@
       },
       {
         "id": "5",
-        "command": "sudo docker run -d --name open-webui --restart always -p 3000:8080 -e OLLAMA_BASE_URL=http://host.docker.internal:11434 --add-host=host.docker.internal:host-gateway -v open-webui:/app/backend/data ghcr.io/open-webui/open-webui:main",
+        "command": "GPU_FLAG=''; lspci | grep -qi nvidia && GPU_FLAG='--gpus all'; sudo docker run -d --name open-webui --restart always -p 3000:8080 -e OLLAMA_BASE_URL=http://host.docker.internal:11434 -e WEBUI_AUTH=false --add-host=host.docker.internal:host-gateway -v open-webui:/app/backend/data $GPU_FLAG ghcr.io/open-webui/open-webui:main",
         "order": 4
       }
     ],

@@ -64,22 +64,188 @@ interface BottomPanelProps {
   onClearBootConsole: () => void;
 }
 
-// --- Types for pane layout ---
-interface PaneState {
+// --- Recursive layout tree types ---
+type SplitDirection = 'horizontal' | 'vertical';
+
+interface SplitNode {
+  type: 'split';
+  id: string;
+  direction: SplitDirection;
+  children: LayoutNode[];
+  sizes: number[];
+}
+
+interface LeafNode {
+  type: 'leaf';
   id: string;
   tabIds: string[];
   activeTabId: string;
 }
 
+type LayoutNode = SplitNode | LeafNode;
+type DropZone = 'left' | 'right' | 'top' | 'bottom' | 'center';
+
 interface DragState {
   tabId: string;
-  sourcePaneId: string;
-  dropTarget: 'left' | 'right' | 'center' | null;
-  targetPaneId: string | null;
+  sourceLeafId: string;
+  dropTarget: DropZone | null;
+  targetLeafId: string | null;
 }
 
 // Fixed tab IDs (non-terminal)
 const FIXED_TABS = ['slice-errors', 'errors', 'validation', 'log', 'recipes', 'boot-config', 'local-terminal'] as const;
+
+// --- Tree utility functions ---
+
+function findLeaf(root: LayoutNode, id: string): LeafNode | null {
+  if (root.type === 'leaf') return root.id === id ? root : null;
+  for (const child of root.children) {
+    const found = findLeaf(child, id);
+    if (found) return found;
+  }
+  return null;
+}
+
+function findLeafByTab(root: LayoutNode, tabId: string): LeafNode | null {
+  if (root.type === 'leaf') return root.tabIds.includes(tabId) ? root : null;
+  for (const child of root.children) {
+    const found = findLeafByTab(child, tabId);
+    if (found) return found;
+  }
+  return null;
+}
+
+function collectAllLeaves(root: LayoutNode): LeafNode[] {
+  if (root.type === 'leaf') return [root];
+  const leaves: LeafNode[] = [];
+  for (const child of root.children) {
+    leaves.push(...collectAllLeaves(child));
+  }
+  return leaves;
+}
+
+function updateLeaf(root: LayoutNode, leafId: string, updater: (leaf: LeafNode) => LeafNode): LayoutNode {
+  if (root.type === 'leaf') {
+    return root.id === leafId ? updater(root) : root;
+  }
+  return {
+    ...root,
+    children: root.children.map(child => updateLeaf(child, leafId, updater)),
+  };
+}
+
+function removeLeaf(root: LayoutNode, leafId: string): LayoutNode | null {
+  if (root.type === 'leaf') {
+    return root.id === leafId ? null : root;
+  }
+  const newChildren: LayoutNode[] = [];
+  const newSizes: number[] = [];
+  let removedSize = 0;
+  for (let i = 0; i < root.children.length; i++) {
+    const result = removeLeaf(root.children[i], leafId);
+    if (result === null) {
+      removedSize += root.sizes[i];
+    } else {
+      newChildren.push(result);
+      newSizes.push(root.sizes[i]);
+    }
+  }
+  if (newChildren.length === 0) return null;
+  if (newChildren.length === 1) return newChildren[0];
+  // Redistribute removed size proportionally
+  const totalRemaining = newSizes.reduce((a, b) => a + b, 0);
+  const adjustedSizes = newSizes.map(s => (s / totalRemaining) * 100);
+  return { ...root, children: newChildren, sizes: adjustedSizes };
+}
+
+function splitLeaf(
+  root: LayoutNode,
+  leafId: string,
+  direction: SplitDirection,
+  position: 'before' | 'after',
+  newLeaf: LeafNode,
+): LayoutNode {
+  if (root.type === 'leaf') {
+    if (root.id !== leafId) return root;
+    const children = position === 'before' ? [newLeaf, root] : [root, newLeaf];
+    return {
+      type: 'split',
+      id: nextNodeId(),
+      direction,
+      children,
+      sizes: [50, 50],
+    };
+  }
+  // If the split direction matches, and the target leaf is a direct child, insert adjacent
+  const childIndex = root.children.findIndex(c => c.type === 'leaf' && c.id === leafId);
+  if (childIndex !== -1 && root.direction === direction) {
+    const newChildren = [...root.children];
+    const newSizes = [...root.sizes];
+    const insertIndex = position === 'before' ? childIndex : childIndex + 1;
+    const splitSize = newSizes[childIndex] / 2;
+    newSizes[childIndex] = splitSize;
+    newChildren.splice(insertIndex, 0, newLeaf);
+    newSizes.splice(insertIndex, 0, splitSize);
+    return { ...root, children: newChildren, sizes: newSizes };
+  }
+  // Recurse into children
+  return {
+    ...root,
+    children: root.children.map(child => splitLeaf(child, leafId, direction, position, newLeaf)),
+  };
+}
+
+function removeTabFromTree(root: LayoutNode, tabId: string): LayoutNode | null {
+  if (root.type === 'leaf') {
+    if (!root.tabIds.includes(tabId)) return root;
+    const newTabIds = root.tabIds.filter(t => t !== tabId);
+    if (newTabIds.length === 0) return null;
+    return {
+      ...root,
+      tabIds: newTabIds,
+      activeTabId: newTabIds.includes(root.activeTabId) ? root.activeTabId : newTabIds[0],
+    };
+  }
+  const newChildren: LayoutNode[] = [];
+  const newSizes: number[] = [];
+  let removedSize = 0;
+  for (let i = 0; i < root.children.length; i++) {
+    const result = removeTabFromTree(root.children[i], tabId);
+    if (result === null) {
+      removedSize += root.sizes[i];
+    } else {
+      newChildren.push(result);
+      newSizes.push(root.sizes[i]);
+    }
+  }
+  if (newChildren.length === 0) return null;
+  if (newChildren.length === 1) return newChildren[0];
+  const totalRemaining = newSizes.reduce((a, b) => a + b, 0);
+  const adjustedSizes = newSizes.map(s => (s / totalRemaining) * 100);
+  return { ...root, children: newChildren, sizes: adjustedSizes };
+}
+
+function addTabToFirstLeaf(root: LayoutNode, tabId: string): LayoutNode {
+  if (root.type === 'leaf') {
+    return { ...root, tabIds: [...root.tabIds, tabId] };
+  }
+  return {
+    ...root,
+    children: [addTabToFirstLeaf(root.children[0], tabId), ...root.children.slice(1)],
+  };
+}
+
+function updateSplitSizes(root: LayoutNode, splitId: string, sizes: number[]): LayoutNode {
+  if (root.type === 'leaf') return root;
+  if (root.id === splitId) return { ...root, sizes };
+  return {
+    ...root,
+    children: root.children.map(child => updateSplitSizes(child, splitId, sizes)),
+  };
+}
+
+let nodeIdCounter = 0;
+function nextNodeId() { return `node-${++nodeIdCounter}`; }
 
 const TERM_THEME = {
   background: '#1a1a2e',
@@ -104,20 +270,17 @@ const TERM_THEME = {
   brightWhite: '#ffffff',
 };
 
-let paneIdCounter = 0;
-function nextPaneId() { return `pane-${++paneIdCounter}`; }
-
 export default function BottomPanel({ terminals, onCloseTerminal, validationIssues, validationValid, sliceState, dirty, errors, onClearErrors, sliceErrors, bootConfigErrors, onClearBootConfigErrors, fullWidth = true, onToggleFullWidth, showWidthToggle = false, expanded, onExpandedChange, panelHeight, onPanelHeightChange, statusMessage, loading, recipeConsole, recipeRunning, onClearRecipeConsole, bootConsole, bootRunning, onClearBootConsole }: BottomPanelProps) {
   const setExpanded = onExpandedChange;
   const setPanelHeight = onPanelHeightChange;
 
-  // --- Pane layout state ---
-  const [panes, setPanes] = useState<PaneState[]>(() => [{
-    id: nextPaneId(),
+  // --- Layout tree state ---
+  const [layout, setLayout] = useState<LayoutNode>(() => ({
+    type: 'leaf',
+    id: nextNodeId(),
     tabIds: [...FIXED_TABS],
     activeTabId: 'validation',
-  }]);
-  const [paneWidths, setPaneWidths] = useState<number[]>([100]);
+  }));
   const [dragState, setDragState] = useState<DragState | null>(null);
 
   // --- Tab metadata ---
@@ -138,64 +301,60 @@ export default function BottomPanel({ terminals, onCloseTerminal, validationIssu
     return ids;
   }, [terminals]);
 
-  // --- Sync terminal additions/removals into pane state ---
+  // Default leaf for reset
+  const makeDefaultLeaf = useCallback((): LeafNode => ({
+    type: 'leaf',
+    id: nextNodeId(),
+    tabIds: [...FIXED_TABS],
+    activeTabId: 'validation',
+  }), []);
+
+  // --- Sync terminal additions/removals into layout tree ---
   const prevTermIds = useRef<string[]>([]);
   useEffect(() => {
     const currentTermIds = terminals.map(t => t.id);
     const prevIds = prevTermIds.current;
 
-    // Find added terminals
     const added = currentTermIds.filter(id => !prevIds.includes(id));
-    // Find removed terminals
     const removed = prevIds.filter(id => !currentTermIds.includes(id));
 
     if (added.length > 0 || removed.length > 0) {
-      setPanes(prev => {
-        let newPanes = prev.map(p => ({
-          ...p,
-          tabIds: p.tabIds.filter(tid => !removed.includes(tid)),
-        }));
+      setLayout(prev => {
+        let tree: LayoutNode | null = prev;
 
-        // Add new terminals to the first pane
-        if (added.length > 0 && newPanes.length > 0) {
-          newPanes[0] = {
-            ...newPanes[0],
-            tabIds: [...newPanes[0].tabIds, ...added],
-          };
+        // Remove tabs for closed terminals
+        for (const tabId of removed) {
+          if (tree) tree = removeTabFromTree(tree, tabId);
         }
 
-        // Clean up empty panes (except keep at least one)
-        newPanes = newPanes.filter(p => p.tabIds.length > 0);
-        if (newPanes.length === 0) {
-          newPanes = [{ id: nextPaneId(), tabIds: [...FIXED_TABS], activeTabId: 'validation' }];
+        // Add new terminals to the first leaf
+        if (tree) {
+          for (const tabId of added) {
+            tree = addTabToFirstLeaf(tree, tabId);
+          }
         }
 
-        // Fix activeTabId if it was removed
-        newPanes = newPanes.map(p => ({
-          ...p,
-          activeTabId: p.tabIds.includes(p.activeTabId) ? p.activeTabId : p.tabIds[0],
-        }));
+        // If tree collapsed to null, reset
+        if (!tree) tree = makeDefaultLeaf();
 
-        return newPanes;
+        return tree;
       });
     }
 
     prevTermIds.current = currentTermIds;
-  }, [terminals]);
+  }, [terminals, makeDefaultLeaf]);
 
   // --- activateTab helper ---
   const activateTab = useCallback((tabId: string) => {
-    setPanes(prev => {
-      const pane = prev.find(p => p.tabIds.includes(tabId));
-      if (!pane) return prev;
-      if (pane.activeTabId === tabId) return prev;
-      return prev.map(p => p.id === pane.id ? { ...p, activeTabId: tabId } : p);
+    setLayout(prev => {
+      const leaf = findLeafByTab(prev, tabId);
+      if (!leaf || leaf.activeTabId === tabId) return prev;
+      return updateLeaf(prev, leaf.id, l => ({ ...l, activeTabId: tabId }));
     });
   }, []);
 
-  // --- Auto-switch effects (same logic, using activateTab) ---
+  // --- Auto-switch effects ---
 
-  // Auto-expand and switch to new terminal
   const prevTermCount = useRef(terminals.length);
   useEffect(() => {
     if (terminals.length > prevTermCount.current) {
@@ -204,9 +363,8 @@ export default function BottomPanel({ terminals, onCloseTerminal, validationIssu
       setExpanded(true);
     }
     prevTermCount.current = terminals.length;
-  }, [terminals.length, setExpanded, activateTab]);
+  }, [terminals.length, setExpanded, activateTab, terminals]);
 
-  // Switch to Errors tab on new errors
   const prevErrorCount = useRef(errors.length);
   useEffect(() => {
     if (errors.length > prevErrorCount.current) {
@@ -215,7 +373,6 @@ export default function BottomPanel({ terminals, onCloseTerminal, validationIssu
     prevErrorCount.current = errors.length;
   }, [errors.length, activateTab]);
 
-  // Auto-switch to slice errors
   const prevSliceErrorCount = useRef(sliceErrors.length);
   const prevBootErrorCount = useRef(bootConfigErrors.length);
   useEffect(() => {
@@ -233,7 +390,6 @@ export default function BottomPanel({ terminals, onCloseTerminal, validationIssu
     prevBootErrorCount.current = bootConfigErrors.length;
   }, [bootConfigErrors.length, setExpanded, activateTab]);
 
-  // Auto-switch to recipes
   const prevRecipeRunning = useRef(recipeRunning);
   useEffect(() => {
     if (recipeRunning && !prevRecipeRunning.current) {
@@ -243,7 +399,6 @@ export default function BottomPanel({ terminals, onCloseTerminal, validationIssu
     prevRecipeRunning.current = recipeRunning;
   }, [recipeRunning, setExpanded, activateTab]);
 
-  // Auto-switch to boot config
   const prevBootRunning = useRef(bootRunning);
   useEffect(() => {
     if (bootRunning && !prevBootRunning.current) {
@@ -256,38 +411,43 @@ export default function BottomPanel({ terminals, onCloseTerminal, validationIssu
   // Auto-scroll recipe console
   const recipeConsoleEndRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    // Check if any pane has recipes as active tab
-    const recipesActive = panes.some(p => p.activeTabId === 'recipes');
+    const leaves = collectAllLeaves(layout);
+    const recipesActive = leaves.some(l => l.activeTabId === 'recipes');
     if (recipesActive) {
       recipeConsoleEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }
-  }, [recipeConsole, panes]);
+  }, [recipeConsole, layout]);
 
   // Auto-scroll boot config console
   const bootConsoleEndRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    const bootActive = panes.some(p => p.activeTabId === 'boot-config');
+    const leaves = collectAllLeaves(layout);
+    const bootActive = leaves.some(l => l.activeTabId === 'boot-config');
     if (bootActive) {
       bootConsoleEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }
-  }, [bootConsole, panes]);
+  }, [bootConsole, layout]);
 
   // If active tab was closed, fix it
   useEffect(() => {
-    setPanes(prev => {
+    setLayout(prev => {
+      const leaves = collectAllLeaves(prev);
       let changed = false;
-      const updated = prev.map(p => {
-        if (!allTabIds.includes(p.activeTabId)) {
+      let tree = prev;
+      for (const leaf of leaves) {
+        if (!allTabIds.includes(leaf.activeTabId)) {
           changed = true;
-          return { ...p, activeTabId: p.tabIds[0] || 'validation' };
+          tree = updateLeaf(tree, leaf.id, l => ({
+            ...l,
+            activeTabId: l.tabIds[0] || 'validation',
+          }));
         }
-        return p;
-      });
-      return changed ? updated : prev;
+      }
+      return changed ? tree : prev;
     });
   }, [allTabIds]);
 
-  // --- Height resize (existing logic) ---
+  // --- Height resize ---
   const draggingRef = useRef(false);
   const startYRef = useRef(0);
   const startHeightRef = useRef(0);
@@ -317,32 +477,45 @@ export default function BottomPanel({ terminals, onCloseTerminal, validationIssu
     document.body.style.userSelect = 'none';
   }, [panelHeight, setPanelHeight]);
 
-  // --- Pane divider resize ---
-  const paneDividerDragging = useRef(false);
-  const paneDividerStartX = useRef(0);
-  const paneDividerStartWidths = useRef<number[]>([]);
-  const panesRowRef = useRef<HTMLDivElement>(null);
-
-  const handlePaneDividerStart = useCallback((e: React.MouseEvent) => {
-    if (panes.length < 2) return;
+  // --- Split divider resize ---
+  const handleSplitDividerStart = useCallback((e: React.MouseEvent, splitId: string, dividerIndex: number, direction: SplitDirection, containerEl: HTMLElement) => {
     e.preventDefault();
-    paneDividerDragging.current = true;
-    paneDividerStartX.current = e.clientX;
-    paneDividerStartWidths.current = [...paneWidths];
+    const startPos = direction === 'horizontal' ? e.clientX : e.clientY;
+    const containerSize = direction === 'horizontal' ? containerEl.offsetWidth : containerEl.offsetHeight;
 
-    const containerWidth = panesRowRef.current?.offsetWidth || 1;
+    // Read current sizes from the layout
+    let startSizes: number[] = [];
+    const findSplit = (node: LayoutNode): SplitNode | null => {
+      if (node.type === 'split') {
+        if (node.id === splitId) return node;
+        for (const child of node.children) {
+          const found = findSplit(child);
+          if (found) return found;
+        }
+      }
+      return null;
+    };
+    // We need current layout — use a ref trick
+    const splitNode = findSplit(layout);
+    if (!splitNode) return;
+    startSizes = [...splitNode.sizes];
 
     const onMove = (ev: MouseEvent) => {
-      if (!paneDividerDragging.current) return;
-      const dx = ev.clientX - paneDividerStartX.current;
-      const dPct = (dx / containerWidth) * 100;
-      const w0 = Math.max(20, Math.min(80, paneDividerStartWidths.current[0] + dPct));
-      const w1 = 100 - w0;
-      if (w1 < 20) return;
-      setPaneWidths([w0, w1]);
+      const currentPos = direction === 'horizontal' ? ev.clientX : ev.clientY;
+      const delta = currentPos - startPos;
+      const deltaPct = (delta / containerSize) * 100;
+
+      const newSizes = [...startSizes];
+      const minSize = 15; // minimum 15% per pane
+      newSizes[dividerIndex] = Math.max(minSize, startSizes[dividerIndex] + deltaPct);
+      newSizes[dividerIndex + 1] = Math.max(minSize, startSizes[dividerIndex + 1] - deltaPct);
+
+      // Validate minimums
+      if (newSizes[dividerIndex] < minSize || newSizes[dividerIndex + 1] < minSize) return;
+
+      setLayout(prev => updateSplitSizes(prev, splitId, newSizes));
     };
     const onUp = () => {
-      paneDividerDragging.current = false;
       document.removeEventListener('mousemove', onMove);
       document.removeEventListener('mouseup', onUp);
       document.body.style.cursor = '';
@@ -350,140 +523,104 @@ export default function BottomPanel({ terminals, onCloseTerminal, validationIssu
     };
     document.addEventListener('mousemove', onMove);
     document.addEventListener('mouseup', onUp);
-    document.body.style.cursor = 'col-resize';
+    document.body.style.cursor = direction === 'horizontal' ? 'col-resize' : 'row-resize';
     document.body.style.userSelect = 'none';
-  }, [panes.length, paneWidths]);
+  }, [layout]);
 
   // --- Tab drag handlers ---
-  const handleTabDragStart = useCallback((e: React.DragEvent, tabId: string, paneId: string) => {
+  const handleTabDragStart = useCallback((e: React.DragEvent, tabId: string, leafId: string) => {
     e.dataTransfer.setData('text/plain', tabId);
     e.dataTransfer.effectAllowed = 'move';
-    setDragState({ tabId, sourcePaneId: paneId, dropTarget: null, targetPaneId: null });
+    setDragState({ tabId, sourceLeafId: leafId, dropTarget: null, targetLeafId: null });
   }, []);
 
   const handleTabDragEnd = useCallback(() => {
     setDragState(null);
   }, []);
 
-  const handlePaneDragOver = useCallback((e: React.DragEvent, paneId: string) => {
+  const handleLeafDragOver = useCallback((e: React.DragEvent, leafId: string) => {
     e.preventDefault();
     e.dataTransfer.dropEffect = 'move';
     if (!dragState) return;
 
     const rect = e.currentTarget.getBoundingClientRect();
     const x = e.clientX - rect.left;
-    const edgeThreshold = 60;
+    const y = e.clientY - rect.top;
+    const edgeX = Math.min(60, rect.width * 0.25);
+    const edgeY = Math.min(60, rect.height * 0.25);
 
-    let target: 'left' | 'right' | 'center';
-    if (x < edgeThreshold && panes.length < 2) {
+    let target: DropZone;
+    if (x < edgeX) {
       target = 'left';
-    } else if (x > rect.width - edgeThreshold && panes.length < 2) {
+    } else if (x > rect.width - edgeX) {
       target = 'right';
+    } else if (y < edgeY) {
+      target = 'top';
+    } else if (y > rect.height - edgeY) {
+      target = 'bottom';
     } else {
       target = 'center';
     }
 
-    setDragState(prev => prev ? { ...prev, dropTarget: target, targetPaneId: paneId } : null);
-  }, [dragState, panes.length]);
+    setDragState(prev => prev ? { ...prev, dropTarget: target, targetLeafId: leafId } : null);
+  }, [dragState]);
 
-  const handlePaneDragLeave = useCallback(() => {
-    setDragState(prev => prev ? { ...prev, dropTarget: null, targetPaneId: null } : null);
+  const handleLeafDragLeave = useCallback(() => {
+    setDragState(prev => prev ? { ...prev, dropTarget: null, targetLeafId: null } : null);
   }, []);
 
-  const handlePaneDrop = useCallback((e: React.DragEvent, targetPaneId: string) => {
+  const handleLeafDrop = useCallback((e: React.DragEvent, targetLeafId: string) => {
     e.preventDefault();
     if (!dragState) return;
 
-    const { tabId, sourcePaneId, dropTarget } = dragState;
+    const { tabId, sourceLeafId, dropTarget } = dragState;
     setDragState(null);
 
     if (!dropTarget) return;
 
-    // Find source pane
-    const sourcePaneIndex = panes.findIndex(p => p.id === sourcePaneId);
-    if (sourcePaneIndex === -1) return;
+    setLayout(prev => {
+      const sourceLeaf = findLeaf(prev, sourceLeafId);
+      if (!sourceLeaf) return prev;
 
-    // Dropping on center = move tab to target pane's tab bar
-    if (dropTarget === 'center') {
-      if (sourcePaneId === targetPaneId) return; // same pane, no-op
+      // Center = move tab to target leaf's tab bar
+      if (dropTarget === 'center') {
+        if (sourceLeafId === targetLeafId) return prev;
+        // Remove from source
+        let tree: LayoutNode | null = removeTabFromTree(prev, tabId);
+        if (!tree) tree = makeDefaultLeaf();
+        // Add to target
+        tree = updateLeaf(tree, targetLeafId, l => ({
+          ...l,
+          tabIds: [...l.tabIds, tabId],
+          activeTabId: tabId,
+        }));
+        return tree;
+      }
 
-      setPanes(prev => {
-        let newPanes = prev.map(p => {
-          if (p.id === sourcePaneId) {
-            const newTabIds = p.tabIds.filter(t => t !== tabId);
-            return {
-              ...p,
-              tabIds: newTabIds,
-              activeTabId: newTabIds.includes(p.activeTabId) ? p.activeTabId : (newTabIds[0] || 'validation'),
-            };
-          }
-          if (p.id === targetPaneId) {
-            return {
-              ...p,
-              tabIds: [...p.tabIds, tabId],
-              activeTabId: tabId,
-            };
-          }
-          return p;
-        });
+      // Edge drop = split
+      // Source must have >1 tab to allow splitting off
+      if (sourceLeaf.tabIds.length <= 1) return prev;
 
-        // Remove empty panes
-        newPanes = newPanes.filter(p => p.tabIds.length > 0);
-        if (newPanes.length === 0) {
-          newPanes = [{ id: nextPaneId(), tabIds: [...FIXED_TABS], activeTabId: 'validation' }];
-        }
-        return newPanes;
-      });
+      const direction: SplitDirection = (dropTarget === 'left' || dropTarget === 'right') ? 'horizontal' : 'vertical';
+      const position: 'before' | 'after' = (dropTarget === 'left' || dropTarget === 'top') ? 'before' : 'after';
 
-      // Reset to single pane widths if collapsed to one
-      setPaneWidths(prev => {
-        const remainingPanes = panes.filter(p => {
-          if (p.id === sourcePaneId) return p.tabIds.length > 1; // will still have tabs
-          return true;
-        });
-        return remainingPanes.length <= 1 ? [100] : prev;
-      });
+      // Remove tab from source leaf
+      let tree: LayoutNode | null = removeTabFromTree(prev, tabId);
+      if (!tree) tree = makeDefaultLeaf();
 
-      return;
-    }
-
-    // Dropping on edge = split into new pane
-    if (panes.length >= 2) return; // max 2 panes
-
-    // Source pane must have more than 1 tab to split
-    const sourcePane = panes[sourcePaneIndex];
-    if (sourcePane.tabIds.length <= 1) return;
-
-    const newPaneId = nextPaneId();
-
-    setPanes(prev => {
-      const updated = prev.map(p => {
-        if (p.id === sourcePaneId) {
-          const newTabIds = p.tabIds.filter(t => t !== tabId);
-          return {
-            ...p,
-            tabIds: newTabIds,
-            activeTabId: newTabIds.includes(p.activeTabId) ? p.activeTabId : newTabIds[0],
-          };
-        }
-        return p;
-      });
-
-      const newPane: PaneState = {
-        id: newPaneId,
+      // Create new leaf with the tab
+      const newLeaf: LeafNode = {
+        type: 'leaf',
+        id: nextNodeId(),
         tabIds: [tabId],
         activeTabId: tabId,
       };
 
-      if (dropTarget === 'left') {
-        return [newPane, ...updated];
-      } else {
-        return [...updated, newPane];
-      }
+      // Split the target leaf
+      tree = splitLeaf(tree, targetLeafId, direction, position, newLeaf);
+      return tree;
     });
-
-    setPaneWidths([50, 50]);
-  }, [dragState, panes]);
+  }, [dragState, makeDefaultLeaf]);
 
   // --- Tab label/badge/content helpers ---
   function getTabLabel(tabId: string): string {
@@ -632,6 +769,102 @@ export default function BottomPanel({ terminals, onCloseTerminal, validationIssu
     }
   }
 
+  // --- Recursive layout renderer ---
+  const splitContainerRefs = useRef<Map<string, HTMLDivElement>>(new Map());
+
+  function renderLayoutNode(node: LayoutNode): React.ReactNode {
+    if (node.type === 'leaf') {
+      return renderLeafPane(node);
+    }
+
+    const isHorizontal = node.direction === 'horizontal';
+
+    return (
+      <div
+        key={node.id}
+        className={`bp-split bp-split-${node.direction}`}
+        ref={(el) => { if (el) splitContainerRefs.current.set(node.id, el); }}
+        style={{ display: 'flex', flexDirection: isHorizontal ? 'row' : 'column', flex: 1, overflow: 'hidden' }}
+      >
+        {node.children.map((child, i) => (
+          <React.Fragment key={child.id}>
+            {i > 0 && (
+              <div
+                className={`bp-split-divider bp-split-divider-${node.direction}`}
+                onMouseDown={(e) => {
+                  const container = splitContainerRefs.current.get(node.id);
+                  if (container) handleSplitDividerStart(e, node.id, i - 1, node.direction, container);
+                }}
+              />
+            )}
+            <div style={{ [isHorizontal ? 'width' : 'height']: `${node.sizes[i]}%`, display: 'flex', overflow: 'hidden', minWidth: 0, minHeight: 0 }}>
+              {renderLayoutNode(child)}
+            </div>
+          </React.Fragment>
+        ))}
+      </div>
+    );
+  }
+
+  function renderLeafPane(leaf: LeafNode): React.ReactNode {
+    return (
+      <div
+        key={leaf.id}
+        className="bp-pane"
+        onDragOver={(e) => handleLeafDragOver(e, leaf.id)}
+        onDragLeave={handleLeafDragLeave}
+        onDrop={(e) => handleLeafDrop(e, leaf.id)}
+      >
+        {/* Drop indicator overlay */}
+        {dragState && dragState.targetLeafId === leaf.id && dragState.dropTarget && (
+          <div className={`bp-drop-indicator bp-drop-${dragState.dropTarget}`} />
+        )}
+        {/* Tab bar */}
+        <div className="bottom-panel-tabs">
+          {leaf.tabIds.map((tabId) => {
+            const isTermTab = isTabCloseable(tabId);
+            const isLocalTerm = tabId === 'local-terminal';
+            return (
+              <button
+                key={tabId}
+                className={`bp-tab ${leaf.activeTabId === tabId ? 'active' : ''} ${isLocalTerm ? 'bp-tab-container' : ''} ${dragState?.tabId === tabId ? 'dragging' : ''}`}
+                draggable
+                onDragStart={(e) => handleTabDragStart(e, tabId, leaf.id)}
+                onDragEnd={handleTabDragEnd}
+                onClick={() => {
+                  activateTab(tabId);
+                  if (isLocalTerm) {
+                    setContainerTermActive(true);
+                  }
+                }}
+                data-help-id={getTabHelpId(tabId)}
+              >
+                {getTabLabel(tabId)}
+                {getTabBadge(tabId)}
+                {isTermTab && (
+                  <span
+                    className="bp-tab-close"
+                    onClick={(e) => { e.stopPropagation(); onCloseTerminal(tabId); }}
+                  >
+                    ✕
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+        {/* Content area */}
+        <div className="bottom-panel-content">
+          {leaf.tabIds.map((tabId) => (
+            <React.Fragment key={tabId}>
+              {renderTabContent(tabId, leaf.activeTabId === tabId)}
+            </React.Fragment>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
   // --- Collapsed view ---
   if (!expanded) {
     return (
@@ -668,7 +901,7 @@ export default function BottomPanel({ terminals, onCloseTerminal, validationIssu
     );
   }
 
-  // --- Expanded view with panes ---
+  // --- Expanded view with recursive layout ---
   return (
     <div className="bottom-panel" style={{ height: panelHeight }}>
       <div className="bp-resize-handle" onMouseDown={handleHeightDragStart} />
@@ -692,68 +925,9 @@ export default function BottomPanel({ terminals, onCloseTerminal, validationIssu
         )}
         <button className="bp-collapse-btn" onClick={() => setExpanded(false)} title="Collapse panel">▼</button>
       </div>
-      {/* Panes row */}
-      <div className="bp-panes-row" ref={panesRowRef}>
-        {panes.map((pane, paneIndex) => (
-          <div key={pane.id} className="bp-pane-wrapper" style={{ width: `${paneWidths[paneIndex] ?? 50}%` }}>
-            {paneIndex > 0 && (
-              <div className="bp-pane-divider" onMouseDown={handlePaneDividerStart} />
-            )}
-            <div
-              className="bp-pane"
-              onDragOver={(e) => handlePaneDragOver(e, pane.id)}
-              onDragLeave={handlePaneDragLeave}
-              onDrop={(e) => handlePaneDrop(e, pane.id)}
-            >
-              {/* Drop indicator overlay */}
-              {dragState && dragState.targetPaneId === pane.id && dragState.dropTarget && (
-                <div className={`bp-drop-indicator bp-drop-${dragState.dropTarget}`} />
-              )}
-              {/* Pane tab bar */}
-              <div className="bottom-panel-tabs">
-                {pane.tabIds.map((tabId) => {
-                  const isTermTab = isTabCloseable(tabId);
-                  const isLocalTerm = tabId === 'local-terminal';
-                  return (
-                    <button
-                      key={tabId}
-                      className={`bp-tab ${pane.activeTabId === tabId ? 'active' : ''} ${isLocalTerm ? 'bp-tab-container' : ''} ${dragState?.tabId === tabId ? 'dragging' : ''}`}
-                      draggable
-                      onDragStart={(e) => handleTabDragStart(e, tabId, pane.id)}
-                      onDragEnd={handleTabDragEnd}
-                      onClick={() => {
-                        activateTab(tabId);
-                        if (isLocalTerm) {
-                          setContainerTermActive(true);
-                        }
-                      }}
-                      data-help-id={getTabHelpId(tabId)}
-                    >
-                      {getTabLabel(tabId)}
-                      {getTabBadge(tabId)}
-                      {isTermTab && (
-                        <span
-                          className="bp-tab-close"
-                          onClick={(e) => { e.stopPropagation(); onCloseTerminal(tabId); }}
-                        >
-                          ✕
-                        </span>
-                      )}
-                    </button>
-                  );
-                })}
-              </div>
-              {/* Pane content area */}
-              <div className="bottom-panel-content">
-                {pane.tabIds.map((tabId) => (
-                  <React.Fragment key={tabId}>
-                    {renderTabContent(tabId, pane.activeTabId === tabId)}
-                  </React.Fragment>
-                ))}
-              </div>
-            </div>
-          </div>
-        ))}
+      {/* Recursive layout */}
+      <div className="bp-panes-row">
+        {renderLayoutNode(layout)}
       </div>
     </div>
   );

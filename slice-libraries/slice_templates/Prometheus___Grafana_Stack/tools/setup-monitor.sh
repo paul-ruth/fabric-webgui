@@ -76,6 +76,17 @@ datasources:
     isDefault: true
 DSEOF
 
+# Enable embedding (for Client View iframe) and anonymous access
+sudo tee -a /etc/grafana/grafana.ini > /dev/null <<'INIEOF'
+
+[security]
+allow_embedding = true
+
+[auth.anonymous]
+enabled = true
+org_role = Viewer
+INIEOF
+
 sudo systemctl enable --now grafana-server
 
 # ── Auto-discovery timer ─────────────────────────────────────────────
@@ -133,6 +144,70 @@ sudo systemctl enable --now discover-exporters.timer
 # Run discovery once now
 sudo /usr/local/bin/discover-exporters.sh
 
+# ── Provision Grafana dashboard (background) ─────────────────────
+# Wait for Grafana API, import Node Exporter Full dashboard (ID 1860),
+# and set it as the home dashboard. Runs in background so script can finish.
+(
+  # Wait for Grafana to be ready (up to 60s)
+  for i in $(seq 1 30); do
+    curl -sf http://localhost:3000/api/health > /dev/null 2>&1 && break
+    sleep 2
+  done
+
+  # Download dashboard JSON from grafana.com
+  DASH_JSON=$(curl -sf https://grafana.com/api/dashboards/1860/revisions/37/download)
+  if [ -n "$DASH_JSON" ]; then
+    # Import via Grafana API
+    IMPORT_PAYLOAD=$(cat <<IPEOF
+{
+  "dashboard": $DASH_JSON,
+  "overwrite": true,
+  "inputs": [
+    {
+      "name": "DS_PROMETHEUS",
+      "type": "datasource",
+      "pluginId": "prometheus",
+      "value": "Prometheus"
+    }
+  ],
+  "folderId": 0
+}
+IPEOF
+)
+    RESULT=$(curl -sf -X POST http://localhost:3000/api/dashboards/import \
+      -H 'Content-Type: application/json' \
+      -u admin:admin \
+      -d "$IMPORT_PAYLOAD")
+
+    # Extract dashboard UID and set as home dashboard for the default org
+    DASH_UID=$(echo "$RESULT" | grep -oP '"uid"\s*:\s*"\K[^"]+' | head -1)
+    if [ -n "$DASH_UID" ]; then
+      # Set as org home dashboard
+      curl -sf -X PUT http://localhost:3000/api/org/preferences \
+        -H 'Content-Type: application/json' \
+        -u admin:admin \
+        -d "{\"homeDashboardUID\":\"$DASH_UID\"}"
+      echo "Grafana: dashboard 1860 imported and set as home (UID=$DASH_UID)"
+    fi
+  else
+    echo "Warning: could not download dashboard 1860 from grafana.com"
+  fi
+) &
+
+# ── Background discovery retry ───────────────────────────────────
+# Workers may not have node_exporter running yet. Retry until at least
+# one target is found (up to 5 minutes).
+(
+  for i in $(seq 1 30); do
+    sudo /usr/local/bin/discover-exporters.sh
+    if grep -q '9100' /etc/prometheus/targets/fabnet-nodes.json 2>/dev/null; then
+      echo "Discovery: found exporters on attempt $i"
+      break
+    fi
+    sleep 10
+  done
+) &
+
 echo "=== Monitor setup complete ==="
 echo "Prometheus: http://<this-node>:9090"
-echo "Grafana:    http://<this-node>:3000  (admin/admin)"
+echo "Grafana:    http://<this-node>:3000  (no login required)"

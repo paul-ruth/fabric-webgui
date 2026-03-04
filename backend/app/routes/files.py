@@ -1169,7 +1169,12 @@ async def execute_all_boot_configs_stream(slice_name: str):
     async def _stream():
         task = asyncio.get_event_loop().run_in_executor(None, _do)
         while True:
-            msg = await queue.get()
+            try:
+                msg = await asyncio.wait_for(queue.get(), timeout=30)
+            except asyncio.TimeoutError:
+                # Send SSE keepalive comment to prevent proxy read-timeout
+                yield ": keepalive\n\n"
+                continue
             if msg is None:
                 break
             yield msg
