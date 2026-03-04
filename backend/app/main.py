@@ -5,9 +5,30 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 import os
 
-from app.routes import slices, resources, terminal, config, metrics, files, templates, vm_templates, projects, monitoring, recipes, http_proxy
+import asyncio
+from contextlib import asynccontextmanager
 
-app = FastAPI(title="FABRIC Web GUI API", version="0.1.0")
+from app.routes import slices, resources, terminal, config, metrics, files, templates, vm_templates, projects, monitoring, recipes, http_proxy, tunnels
+from app.tunnel_manager import get_tunnel_manager
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Startup/shutdown lifecycle: periodic tunnel cleanup + shutdown."""
+    mgr = get_tunnel_manager()
+
+    async def _cleanup_loop():
+        while True:
+            await asyncio.sleep(60)
+            mgr.cleanup_idle()
+
+    task = asyncio.create_task(_cleanup_loop())
+    yield
+    task.cancel()
+    mgr.close_all()
+
+
+app = FastAPI(title="FABRIC Web GUI API", version="0.1.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -29,6 +50,7 @@ app.include_router(projects.router)
 app.include_router(monitoring.router)
 app.include_router(recipes.router)
 app.include_router(http_proxy.router)
+app.include_router(tunnels.router)
 
 # Serve frontend static files in production
 static_dir = os.path.join(os.path.dirname(__file__), "..", "static")

@@ -1000,6 +1000,35 @@ export async function executeRecipeStream(
   }
 }
 
+// -- Tunnels ---------------------------------------------------------------
+
+export interface TunnelInfo {
+  id: string;
+  slice_name: string;
+  node_name: string;
+  remote_port: number;
+  local_port: number;
+  created_at: number;
+  last_connection_at: number;
+  status: string;
+  error: string | null;
+}
+
+export function createTunnel(sliceName: string, nodeName: string, port: number): Promise<TunnelInfo> {
+  return fetchJson('/tunnels', {
+    method: 'POST',
+    body: JSON.stringify({ slice_name: sliceName, node_name: nodeName, port }),
+  });
+}
+
+export function listTunnels(): Promise<TunnelInfo[]> {
+  return fetchJson('/tunnels');
+}
+
+export function closeTunnel(tunnelId: string): Promise<{ status: string; id: string }> {
+  return fetchJson(`/tunnels/${encodeURIComponent(tunnelId)}`, { method: 'DELETE' });
+}
+
 // -- Storage ---------------------------------------------------------------
 
 export function checkForUpdate(): Promise<UpdateInfo> {

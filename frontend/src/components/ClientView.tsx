@@ -1,5 +1,5 @@
 'use client';
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import type { SliceSummary, SliceData } from '../types/fabric';
 import * as api from '../api/client';
 import '../styles/client-view.css';
@@ -24,18 +24,44 @@ export default function ClientView({ slices, selectedSliceName, sliceData, clien
   const [port, setPort] = useState(clientTarget?.port || 3000);
   const [iframeSrc, setIframeSrc] = useState('');
   const [iframeDark, setIframeDark] = useState(false);
+  const [tunnelStatus, setTunnelStatus] = useState<string>('');
+  const [tunnelError, setTunnelError] = useState<string>('');
+  const [hasTunnel, setHasTunnel] = useState(false);
+
+  // Use refs for mutable state that shouldn't trigger re-renders / effect re-runs
+  const tunnelIdRef = useRef<string | null>(null);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Track whether we ourselves triggered the clientTarget change (to avoid re-connect loop)
+  const selfTriggeredRef = useRef(false);
+
   const [localSliceData, setLocalSliceData] = useState<SliceData | null>(
     sliceName === selectedSliceName ? sliceData : null
   );
 
-  // When clientTarget changes externally (e.g. from context menu), update local state
+  // Cleanup on unmount only
   useEffect(() => {
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current);
+      if (tunnelIdRef.current) {
+        api.closeTunnel(tunnelIdRef.current).catch(() => {});
+      }
+    };
+  }, []);
+
+  // When clientTarget changes externally (e.g. from context menu), auto-connect.
+  // Skip when we ourselves set it via onTargetChange inside doConnect.
+  useEffect(() => {
+    if (selfTriggeredRef.current) {
+      selfTriggeredRef.current = false;
+      return;
+    }
     if (clientTarget) {
       setSliceName(clientTarget.sliceName);
       setNodeName(clientTarget.nodeName);
       setPort(clientTarget.port);
-      setIframeSrc(`/api/proxy/${encodeURIComponent(clientTarget.sliceName)}/${encodeURIComponent(clientTarget.nodeName)}/${clientTarget.port}/`);
+      doConnect(clientTarget.sliceName, clientTarget.nodeName, clientTarget.port);
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [clientTarget]);
 
   // Load slice data when slice selection changes
@@ -67,12 +93,110 @@ export default function ClientView({ slices, selectedSliceName, sliceData, clien
     }
   }, [nodes, nodeName]);
 
+  // Core connect function — no dependencies on React state that changes frequently
+  const doConnect = useCallback(async (sn: string, nn: string, p: number) => {
+    // Close previous tunnel
+    if (pollRef.current) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+    if (tunnelIdRef.current) {
+      api.closeTunnel(tunnelIdRef.current).catch(() => {});
+      tunnelIdRef.current = null;
+      setHasTunnel(false);
+    }
+
+    setIframeSrc('');
+    setTunnelError('');
+    setTunnelStatus('connecting');
+
+    try {
+      const info = await api.createTunnel(sn, nn, p);
+      tunnelIdRef.current = info.id;
+      setHasTunnel(true);
+
+      if (info.status === 'active') {
+        const src = `http://${window.location.hostname}:${info.local_port}/`;
+        setIframeSrc(src);
+        setTunnelStatus('active');
+        selfTriggeredRef.current = true;
+        onTargetChange({ sliceName: sn, nodeName: nn, port: p });
+        return;
+      }
+
+      // Poll until active or error
+      const createdId = info.id;
+      const poll = setInterval(async () => {
+        // If tunnel was replaced by a new connect call, stop polling
+        if (tunnelIdRef.current !== createdId) {
+          clearInterval(poll);
+          if (pollRef.current === poll) pollRef.current = null;
+          return;
+        }
+        try {
+          const tunnels = await api.listTunnels();
+          const t = tunnels.find((x) => x.id === createdId);
+          if (!t) {
+            clearInterval(poll);
+            if (pollRef.current === poll) pollRef.current = null;
+            // Only update UI if this is still the active tunnel
+            if (tunnelIdRef.current === createdId) {
+              setTunnelStatus('error');
+              setTunnelError('Tunnel disappeared during setup');
+              tunnelIdRef.current = null;
+              setHasTunnel(false);
+            }
+            return;
+          }
+          if (t.status === 'active') {
+            clearInterval(poll);
+            if (pollRef.current === poll) pollRef.current = null;
+            if (tunnelIdRef.current === createdId) {
+              const src = `http://${window.location.hostname}:${t.local_port}/`;
+              setIframeSrc(src);
+              setTunnelStatus('active');
+              selfTriggeredRef.current = true;
+              onTargetChange({ sliceName: sn, nodeName: nn, port: p });
+            }
+          } else if (t.status === 'error') {
+            clearInterval(poll);
+            if (pollRef.current === poll) pollRef.current = null;
+            if (tunnelIdRef.current === createdId) {
+              setTunnelStatus('error');
+              setTunnelError(t.error || 'Tunnel setup failed');
+            }
+          }
+        } catch {
+          // polling error — keep trying
+        }
+      }, 1500);
+      pollRef.current = poll;
+    } catch (e: any) {
+      setTunnelStatus('error');
+      setTunnelError(e.message || 'Failed to create tunnel');
+    }
+  }, [onTargetChange]);
+
   const handleConnect = useCallback(() => {
     if (!sliceName || !nodeName || !port) return;
-    const src = `/api/proxy/${encodeURIComponent(sliceName)}/${encodeURIComponent(nodeName)}/${port}/`;
-    setIframeSrc(src);
-    onTargetChange({ sliceName, nodeName, port });
-  }, [sliceName, nodeName, port, onTargetChange]);
+    doConnect(sliceName, nodeName, port);
+  }, [sliceName, nodeName, port, doConnect]);
+
+  const handleDisconnect = useCallback(() => {
+    if (pollRef.current) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+    if (tunnelIdRef.current) {
+      api.closeTunnel(tunnelIdRef.current).catch(() => {});
+      tunnelIdRef.current = null;
+      setHasTunnel(false);
+    }
+    setIframeSrc('');
+    setTunnelStatus('');
+    setTunnelError('');
+    onTargetChange(null);
+  }, [onTargetChange]);
 
   return (
     <div className="client-view">
@@ -106,7 +230,15 @@ export default function ClientView({ slices, selectedSliceName, sliceData, clien
           onChange={(e) => setPort(parseInt(e.target.value) || 3000)}
         />
 
-        <button onClick={handleConnect}>Connect</button>
+        <button onClick={handleConnect} disabled={tunnelStatus === 'connecting'}>
+          {tunnelStatus === 'connecting' ? 'Connecting...' : 'Connect'}
+        </button>
+
+        {hasTunnel && (
+          <button onClick={handleDisconnect} className="client-disconnect-btn">
+            Disconnect
+          </button>
+        )}
 
         <div className="client-sep" />
 
@@ -118,6 +250,17 @@ export default function ClientView({ slices, selectedSliceName, sliceData, clien
           {iframeDark ? 'Dark' : 'Light'}
         </button>
 
+        {tunnelStatus && (
+          <>
+            <div className="client-sep" />
+            <span className={`client-status client-status-${tunnelStatus}`}>
+              {tunnelStatus === 'connecting' ? 'SSH tunnel connecting...' :
+               tunnelStatus === 'active' ? 'Tunnel active' :
+               tunnelStatus === 'error' ? 'Tunnel error' : tunnelStatus}
+            </span>
+          </>
+        )}
+
         {iframeSrc && (
           <>
             <div className="client-sep" />
@@ -125,6 +268,10 @@ export default function ClientView({ slices, selectedSliceName, sliceData, clien
           </>
         )}
       </div>
+
+      {tunnelError && (
+        <div className="client-error">{tunnelError}</div>
+      )}
 
       {iframeSrc ? (
         <div
@@ -135,7 +282,9 @@ export default function ClientView({ slices, selectedSliceName, sliceData, clien
         </div>
       ) : (
         <div className="client-placeholder">
-          Select a slice, node, and port, then click Connect to view the web service.
+          {tunnelStatus === 'connecting'
+            ? 'Establishing SSH tunnel to VM...'
+            : 'Select a slice, node, and port, then click Connect to view the web service.'}
         </div>
       )}
     </div>

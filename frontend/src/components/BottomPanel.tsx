@@ -1,5 +1,5 @@
 'use client';
-import { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
@@ -64,6 +64,23 @@ interface BottomPanelProps {
   onClearBootConsole: () => void;
 }
 
+// --- Types for pane layout ---
+interface PaneState {
+  id: string;
+  tabIds: string[];
+  activeTabId: string;
+}
+
+interface DragState {
+  tabId: string;
+  sourcePaneId: string;
+  dropTarget: 'left' | 'right' | 'center' | null;
+  targetPaneId: string | null;
+}
+
+// Fixed tab IDs (non-terminal)
+const FIXED_TABS = ['slice-errors', 'errors', 'validation', 'log', 'recipes', 'boot-config', 'local-terminal'] as const;
+
 const TERM_THEME = {
   background: '#1a1a2e',
   foreground: '#e0e0e0',
@@ -87,107 +104,195 @@ const TERM_THEME = {
   brightWhite: '#ffffff',
 };
 
+let paneIdCounter = 0;
+function nextPaneId() { return `pane-${++paneIdCounter}`; }
+
 export default function BottomPanel({ terminals, onCloseTerminal, validationIssues, validationValid, sliceState, dirty, errors, onClearErrors, sliceErrors, bootConfigErrors, onClearBootConfigErrors, fullWidth = true, onToggleFullWidth, showWidthToggle = false, expanded, onExpandedChange, panelHeight, onPanelHeightChange, statusMessage, loading, recipeConsole, recipeRunning, onClearRecipeConsole, bootConsole, bootRunning, onClearBootConsole }: BottomPanelProps) {
   const setExpanded = onExpandedChange;
   const setPanelHeight = onPanelHeightChange;
-  const [activeTab, setActiveTab] = useState('validation');
 
-  // Auto-expand and switch to new terminal tab when one is added
+  // --- Pane layout state ---
+  const [panes, setPanes] = useState<PaneState[]>(() => [{
+    id: nextPaneId(),
+    tabIds: [...FIXED_TABS],
+    activeTabId: 'validation',
+  }]);
+  const [paneWidths, setPaneWidths] = useState<number[]>([100]);
+  const [dragState, setDragState] = useState<DragState | null>(null);
+
+  // --- Tab metadata ---
+  const termCount = terminals.length;
+  const validationErrorCount = validationIssues.filter((i) => i.severity === 'error').length;
+  const warnCount = validationIssues.filter((i) => i.severity === 'warning').length;
+  const apiErrorCount = errors.length;
+  const sliceErrorCount = sliceErrors.length;
+  const bootErrorCount = bootConfigErrors.length;
+  const totalSliceIssues = sliceErrorCount + bootErrorCount;
+
+  const [containerTermActive, setContainerTermActive] = useState(false);
+
+  // All tab IDs that should exist
+  const allTabIds = useMemo(() => {
+    const ids: string[] = [...FIXED_TABS];
+    terminals.forEach(t => ids.push(t.id));
+    return ids;
+  }, [terminals]);
+
+  // --- Sync terminal additions/removals into pane state ---
+  const prevTermIds = useRef<string[]>([]);
+  useEffect(() => {
+    const currentTermIds = terminals.map(t => t.id);
+    const prevIds = prevTermIds.current;
+
+    // Find added terminals
+    const added = currentTermIds.filter(id => !prevIds.includes(id));
+    // Find removed terminals
+    const removed = prevIds.filter(id => !currentTermIds.includes(id));
+
+    if (added.length > 0 || removed.length > 0) {
+      setPanes(prev => {
+        let newPanes = prev.map(p => ({
+          ...p,
+          tabIds: p.tabIds.filter(tid => !removed.includes(tid)),
+        }));
+
+        // Add new terminals to the first pane
+        if (added.length > 0 && newPanes.length > 0) {
+          newPanes[0] = {
+            ...newPanes[0],
+            tabIds: [...newPanes[0].tabIds, ...added],
+          };
+        }
+
+        // Clean up empty panes (except keep at least one)
+        newPanes = newPanes.filter(p => p.tabIds.length > 0);
+        if (newPanes.length === 0) {
+          newPanes = [{ id: nextPaneId(), tabIds: [...FIXED_TABS], activeTabId: 'validation' }];
+        }
+
+        // Fix activeTabId if it was removed
+        newPanes = newPanes.map(p => ({
+          ...p,
+          activeTabId: p.tabIds.includes(p.activeTabId) ? p.activeTabId : p.tabIds[0],
+        }));
+
+        return newPanes;
+      });
+    }
+
+    prevTermIds.current = currentTermIds;
+  }, [terminals]);
+
+  // --- activateTab helper ---
+  const activateTab = useCallback((tabId: string) => {
+    setPanes(prev => {
+      const pane = prev.find(p => p.tabIds.includes(tabId));
+      if (!pane) return prev;
+      if (pane.activeTabId === tabId) return prev;
+      return prev.map(p => p.id === pane.id ? { ...p, activeTabId: tabId } : p);
+    });
+  }, []);
+
+  // --- Auto-switch effects (same logic, using activateTab) ---
+
+  // Auto-expand and switch to new terminal
   const prevTermCount = useRef(terminals.length);
   useEffect(() => {
     if (terminals.length > prevTermCount.current) {
       const newest = terminals[terminals.length - 1];
-      setActiveTab(newest.id);
+      activateTab(newest.id);
       setExpanded(true);
     }
     prevTermCount.current = terminals.length;
-  }, [terminals.length, setExpanded]);
+  }, [terminals.length, setExpanded, activateTab]);
 
-  // Switch to Errors tab when new errors arrive (but don't auto-expand)
+  // Switch to Errors tab on new errors
   const prevErrorCount = useRef(errors.length);
   useEffect(() => {
     if (errors.length > prevErrorCount.current) {
-      setActiveTab('errors');
+      activateTab('errors');
     }
     prevErrorCount.current = errors.length;
-  }, [errors.length]);
+  }, [errors.length, activateTab]);
 
-  // Auto-switch to slice errors tab when slice errors or boot config errors arrive
+  // Auto-switch to slice errors
   const prevSliceErrorCount = useRef(sliceErrors.length);
   const prevBootErrorCount = useRef(bootConfigErrors.length);
   useEffect(() => {
     if (sliceErrors.length > 0 && prevSliceErrorCount.current === 0) {
-      setActiveTab('slice-errors');
+      activateTab('slice-errors');
       setExpanded(true);
     }
     prevSliceErrorCount.current = sliceErrors.length;
-  }, [sliceErrors.length, setExpanded]);
+  }, [sliceErrors.length, setExpanded, activateTab]);
   useEffect(() => {
     if (bootConfigErrors.length > 0 && prevBootErrorCount.current === 0) {
-      setActiveTab('slice-errors');
+      activateTab('slice-errors');
       setExpanded(true);
     }
     prevBootErrorCount.current = bootConfigErrors.length;
-  }, [bootConfigErrors.length, setExpanded]);
+  }, [bootConfigErrors.length, setExpanded, activateTab]);
 
-  // Auto-switch to recipes tab when recipe execution starts
+  // Auto-switch to recipes
   const prevRecipeRunning = useRef(recipeRunning);
   useEffect(() => {
     if (recipeRunning && !prevRecipeRunning.current) {
-      setActiveTab('recipes');
+      activateTab('recipes');
       setExpanded(true);
     }
     prevRecipeRunning.current = recipeRunning;
-  }, [recipeRunning, setExpanded]);
+  }, [recipeRunning, setExpanded, activateTab]);
 
-  // Auto-switch to boot config tab when execution starts
+  // Auto-switch to boot config
   const prevBootRunning = useRef(bootRunning);
   useEffect(() => {
     if (bootRunning && !prevBootRunning.current) {
-      setActiveTab('boot-config');
+      activateTab('boot-config');
       setExpanded(true);
     }
     prevBootRunning.current = bootRunning;
-  }, [bootRunning, setExpanded]);
+  }, [bootRunning, setExpanded, activateTab]);
 
   // Auto-scroll recipe console
   const recipeConsoleEndRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    if (activeTab === 'recipes') {
+    // Check if any pane has recipes as active tab
+    const recipesActive = panes.some(p => p.activeTabId === 'recipes');
+    if (recipesActive) {
       recipeConsoleEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }
-  }, [recipeConsole, activeTab]);
+  }, [recipeConsole, panes]);
 
   // Auto-scroll boot config console
   const bootConsoleEndRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    if (activeTab === 'boot-config') {
+    const bootActive = panes.some(p => p.activeTabId === 'boot-config');
+    if (bootActive) {
       bootConsoleEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }
-  }, [bootConsole, activeTab]);
+  }, [bootConsole, panes]);
 
-  // If active tab was closed, switch to validation
+  // If active tab was closed, fix it
   useEffect(() => {
-    if (
-      activeTab !== 'errors' &&
-      activeTab !== 'log' &&
-      activeTab !== 'validation' &&
-      activeTab !== 'local-terminal' &&
-      activeTab !== 'slice-errors' &&
-      activeTab !== 'recipes' &&
-      activeTab !== 'boot-config' &&
-      !terminals.find((t) => t.id === activeTab)
-    ) {
-      setActiveTab('validation');
-    }
-  }, [terminals, activeTab]);
+    setPanes(prev => {
+      let changed = false;
+      const updated = prev.map(p => {
+        if (!allTabIds.includes(p.activeTabId)) {
+          changed = true;
+          return { ...p, activeTabId: p.tabIds[0] || 'validation' };
+        }
+        return p;
+      });
+      return changed ? updated : prev;
+    });
+  }, [allTabIds]);
 
-  const [containerTermActive, setContainerTermActive] = useState(false);
+  // --- Height resize (existing logic) ---
   const draggingRef = useRef(false);
   const startYRef = useRef(0);
   const startHeightRef = useRef(0);
 
-  const handleDragStart = useCallback((e: React.MouseEvent) => {
+  const handleHeightDragStart = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
     draggingRef.current = true;
     startYRef.current = e.clientY;
@@ -210,16 +315,324 @@ export default function BottomPanel({ terminals, onCloseTerminal, validationIssu
     document.addEventListener('mouseup', onUp);
     document.body.style.cursor = 'row-resize';
     document.body.style.userSelect = 'none';
-  }, [panelHeight]);
+  }, [panelHeight, setPanelHeight]);
 
-  const termCount = terminals.length;
-  const validationErrorCount = validationIssues.filter((i) => i.severity === 'error').length;
-  const warnCount = validationIssues.filter((i) => i.severity === 'warning').length;
-  const apiErrorCount = errors.length;
-  const sliceErrorCount = sliceErrors.length;
-  const bootErrorCount = bootConfigErrors.length;
-  const totalSliceIssues = sliceErrorCount + bootErrorCount;
+  // --- Pane divider resize ---
+  const paneDividerDragging = useRef(false);
+  const paneDividerStartX = useRef(0);
+  const paneDividerStartWidths = useRef<number[]>([]);
+  const panesRowRef = useRef<HTMLDivElement>(null);
 
+  const handlePaneDividerStart = useCallback((e: React.MouseEvent) => {
+    if (panes.length < 2) return;
+    e.preventDefault();
+    paneDividerDragging.current = true;
+    paneDividerStartX.current = e.clientX;
+    paneDividerStartWidths.current = [...paneWidths];
+
+    const containerWidth = panesRowRef.current?.offsetWidth || 1;
+
+    const onMove = (ev: MouseEvent) => {
+      if (!paneDividerDragging.current) return;
+      const dx = ev.clientX - paneDividerStartX.current;
+      const dPct = (dx / containerWidth) * 100;
+      const w0 = Math.max(20, Math.min(80, paneDividerStartWidths.current[0] + dPct));
+      const w1 = 100 - w0;
+      if (w1 < 20) return;
+      setPaneWidths([w0, w1]);
+    };
+    const onUp = () => {
+      paneDividerDragging.current = false;
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+  }, [panes.length, paneWidths]);
+
+  // --- Tab drag handlers ---
+  const handleTabDragStart = useCallback((e: React.DragEvent, tabId: string, paneId: string) => {
+    e.dataTransfer.setData('text/plain', tabId);
+    e.dataTransfer.effectAllowed = 'move';
+    setDragState({ tabId, sourcePaneId: paneId, dropTarget: null, targetPaneId: null });
+  }, []);
+
+  const handleTabDragEnd = useCallback(() => {
+    setDragState(null);
+  }, []);
+
+  const handlePaneDragOver = useCallback((e: React.DragEvent, paneId: string) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    if (!dragState) return;
+
+    const rect = e.currentTarget.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const edgeThreshold = 60;
+
+    let target: 'left' | 'right' | 'center';
+    if (x < edgeThreshold && panes.length < 2) {
+      target = 'left';
+    } else if (x > rect.width - edgeThreshold && panes.length < 2) {
+      target = 'right';
+    } else {
+      target = 'center';
+    }
+
+    setDragState(prev => prev ? { ...prev, dropTarget: target, targetPaneId: paneId } : null);
+  }, [dragState, panes.length]);
+
+  const handlePaneDragLeave = useCallback(() => {
+    setDragState(prev => prev ? { ...prev, dropTarget: null, targetPaneId: null } : null);
+  }, []);
+
+  const handlePaneDrop = useCallback((e: React.DragEvent, targetPaneId: string) => {
+    e.preventDefault();
+    if (!dragState) return;
+
+    const { tabId, sourcePaneId, dropTarget } = dragState;
+    setDragState(null);
+
+    if (!dropTarget) return;
+
+    // Find source pane
+    const sourcePaneIndex = panes.findIndex(p => p.id === sourcePaneId);
+    if (sourcePaneIndex === -1) return;
+
+    // Dropping on center = move tab to target pane's tab bar
+    if (dropTarget === 'center') {
+      if (sourcePaneId === targetPaneId) return; // same pane, no-op
+
+      setPanes(prev => {
+        let newPanes = prev.map(p => {
+          if (p.id === sourcePaneId) {
+            const newTabIds = p.tabIds.filter(t => t !== tabId);
+            return {
+              ...p,
+              tabIds: newTabIds,
+              activeTabId: newTabIds.includes(p.activeTabId) ? p.activeTabId : (newTabIds[0] || 'validation'),
+            };
+          }
+          if (p.id === targetPaneId) {
+            return {
+              ...p,
+              tabIds: [...p.tabIds, tabId],
+              activeTabId: tabId,
+            };
+          }
+          return p;
+        });
+
+        // Remove empty panes
+        newPanes = newPanes.filter(p => p.tabIds.length > 0);
+        if (newPanes.length === 0) {
+          newPanes = [{ id: nextPaneId(), tabIds: [...FIXED_TABS], activeTabId: 'validation' }];
+        }
+        return newPanes;
+      });
+
+      // Reset to single pane widths if collapsed to one
+      setPaneWidths(prev => {
+        const remainingPanes = panes.filter(p => {
+          if (p.id === sourcePaneId) return p.tabIds.length > 1; // will still have tabs
+          return true;
+        });
+        return remainingPanes.length <= 1 ? [100] : prev;
+      });
+
+      return;
+    }
+
+    // Dropping on edge = split into new pane
+    if (panes.length >= 2) return; // max 2 panes
+
+    // Source pane must have more than 1 tab to split
+    const sourcePane = panes[sourcePaneIndex];
+    if (sourcePane.tabIds.length <= 1) return;
+
+    const newPaneId = nextPaneId();
+
+    setPanes(prev => {
+      const updated = prev.map(p => {
+        if (p.id === sourcePaneId) {
+          const newTabIds = p.tabIds.filter(t => t !== tabId);
+          return {
+            ...p,
+            tabIds: newTabIds,
+            activeTabId: newTabIds.includes(p.activeTabId) ? p.activeTabId : newTabIds[0],
+          };
+        }
+        return p;
+      });
+
+      const newPane: PaneState = {
+        id: newPaneId,
+        tabIds: [tabId],
+        activeTabId: tabId,
+      };
+
+      if (dropTarget === 'left') {
+        return [newPane, ...updated];
+      } else {
+        return [...updated, newPane];
+      }
+    });
+
+    setPaneWidths([50, 50]);
+  }, [dragState, panes]);
+
+  // --- Tab label/badge/content helpers ---
+  function getTabLabel(tabId: string): string {
+    switch (tabId) {
+      case 'slice-errors': return 'Slice Errors';
+      case 'errors': return 'Errors';
+      case 'validation': return 'Validation';
+      case 'log': return 'Log';
+      case 'recipes': return 'Recipes';
+      case 'boot-config': return 'Boot Config';
+      case 'local-terminal': return 'Local';
+      default: {
+        const term = terminals.find(t => t.id === tabId);
+        return term ? term.label : tabId;
+      }
+    }
+  }
+
+  function getTabBadge(tabId: string): React.ReactNode {
+    switch (tabId) {
+      case 'slice-errors':
+        return totalSliceIssues > 0 ? <span className="bp-tab-badge error">{totalSliceIssues}</span> : null;
+      case 'errors':
+        return apiErrorCount > 0 ? <span className="bp-tab-badge error">{apiErrorCount}</span> : null;
+      case 'validation':
+        return (
+          <>
+            {!validationValid && <span className="bp-tab-indicator error" />}
+            {validationValid && validationIssues.length === 0 && <span className="bp-tab-indicator ok" />}
+            {validationValid && warnCount > 0 && <span className="bp-tab-indicator warn" />}
+          </>
+        );
+      case 'recipes':
+        return (
+          <>
+            {recipeRunning && <span className="bp-tab-indicator warn" />}
+            {!recipeRunning && recipeConsole.length > 0 && <span className="bp-tab-indicator ok" />}
+          </>
+        );
+      case 'boot-config':
+        return (
+          <>
+            {bootRunning && <span className="bp-tab-indicator warn" />}
+            {!bootRunning && bootConsole.length > 0 && <span className="bp-tab-indicator ok" />}
+          </>
+        );
+      default:
+        return null;
+    }
+  }
+
+  function getTabHelpId(tabId: string): string | undefined {
+    switch (tabId) {
+      case 'errors': return 'bottom.errors';
+      case 'validation': return 'bottom.validation';
+      case 'log': return 'bottom.log';
+      case 'local-terminal': return 'bottom.local-terminal';
+      default: return undefined;
+    }
+  }
+
+  function isTabCloseable(tabId: string): boolean {
+    return !!terminals.find(t => t.id === tabId);
+  }
+
+  function renderTabContent(tabId: string, isActive: boolean): React.ReactNode {
+    switch (tabId) {
+      case 'slice-errors':
+        return (
+          <div style={{ display: isActive ? 'flex' : 'none', flex: 1, overflow: 'hidden' }}>
+            <SliceErrorsView errors={sliceErrors} bootConfigErrors={bootConfigErrors} onClearBootConfigErrors={onClearBootConfigErrors} />
+          </div>
+        );
+      case 'errors':
+        return (
+          <div style={{ display: isActive ? 'flex' : 'none', flex: 1, overflow: 'hidden' }}>
+            <div className="bp-errors-list">
+              <div className="bp-errors-header">
+                <span>{errors.length} error{errors.length !== 1 ? 's' : ''}</span>
+                {errors.length > 0 && (
+                  <button className="bp-errors-clear" onClick={onClearErrors}>Clear All</button>
+                )}
+              </div>
+              {errors.length === 0 && (
+                <div className="bp-validation-empty">No errors.</div>
+              )}
+              {errors.map((msg, i) => (
+                <div key={i} className="bp-error-entry">
+                  <span className="bp-error-message">{msg}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        );
+      case 'validation':
+        return (
+          <div style={{ display: isActive ? 'flex' : 'none', flex: 1, overflow: 'hidden' }}>
+            <ValidationView issues={validationIssues} valid={validationValid} sliceState={sliceState} dirty={dirty} />
+          </div>
+        );
+      case 'log':
+        return (
+          <div style={{ display: isActive ? 'flex' : 'none', flex: 1, overflow: 'hidden' }}>
+            <LogView />
+          </div>
+        );
+      case 'recipes':
+        return (
+          <div style={{ display: isActive ? 'flex' : 'none', flex: 1, overflow: 'hidden' }}>
+            <RecipeConsoleView
+              lines={recipeConsole}
+              running={recipeRunning}
+              onClear={onClearRecipeConsole}
+              endRef={recipeConsoleEndRef}
+            />
+          </div>
+        );
+      case 'boot-config':
+        return (
+          <div style={{ display: isActive ? 'flex' : 'none', flex: 1, overflow: 'hidden' }}>
+            <BootConsoleView
+              lines={bootConsole}
+              running={bootRunning}
+              onClear={onClearBootConsole}
+              endRef={bootConsoleEndRef}
+            />
+          </div>
+        );
+      case 'local-terminal':
+        return (
+          <div style={{ display: isActive ? 'flex' : 'none', flex: 1, overflow: 'hidden' }}>
+            {containerTermActive && <ContainerTerminalView />}
+          </div>
+        );
+      default: {
+        const term = terminals.find(t => t.id === tabId);
+        if (term) {
+          return (
+            <div style={{ display: isActive ? 'flex' : 'none', flex: 1, overflow: 'hidden' }}>
+              <TerminalView sliceName={term.sliceName} nodeName={term.nodeName} managementIp={term.managementIp} />
+            </div>
+          );
+        }
+        return null;
+      }
+    }
+  }
+
+  // --- Collapsed view ---
   if (!expanded) {
     return (
       <div className="bottom-panel-collapsed">
@@ -255,87 +668,19 @@ export default function BottomPanel({ terminals, onCloseTerminal, validationIssu
     );
   }
 
+  // --- Expanded view with panes ---
   return (
     <div className="bottom-panel" style={{ height: panelHeight }}>
-      <div className="bp-resize-handle" onMouseDown={handleDragStart} />
-      <div className="bottom-panel-tabs">
-        <button
-          className={`bp-tab ${activeTab === 'slice-errors' ? 'active' : ''}`}
-          onClick={() => setActiveTab('slice-errors')}
-        >
-          Slice Errors
-          {totalSliceIssues > 0 && <span className="bp-tab-badge error">{totalSliceIssues}</span>}
-        </button>
-        <button
-          className={`bp-tab ${activeTab === 'errors' ? 'active' : ''}`}
-          onClick={() => setActiveTab('errors')}
-          data-help-id="bottom.errors"
-        >
-          Errors
-          {apiErrorCount > 0 && <span className="bp-tab-badge error">{apiErrorCount}</span>}
-        </button>
-        <button
-          className={`bp-tab ${activeTab === 'validation' ? 'active' : ''}`}
-          onClick={() => setActiveTab('validation')}
-          data-help-id="bottom.validation"
-        >
-          Validation
-          {!validationValid && <span className="bp-tab-indicator error" />}
-          {validationValid && validationIssues.length === 0 && <span className="bp-tab-indicator ok" />}
-          {validationValid && warnCount > 0 && <span className="bp-tab-indicator warn" />}
-        </button>
-        <button
-          className={`bp-tab ${activeTab === 'log' ? 'active' : ''}`}
-          onClick={() => setActiveTab('log')}
-          data-help-id="bottom.log"
-        >
-          Log
-        </button>
-        <button
-          className={`bp-tab ${activeTab === 'recipes' ? 'active' : ''}`}
-          onClick={() => setActiveTab('recipes')}
-        >
-          Recipes
-          {recipeRunning && <span className="bp-tab-indicator warn" />}
-          {!recipeRunning && recipeConsole.length > 0 && <span className="bp-tab-indicator ok" />}
-        </button>
-        <button
-          className={`bp-tab ${activeTab === 'boot-config' ? 'active' : ''}`}
-          onClick={() => setActiveTab('boot-config')}
-        >
-          Boot Config
-          {bootRunning && <span className="bp-tab-indicator warn" />}
-          {!bootRunning && bootConsole.length > 0 && <span className="bp-tab-indicator ok" />}
-        </button>
-        <button
-          className={`bp-tab bp-tab-container ${activeTab === 'local-terminal' ? 'active' : ''}`}
-          onClick={() => { setActiveTab('local-terminal'); setExpanded(true); setContainerTermActive(true); }}
-          data-help-id="bottom.local-terminal"
-        >
-          Local
-        </button>
-        {terminals.map((t) => (
-          <button
-            key={t.id}
-            className={`bp-tab ${activeTab === t.id ? 'active' : ''}`}
-            onClick={() => setActiveTab(t.id)}
-          >
-            {t.label}
-            <span
-              className="bp-tab-close"
-              onClick={(e) => { e.stopPropagation(); onCloseTerminal(t.id); }}
-            >
-              ✕
-            </span>
-          </button>
-        ))}
-        <div className="bp-tab-spacer" />
+      <div className="bp-resize-handle" onMouseDown={handleHeightDragStart} />
+      {/* Global controls row */}
+      <div className="bp-global-controls">
         {statusMessage && (
           <span className="bp-status-indicator">
             <span className="bp-status-spinner" />
             <span className="bp-status-text">{statusMessage}</span>
           </span>
         )}
+        <div className="bp-tab-spacer" />
         {showWidthToggle && onToggleFullWidth && (
           <button
             className="bp-width-toggle"
@@ -347,56 +692,66 @@ export default function BottomPanel({ terminals, onCloseTerminal, validationIssu
         )}
         <button className="bp-collapse-btn" onClick={() => setExpanded(false)} title="Collapse panel">▼</button>
       </div>
-      <div className="bottom-panel-content">
-        <div style={{ display: activeTab === 'slice-errors' ? 'flex' : 'none', flex: 1, overflow: 'hidden' }}>
-          <SliceErrorsView errors={sliceErrors} bootConfigErrors={bootConfigErrors} onClearBootConfigErrors={onClearBootConfigErrors} />
-        </div>
-        <div style={{ display: activeTab === 'errors' ? 'flex' : 'none', flex: 1, overflow: 'hidden' }}>
-          <div className="bp-errors-list">
-            <div className="bp-errors-header">
-              <span>{errors.length} error{errors.length !== 1 ? 's' : ''}</span>
-              {errors.length > 0 && (
-                <button className="bp-errors-clear" onClick={onClearErrors}>Clear All</button>
-              )}
-            </div>
-            {errors.length === 0 && (
-              <div className="bp-validation-empty">No errors.</div>
+      {/* Panes row */}
+      <div className="bp-panes-row" ref={panesRowRef}>
+        {panes.map((pane, paneIndex) => (
+          <div key={pane.id} className="bp-pane-wrapper" style={{ width: `${paneWidths[paneIndex] ?? 50}%` }}>
+            {paneIndex > 0 && (
+              <div className="bp-pane-divider" onMouseDown={handlePaneDividerStart} />
             )}
-            {errors.map((msg, i) => (
-              <div key={i} className="bp-error-entry">
-                <span className="bp-error-message">{msg}</span>
+            <div
+              className="bp-pane"
+              onDragOver={(e) => handlePaneDragOver(e, pane.id)}
+              onDragLeave={handlePaneDragLeave}
+              onDrop={(e) => handlePaneDrop(e, pane.id)}
+            >
+              {/* Drop indicator overlay */}
+              {dragState && dragState.targetPaneId === pane.id && dragState.dropTarget && (
+                <div className={`bp-drop-indicator bp-drop-${dragState.dropTarget}`} />
+              )}
+              {/* Pane tab bar */}
+              <div className="bottom-panel-tabs">
+                {pane.tabIds.map((tabId) => {
+                  const isTermTab = isTabCloseable(tabId);
+                  const isLocalTerm = tabId === 'local-terminal';
+                  return (
+                    <button
+                      key={tabId}
+                      className={`bp-tab ${pane.activeTabId === tabId ? 'active' : ''} ${isLocalTerm ? 'bp-tab-container' : ''} ${dragState?.tabId === tabId ? 'dragging' : ''}`}
+                      draggable
+                      onDragStart={(e) => handleTabDragStart(e, tabId, pane.id)}
+                      onDragEnd={handleTabDragEnd}
+                      onClick={() => {
+                        activateTab(tabId);
+                        if (isLocalTerm) {
+                          setContainerTermActive(true);
+                        }
+                      }}
+                      data-help-id={getTabHelpId(tabId)}
+                    >
+                      {getTabLabel(tabId)}
+                      {getTabBadge(tabId)}
+                      {isTermTab && (
+                        <span
+                          className="bp-tab-close"
+                          onClick={(e) => { e.stopPropagation(); onCloseTerminal(tabId); }}
+                        >
+                          ✕
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
               </div>
-            ))}
-          </div>
-        </div>
-        <div style={{ display: activeTab === 'validation' ? 'flex' : 'none', flex: 1, overflow: 'hidden' }}>
-          <ValidationView issues={validationIssues} valid={validationValid} sliceState={sliceState} dirty={dirty} />
-        </div>
-        <div style={{ display: activeTab === 'log' ? 'flex' : 'none', flex: 1, overflow: 'hidden' }}>
-          <LogView />
-        </div>
-        <div style={{ display: activeTab === 'recipes' ? 'flex' : 'none', flex: 1, overflow: 'hidden' }}>
-          <RecipeConsoleView
-            lines={recipeConsole}
-            running={recipeRunning}
-            onClear={onClearRecipeConsole}
-            endRef={recipeConsoleEndRef}
-          />
-        </div>
-        <div style={{ display: activeTab === 'boot-config' ? 'flex' : 'none', flex: 1, overflow: 'hidden' }}>
-          <BootConsoleView
-            lines={bootConsole}
-            running={bootRunning}
-            onClear={onClearBootConsole}
-            endRef={bootConsoleEndRef}
-          />
-        </div>
-        <div style={{ display: activeTab === 'local-terminal' ? 'flex' : 'none', flex: 1, overflow: 'hidden' }}>
-          {containerTermActive && <ContainerTerminalView />}
-        </div>
-        {terminals.map((t) => (
-          <div key={t.id} style={{ display: activeTab === t.id ? 'flex' : 'none', flex: 1, overflow: 'hidden' }}>
-            <TerminalView sliceName={t.sliceName} nodeName={t.nodeName} managementIp={t.managementIp} />
+              {/* Pane content area */}
+              <div className="bottom-panel-content">
+                {pane.tabIds.map((tabId) => (
+                  <React.Fragment key={tabId}>
+                    {renderTabContent(tabId, pane.activeTabId === tabId)}
+                  </React.Fragment>
+                ))}
+              </div>
+            </div>
           </div>
         ))}
       </div>

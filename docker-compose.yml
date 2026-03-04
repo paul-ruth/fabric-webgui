@@ -3,6 +3,7 @@ services:
     build: ./backend
     ports:
       - "8000:8000"
+      - "9100-9199:9100-9199"
     volumes:
       - fabric_storage:/fabric_storage
     environment:
@@ -17,7 +18,7 @@ services:
   frontend:
     build: ./frontend
     ports:
-      - "10000:3000"
+      - "3000:3000"
     depends_on:
       - backend
     dns:

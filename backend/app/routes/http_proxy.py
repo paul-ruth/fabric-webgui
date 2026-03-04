@@ -176,14 +176,16 @@ def _proxy_request(
         conn = http.client.HTTPConnection("127.0.0.1", port)
         conn.sock = _ChannelSocket(channel)
 
-        # Forward relevant headers
+        # Forward relevant headers; strip Accept-Encoding so the VM
+        # always sends uncompressed responses (we may need to rewrite them).
         fwd_headers = {}
         for k, v in headers.items():
             lk = k.lower()
-            if lk in ("host", "connection", "transfer-encoding"):
+            if lk in ("host", "connection", "transfer-encoding", "accept-encoding"):
                 continue
             fwd_headers[k] = v
         fwd_headers["Host"] = f"127.0.0.1:{port}"
+        fwd_headers["Accept-Encoding"] = "identity"
 
         conn.request(method, path, body=body, headers=fwd_headers)
         resp = conn.getresponse()
@@ -200,47 +202,70 @@ def _proxy_request(
 
 
 def _rewrite_html(body: bytes, content_type: str, slice_name: str, node_name: str, port: int) -> bytes:
-    """Rewrite absolute URL paths in HTML/JS so sub-resources load through the proxy."""
-    if "text/html" not in content_type and "javascript" not in content_type and "text/css" not in content_type:
+    """Rewrite absolute URL paths in HTML so sub-resources load through the proxy.
+
+    Only HTML gets attribute rewriting (src, href, action) and the JS interceptor.
+    CSS gets url() rewriting.  JavaScript is left untouched — the injected
+    fetch/XHR/createElement interceptors handle dynamic requests at runtime.
+    """
+    is_html = "text/html" in content_type
+    is_css = "text/css" in content_type
+    if not is_html and not is_css:
         return body
 
     prefix = f"/api/proxy/{slice_name}/{node_name}/{port}"
     text = body.decode("utf-8", errors="replace")
 
-    # For HTML pages, inject a <base> tag and a fetch/XHR interceptor script
-    # so that all relative and absolute path requests route through the proxy.
-    if "text/html" in content_type:
+    if is_html:
+        # Inject <base> tag and interceptors for fetch, XHR, createElement,
+        # and History API so all resource loads route through the proxy.
         inject = (
             f'<base href="{prefix}/">'
             f'<script>'
             f'(function(){{'
             f'var P="{prefix}";'
+            f'function rw(u){{if(typeof u==="string"&&u.startsWith("/")&&!u.startsWith(P))return P+u;return u;}}'
+            # fetch
             f'var _fetch=window.fetch;'
-            f'window.fetch=function(u,o){{'
-            f'if(typeof u==="string"&&u.startsWith("/")&&!u.startsWith(P))u=P+u;'
-            f'return _fetch.call(this,u,o);'
-            f'}};'
+            f'window.fetch=function(u,o){{return _fetch.call(this,rw(u),o);}};'
+            # XMLHttpRequest
             f'var _open=XMLHttpRequest.prototype.open;'
-            f'XMLHttpRequest.prototype.open=function(m,u){{'
-            f'if(typeof u==="string"&&u.startsWith("/")&&!u.startsWith(P))u=P+u;'
-            f'return _open.apply(this,[m,u].concat(Array.prototype.slice.call(arguments,2)));'
+            f'XMLHttpRequest.prototype.open=function(m,u){{arguments[1]=rw(u);return _open.apply(this,arguments);}};'
+            # createElement — intercept script/link/img src and href
+            f'var _ce=document.createElement.bind(document);'
+            f'document.createElement=function(tag){{'
+            f'var el=_ce(tag);'
+            f'var lt=tag.toLowerCase();'
+            f'if(lt==="script"||lt==="img"||lt==="link"){{'
+            f'var _set=Object.getOwnPropertyDescriptor(HTMLScriptElement.prototype,"src")||Object.getOwnPropertyDescriptor(HTMLElement.prototype,"src");'
+            f'["src","href"].forEach(function(attr){{'
+            f'var d=Object.getOwnPropertyDescriptor(el.__proto__,attr);'
+            f'if(d&&d.set){{Object.defineProperty(el,attr,{{set:function(v){{d.set.call(this,rw(v));}},get:d.get,configurable:true}});}}'
+            f'}});'
+            f'}}'
+            f'return el;'
             f'}};'
+            # History pushState/replaceState
+            f'var _ps=history.pushState.bind(history);'
+            f'history.pushState=function(s,t,u){{return _ps(s,t,u?rw(u):u);}};'
+            f'var _rs=history.replaceState.bind(history);'
+            f'history.replaceState=function(s,t,u){{return _rs(s,t,u?rw(u):u);}};'
             f'}})()'
             f'</script>'
         )
-        # Insert after <head> if present, otherwise prepend
         if re.search(r'<head[^>]*>', text, re.IGNORECASE):
             text = re.sub(r'(<head[^>]*>)', rf'\1{inject}', text, count=1, flags=re.IGNORECASE)
         else:
             text = inject + text
 
-    # Rewrite src="/...", href="/...", action="/..."
-    text = re.sub(
-        r'((?:src|href|action)\s*=\s*["\'])(/(?!/))',
-        rf'\1{prefix}\2',
-        text,
-    )
-    # Rewrite url(...) in CSS
+        # Rewrite src="/...", href="/...", action="/..." in HTML attributes
+        text = re.sub(
+            r'((?:src|href|action)\s*=\s*["\'])(/(?!/))',
+            rf'\1{prefix}\2',
+            text,
+        )
+
+    # Rewrite url(...) in HTML and CSS
     text = re.sub(
         r'(url\s*\(\s*["\']?)(/(?!/))',
         rf'\1{prefix}\2',
@@ -299,6 +324,21 @@ async def http_proxy(
 
     # Rewrite HTML/JS content to route sub-resources through proxy
     resp_body = _rewrite_html(resp_body, content_type, slice_name, node_name, port)
+
+    # Rewrite redirect Location headers so the browser stays in the proxy
+    prefix = f"/api/proxy/{slice_name}/{node_name}/{port}"
+    for hdr in list(resp_headers.keys()):
+        if hdr.lower() == "location":
+            loc = resp_headers[hdr]
+            # Absolute URL pointing at the VM — strip to path
+            abs_match = re.match(r'https?://[^/]+(/.*)$', loc)
+            if abs_match:
+                loc = abs_match.group(1)
+            if loc.startswith("/") and not loc.startswith(prefix):
+                resp_headers[hdr] = prefix + loc
+        # Strip CSP / X-Frame-Options that block iframe embedding
+        if hdr.lower() in ("content-security-policy", "x-frame-options"):
+            del resp_headers[hdr]
 
     # Filter out hop-by-hop headers
     skip = {"transfer-encoding", "connection", "keep-alive", "content-length", "content-encoding"}

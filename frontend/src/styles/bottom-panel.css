@@ -483,3 +483,93 @@
 .bp-recipe-step   { color: var(--fabric-primary); }
 .bp-recipe-output { color: var(--fabric-text-muted); }
 .bp-recipe-error  { color: var(--fabric-coral, #e25241); }
+
+/* --- Split-Pane Layout --- */
+
+/* Global controls row (status, width toggle, collapse) */
+.bp-global-controls {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  background: var(--fabric-light);
+  border-bottom: 1px solid var(--fabric-border);
+  flex-shrink: 0;
+  padding: 0 4px;
+  min-height: 28px;
+}
+
+/* Panes row — horizontal flex container for panes */
+.bp-panes-row {
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+  position: relative;
+}
+
+/* Pane wrapper — holds optional divider + pane content */
+.bp-pane-wrapper {
+  display: flex;
+  min-width: 0;
+  position: relative;
+}
+
+/* Individual pane — flex column with its own tab bar + content */
+.bp-pane {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-width: 0;
+  position: relative;
+}
+
+/* Vertical resize handle between panes */
+.bp-pane-divider {
+  width: 5px;
+  cursor: col-resize;
+  background: var(--fabric-border);
+  flex-shrink: 0;
+  position: relative;
+  z-index: 5;
+  transition: background 0.15s;
+}
+.bp-pane-divider:hover,
+.bp-pane-divider:active {
+  background: var(--fabric-primary, #5798bc);
+}
+
+/* Drop indicator overlay during tab drag */
+.bp-drop-indicator {
+  position: absolute;
+  z-index: 20;
+  pointer-events: none;
+  border: 2px solid var(--fabric-primary, #5798bc);
+  background: rgba(87, 152, 188, 0.12);
+  border-radius: 4px;
+  transition: opacity 0.1s;
+}
+.bp-drop-indicator.bp-drop-left {
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 50%;
+}
+.bp-drop-indicator.bp-drop-right {
+  top: 0;
+  bottom: 0;
+  right: 0;
+  width: 50%;
+}
+.bp-drop-indicator.bp-drop-center {
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 30px; /* covers the tab bar area */
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+/* Dragged tab visual feedback */
+.bp-tab.dragging {
+  opacity: 0.4;
+}
