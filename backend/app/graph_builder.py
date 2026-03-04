@@ -218,17 +218,27 @@ def build_graph(slice_data: dict) -> dict[str, Any]:
                     iface_to_comp_name[ci_name] = comp_name
 
     # Network nodes
+    fabnet_net_ids: list[str] = []  # track FABNetv4 networks for internet node
+
     for net in slice_data.get("networks", []):
         net_name = net["name"]
         net_type = net.get("type", "L2Bridge")
         layer = net.get("layer", "L2")
         net_id = f"net:{slice_id}:{net_name}"
 
+        # Label FABNetv4 networks as gateways
+        is_fabnetv4 = net_type in ("FABNetv4", "FABNetv6")
+        if is_fabnetv4:
+            label = f"{net_name}\nFABNet Gateway"
+            fabnet_net_ids.append(net_id)
+        else:
+            label = f"{net_name}\n({net_type})"
+
         nodes.append({
             "data": {
                 "id": net_id,
                 "parent": f"slice:{slice_id}",
-                "label": f"{net_name}\n({net_type})",
+                "label": label,
                 "element_type": "network",
                 "name": net_name,
                 "type": net_type,
@@ -278,6 +288,29 @@ def build_graph(slice_data: dict) -> dict[str, Any]:
                     },
                     "classes": f"edge-{layer.lower()}",
                 })
+
+    # Synthetic FABRIC Internet node — shown when any FABNetv4/v6 gateways exist
+    if fabnet_net_ids:
+        internet_id = "fabnet-internet-v4"
+        nodes.append({
+            "data": {
+                "id": internet_id,
+                "label": "☁\nFABRIC Internet\n(FABNetv4)",
+                "element_type": "fabnet-internet",
+            },
+            "classes": "fabnet-internet",
+        })
+        for gw_id in fabnet_net_ids:
+            edges.append({
+                "data": {
+                    "id": f"edge-fabnet-internet:{gw_id}",
+                    "source": gw_id,
+                    "target": internet_id,
+                    "label": "",
+                    "element_type": "fabnet-internet-edge",
+                },
+                "classes": "edge-fabnet-internet",
+            })
 
     # Facility port nodes
     for fp in slice_data.get("facility_ports", []):

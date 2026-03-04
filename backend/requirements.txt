@@ -7,3 +7,4 @@ websockets>=12.0
 paramiko>=3.4
 requests>=2.31
 httpx>=0.27
+openai>=1.0

@@ -49,6 +49,13 @@ export interface IpHint {
   last_octet_range?: string;
 }
 
+export interface L3Config {
+  mode: 'auto' | 'manual' | 'user_octet';
+  route_mode: 'default_fabnet' | 'custom';
+  custom_routes: string[];
+  default_fabnet_subnet: string;
+}
+
 export interface SliceNetwork {
   name: string;
   type: string;
@@ -57,6 +64,7 @@ export interface SliceNetwork {
   gateway: string;
   interfaces: SliceInterface[];
   ip_hints?: Record<string, IpHint>;
+  l3_config?: L3Config;
 }
 
 export interface CyNode {
@@ -211,6 +219,7 @@ export interface ConfigStatus {
   slice_key_fingerprint?: string;
   default_slice_key?: string;
   slice_key_sets?: string[];
+  ai_api_key_set?: boolean;
 }
 
 export interface ProjectInfo {

@@ -18,7 +18,12 @@
           "name": "nic1",
           "model": "NIC_Basic"
         }
-      ]
+      ],
+      "boot_config": {
+        "uploads": [],
+        "commands": [],
+        "network": []
+      }
     },
     {
       "name": "gpu-node2",
@@ -36,7 +41,12 @@
           "name": "nic1",
           "model": "NIC_Basic"
         }
-      ]
+      ],
+      "boot_config": {
+        "uploads": [],
+        "commands": [],
+        "network": []
+      }
     }
   ],
   "networks": [

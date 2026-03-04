@@ -22,7 +22,12 @@
           "name": "nic-lan",
           "model": "NIC_Basic"
         }
-      ]
+      ],
+      "boot_config": {
+        "uploads": [],
+        "commands": [],
+        "network": []
+      }
     },
     {
       "name": "router2",
@@ -44,7 +49,12 @@
           "name": "nic-lan",
           "model": "NIC_Basic"
         }
-      ]
+      ],
+      "boot_config": {
+        "uploads": [],
+        "commands": [],
+        "network": []
+      }
     },
     {
       "name": "router3",
@@ -66,7 +76,12 @@
           "name": "nic-lan",
           "model": "NIC_Basic"
         }
-      ]
+      ],
+      "boot_config": {
+        "uploads": [],
+        "commands": [],
+        "network": []
+      }
     },
     {
       "name": "host1",
@@ -80,7 +95,12 @@
           "name": "nic1",
           "model": "NIC_Basic"
         }
-      ]
+      ],
+      "boot_config": {
+        "uploads": [],
+        "commands": [],
+        "network": []
+      }
     },
     {
       "name": "host2",
@@ -94,7 +114,12 @@
           "name": "nic1",
           "model": "NIC_Basic"
         }
-      ]
+      ],
+      "boot_config": {
+        "uploads": [],
+        "commands": [],
+        "network": []
+      }
     },
     {
       "name": "host3",
@@ -108,7 +133,12 @@
           "name": "nic1",
           "model": "NIC_Basic"
         }
-      ]
+      ],
+      "boot_config": {
+        "uploads": [],
+        "commands": [],
+        "network": []
+      }
     }
   ],
   "networks": [

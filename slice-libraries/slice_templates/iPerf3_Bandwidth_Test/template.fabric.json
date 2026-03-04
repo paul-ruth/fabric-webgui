@@ -11,18 +11,7 @@
       "image": "default_ubuntu_22",
       "boot_config": {
         "uploads": [],
-        "commands": [
-          {
-            "id": "1",
-            "command": "sudo apt-get update && sudo apt-get install -y iperf3",
-            "order": 0
-          },
-          {
-            "id": "2",
-            "command": "nohup iperf3 -s -D",
-            "order": 1
-          }
-        ],
+        "commands": [],
         "network": []
       },
       "components": [
@@ -41,13 +30,7 @@
       "image": "default_ubuntu_22",
       "boot_config": {
         "uploads": [],
-        "commands": [
-          {
-            "id": "1",
-            "command": "sudo apt-get update && sudo apt-get install -y iperf3",
-            "order": 0
-          }
-        ],
+        "commands": [],
         "network": []
       },
       "components": [

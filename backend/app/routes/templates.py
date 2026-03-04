@@ -61,6 +61,11 @@ def _builtin_hash(builtin_dir: str) -> str:
     if os.path.isfile(tmpl_path):
         with open(tmpl_path) as f:
             hashable["model"] = json.load(f)
+    # Include root deploy.sh
+    deploy_path = os.path.join(builtin_dir, "deploy.sh")
+    if os.path.isfile(deploy_path):
+        with open(deploy_path) as f:
+            hashable["_deploy_sh"] = f.read()
     tools_dir = os.path.join(builtin_dir, "tools")
     if os.path.isdir(tools_dir):
         tools = []
@@ -169,6 +174,14 @@ def _seed_if_needed() -> None:
         with open(os.path.join(tmpl_dir, "metadata.json"), "w") as f:
             json.dump(metadata, f, indent=2)
 
+        # Copy root deploy.sh if present
+        src_deploy = os.path.join(builtin_dir, "deploy.sh")
+        dst_deploy = os.path.join(tmpl_dir, "deploy.sh")
+        if os.path.isfile(src_deploy):
+            shutil.copy2(src_deploy, dst_deploy)
+        elif os.path.isfile(dst_deploy):
+            os.remove(dst_deploy)  # Remove stale deploy.sh no longer in source
+
         # Copy tools/ directory if present
         src_tools = os.path.join(builtin_dir, "tools")
         dst_tools = os.path.join(tmpl_dir, "tools")
@@ -176,6 +189,27 @@ def _seed_if_needed() -> None:
             if os.path.isdir(dst_tools):
                 shutil.rmtree(dst_tools)
             shutil.copytree(src_tools, dst_tools)
+
+
+# ---------------------------------------------------------------------------
+# Boot info helpers (for deploy.sh discovery at boot config time)
+# ---------------------------------------------------------------------------
+
+def _boot_info_dir() -> str:
+    storage = os.environ.get("FABRIC_STORAGE_DIR", "/fabric_storage")
+    d = os.path.join(storage, ".boot_info")
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def _store_boot_info(slice_name: str, tmpl_dir: str) -> None:
+    """Store template directory info so boot config executor can find deploy.sh."""
+    try:
+        path = os.path.join(_boot_info_dir(), f"{slice_name}.json")
+        with open(path, "w") as f:
+            json.dump({"template_dir": tmpl_dir}, f)
+    except Exception:
+        pass  # Non-critical
 
 
 # ---------------------------------------------------------------------------
@@ -377,6 +411,9 @@ def load_template(name: str, req: LoadTemplateRequest) -> dict[str, Any]:
 
     model = SliceModelImport(**model_data)
     result = import_slice(model)
+
+    # Store template directory info so boot config can find deploy.sh
+    _store_boot_info(slice_name, tmpl_dir)
 
     # Auto-resolve site groups so the user sees candidate sites immediately
     site_groups = _get_site_groups(slice_name)

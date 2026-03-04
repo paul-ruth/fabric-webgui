@@ -8,6 +8,7 @@ import logging
 import os
 import shutil
 import tempfile
+import threading
 import uuid
 import zipfile
 from datetime import datetime
@@ -27,6 +28,28 @@ from app.routes.terminal import (
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+# ---------------------------------------------------------------------------
+# Per-slice boot config log storage
+# ---------------------------------------------------------------------------
+
+_boot_logs: dict[str, list] = {}
+_boot_running: set[str] = set()
+_boot_lock = threading.Lock()
+
+
+def _load_template_dir(slice_name: str) -> str | None:
+    """Return the template directory stored when a template was loaded, or None."""
+    storage = os.environ.get("FABRIC_STORAGE_DIR", "/fabric_storage")
+    info_path = os.path.join(storage, ".boot_info", f"{slice_name}.json")
+    if not os.path.isfile(info_path):
+        return None
+    try:
+        with open(info_path) as f:
+            return json.load(f).get("template_dir")
+    except Exception:
+        return None
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -982,6 +1005,15 @@ async def execute_all_boot_configs(slice_name: str):
                         gw = net.get("gateway")
                         if gw:
                             cmd += f" && sudo ip route add default via {gw} dev {iface}"
+                        # Add subnet routes from L3 config
+                        for route in net.get("routes", []):
+                            import ipaddress as _ipmod
+                            try:
+                                iface_net = _ipmod.IPv4Interface(f"{ip_addr}/{subnet}")
+                                route_gw = str(iface_net.network.network_address + 1)
+                                cmd += f" && sudo ip route add {route} via {route_gw} dev {iface}"
+                            except Exception:
+                                pass
                     stdout, stderr = node_obj.execute(cmd, quiet=True)
                     if stderr and stderr.strip():
                         node_results.append({"type": "network", "id": nid, "status": "error",
@@ -1015,6 +1047,26 @@ async def execute_all_boot_configs(slice_name: str):
     return await asyncio.to_thread(_do)
 
 
+@router.get("/api/files/boot-config/running")
+def get_boot_running():
+    """Get which slices currently have boot config running."""
+    with _boot_lock:
+        return {
+            "running": list(_boot_running),
+            "slices": {k: len(v) for k, v in _boot_logs.items()},
+        }
+
+
+@router.get("/api/files/boot-config/{slice_name}/log")
+def get_boot_log(slice_name: str):
+    """Get stored boot config log for a slice."""
+    with _boot_lock:
+        return {
+            "lines": list(_boot_logs.get(slice_name, [])),
+            "running": slice_name in _boot_running,
+        }
+
+
 @router.post("/api/files/boot-config/{slice_name}/execute-all-stream")
 async def execute_all_boot_configs_stream(slice_name: str):
     """Run boot config on every node, streaming SSE progress."""
@@ -1025,13 +1077,117 @@ async def execute_all_boot_configs_stream(slice_name: str):
     queue: asyncio.Queue[str | None] = asyncio.Queue()
 
     def _emit(event_type: str, data: dict):
-        line = json.dumps({"event": event_type, **data})
-        queue.put_nowait(f"data: {line}\n\n")
+        payload = {"event": event_type, **data}
+        queue.put_nowait(f"data: {json.dumps(payload)}\n\n")
+        with _boot_lock:
+            _boot_logs.setdefault(slice_name, []).append(payload)
+
+    def _stream_exec(node_obj, cmd, on_line, poll_interval=4, max_minutes=25):
+        """Run cmd on a node with near-real-time output via log-file polling.
+
+        Writes cmd to a temp script via base64 (avoids quoting issues), launches
+        it in the background, then polls the log file every poll_interval seconds
+        calling on_line(str) for each new line.  Returns the process exit code.
+        """
+        import base64, hashlib, time as _time
+        key = hashlib.md5(cmd.encode()).hexdigest()[:8]
+        log_f  = f"/tmp/.bc_{key}.log"
+        done_f = f"/tmp/.bc_{key}.done"
+        SEP    = f"__BCSEP_{key}__"
+
+        encoded = base64.b64encode(cmd.encode()).decode()
+        setup = (
+            f"echo '{encoded}' | base64 -d > /tmp/.bc_{key}.sh; "
+            f"chmod +x /tmp/.bc_{key}.sh; "
+            f"( /tmp/.bc_{key}.sh > {log_f} 2>&1; echo $? > {done_f} ) &"
+        )
+        node_obj.execute(setup, quiet=True)
+
+        last_line = 0
+        for _ in range(max_minutes * 60 // poll_interval):
+            poll = (
+                f"tail -n +{last_line + 1} {log_f} 2>/dev/null; "
+                f"printf '%s\\n' '{SEP}'; "
+                f"cat {done_f} 2>/dev/null || true"
+            )
+            result, _ = node_obj.execute(poll, quiet=True)
+
+            new_out, sep, rest = result.partition(SEP)
+            exit_str = rest.strip() if sep else ""
+
+            for raw in new_out.split("\n"):
+                line = raw.rstrip()
+                if line:
+                    on_line(line)
+                    last_line += 1
+
+            if exit_str and exit_str.isdigit():
+                # Flush any remaining lines written between last poll and exit
+                final, _ = node_obj.execute(
+                    f"tail -n +{last_line + 1} {log_f} 2>/dev/null", quiet=True
+                )
+                for raw in final.split("\n"):
+                    line = raw.rstrip()
+                    if line:
+                        on_line(line)
+                return int(exit_str)
+
+            _time.sleep(poll_interval)
+
+        return 1  # timed out
 
     def _do():
+        with _boot_lock:
+            _boot_running.add(slice_name)
+            _boot_logs[slice_name] = []  # clear previous log for fresh run
+
+        try:
+            _do_inner()
+        finally:
+            with _boot_lock:
+                _boot_running.discard(slice_name)
+
+    def _do_inner():
         slice_obj = _get_slice_obj(slice_name)
         nodes = slice_obj.get_nodes()
         base = _storage_dir()
+
+        # Auto-run deploy.sh from template root if it exists (once per slice, on container)
+        template_dir = _load_template_dir(slice_name)
+        if template_dir:
+            deploy_sh = os.path.join(template_dir, "deploy.sh")
+            if os.path.isfile(deploy_sh):
+                _emit("step", {"node": "__slice__", "type": "deploy", "id": "deploy.sh",
+                               "message": f"Running deploy.sh for slice \"{slice_name}\"..."})
+                try:
+                    import subprocess
+                    env = {**os.environ, "SLICE_NAME": slice_name}
+                    proc = subprocess.Popen(
+                        ["bash", deploy_sh, slice_name],
+                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                        text=True, env=env,
+                    )
+                    for raw in iter(proc.stdout.readline, ""):
+                        line_str = raw.rstrip()
+                        if not line_str:
+                            continue
+                        if line_str.startswith("### PROGRESS:"):
+                            msg = line_str[len("### PROGRESS:"):].strip()
+                            _emit("step", {"node": "__slice__", "type": "progress", "id": "deploy.sh",
+                                          "message": f"  ↳ {msg}"})
+                        else:
+                            _emit("output", {"node": "__slice__", "type": "deploy", "id": "deploy.sh",
+                                            "message": line_str})
+                    proc.wait()
+                    if proc.returncode != 0:
+                        _emit("error", {"node": "__slice__", "type": "deploy", "id": "deploy.sh",
+                                       "message": f"deploy.sh exited with code {proc.returncode}"})
+                    else:
+                        _emit("output", {"node": "__slice__", "type": "deploy", "id": "deploy.sh",
+                                        "message": "✓ deploy.sh complete", "status": "ok"})
+                except Exception as e:
+                    _emit("error", {"node": "__slice__", "type": "deploy", "id": "deploy.sh",
+                                   "message": str(e)})
 
         for node_obj in nodes:
             node_name = node_obj.get_name()
@@ -1127,6 +1283,15 @@ async def execute_all_boot_configs_stream(slice_name: str):
                         gw = net.get("gateway")
                         if gw:
                             cmd += f" && sudo ip route add default via {gw} dev {iface}"
+                        # Add subnet routes from L3 config
+                        for route in net.get("routes", []):
+                            import ipaddress as _ipmod
+                            try:
+                                iface_net = _ipmod.IPv4Interface(f"{ip_addr}/{subnet}")
+                                route_gw = str(iface_net.network.network_address + 1)
+                                cmd += f" && sudo ip route add {route} via {route_gw} dev {iface}"
+                            except Exception:
+                                pass
                     stdout, stderr = node_obj.execute(cmd, quiet=True)
                     if stderr and stderr.strip():
                         _emit("error", {"node": node_name, "type": "network", "id": nid,
@@ -1138,25 +1303,34 @@ async def execute_all_boot_configs_stream(slice_name: str):
                     _emit("error", {"node": node_name, "type": "network", "id": nid,
                                     "message": str(e)})
 
-            # 3. Commands
+            # 3. Commands — remote (on VM)
             for cmd_entry in sorted(config.get("commands", []), key=lambda c: c.get("order", 0)):
                 cid = cmd_entry.get("id", "?")
                 cmd = cmd_entry.get("command", "")
+                if cmd_entry.get("local", False):
+                    continue  # local commands are now handled by deploy.sh at template root
+
+                # Remote command: run on the VM
                 _emit("step", {"node": node_name, "type": "command", "id": cid,
                                "message": f"Running: {cmd}"})
                 try:
-                    stdout, stderr = node_obj.execute(cmd, quiet=True)
-                    output = (stdout or "") + (stderr or "")
-                    if output.strip():
-                        for line in output.strip().split("\n"):
-                            _emit("output", {"node": node_name, "type": "command", "id": cid,
+                    def _on_line(line, _nn=node_name, _cid=cid):
+                        if line.startswith("### PROGRESS:"):
+                            msg = line[len("### PROGRESS:"):].strip()
+                            _emit("step", {"node": _nn, "type": "progress", "id": _cid,
+                                           "message": f"  ↳ {msg}"})
+                        else:
+                            _emit("output", {"node": _nn, "type": "command", "id": _cid,
                                              "message": line})
-                    if stderr and stderr.strip():
+
+                    exit_code = _stream_exec(node_obj, cmd, _on_line)
+
+                    if exit_code != 0:
                         _emit("error", {"node": node_name, "type": "command", "id": cid,
-                                        "message": stderr.strip()})
+                                        "message": f"Command exited with code {exit_code}"})
                     else:
                         _emit("output", {"node": node_name, "type": "command", "id": cid,
-                                         "message": "Command completed", "status": "ok"})
+                                         "message": "✓ Command completed", "status": "ok"})
                 except Exception as e:
                     _emit("error", {"node": node_name, "type": "command", "id": cid,
                                     "message": str(e)})

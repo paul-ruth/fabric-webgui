@@ -9,7 +9,12 @@
       "ram": 8,
       "disk": 10,
       "image": "default_ubuntu_22",
-      "components": []
+      "components": [],
+      "boot_config": {
+        "uploads": [],
+        "commands": [],
+        "network": []
+      }
     }
   ],
   "networks": []

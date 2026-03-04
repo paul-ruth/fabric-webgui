@@ -45,9 +45,10 @@ export default function LibrariesPanel({
   const [sliceTemplates, setSliceTemplates] = useState<TemplateSummary[]>([]);
   const [sliceLoading, setSliceLoading] = useState(false);
   const [sliceError, setSliceError] = useState('');
-  const [loadingTemplate, setLoadingTemplate] = useState<string | null>(null);
+  const [loadingTemplate, setLoadingTemplate] = useState<string | null>(null);  // display name
+  const [loadingTemplateDirName, setLoadingTemplateDirName] = useState<string | null>(null);  // dir_name for API
   const [loadSliceName, setLoadSliceName] = useState('');
-  const [deletingSliceTemplate, setDeletingSliceTemplate] = useState<string | null>(null);
+  const [deletingSliceTemplate, setDeletingSliceTemplate] = useState<string | null>(null);  // dir_name
   const [loadProgress, setLoadProgress] = useState<{ active: boolean; step: number } | null>(null);
   const loadStepTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [sliceSearchFilter, setSliceSearchFilter] = useState('');
@@ -80,8 +81,9 @@ export default function LibrariesPanel({
     refreshSliceTemplates();
   }, [refreshSliceTemplates]);
 
-  const handleLoadSliceTemplate = async (templateName: string) => {
-    const name = loadSliceName.trim() || templateName;
+  const handleLoadSliceTemplate = async () => {
+    if (!loadingTemplateDirName) return;
+    const name = loadSliceName.trim() || loadingTemplate || loadingTemplateDirName;
     setSliceError('');
     setLoadingTemplate(null);
     setLoadProgress({ active: true, step: 0 });
@@ -93,7 +95,7 @@ export default function LibrariesPanel({
     }, 2000);
 
     try {
-      const data = await api.loadTemplate(templateName, name);
+      const data = await api.loadTemplate(loadingTemplateDirName, name);
       onSliceImported(data);
       setLoadSliceName('');
     } catch (e: any) {
@@ -334,6 +336,7 @@ export default function LibrariesPanel({
                       onClick={() => {
                         setLoadSliceName(t.name);
                         setLoadingTemplate(t.name);
+                        setLoadingTemplateDirName(t.dir_name);
                       }}
                       data-help-id="templates.load"
                     >
@@ -343,7 +346,7 @@ export default function LibrariesPanel({
                   <Tooltip text="Permanently remove this template">
                     <button
                       className="template-btn-delete"
-                      onClick={() => setDeletingSliceTemplate(t.name)}
+                      onClick={() => setDeletingSliceTemplate(t.dir_name)}
                       data-help-id="templates.delete"
                     >
                       Delete
@@ -366,12 +369,12 @@ export default function LibrariesPanel({
                   placeholder="Slice name..."
                   value={loadSliceName}
                   onChange={(e) => setLoadSliceName(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && handleLoadSliceTemplate(loadingTemplate)}
+                  onKeyDown={(e) => e.key === 'Enter' && handleLoadSliceTemplate()}
                   autoFocus
                 />
                 <div className="template-modal-actions">
                   <button onClick={() => setLoadingTemplate(null)}>Cancel</button>
-                  <button className="primary" onClick={() => handleLoadSliceTemplate(loadingTemplate)}>Load</button>
+                  <button className="primary" onClick={() => handleLoadSliceTemplate()}>Load</button>
                 </div>
               </div>
             </div>
@@ -405,7 +408,7 @@ export default function LibrariesPanel({
             <div className="template-modal-overlay" onClick={() => setDeletingSliceTemplate(null)}>
               <div className="template-modal" onClick={(e) => e.stopPropagation()}>
                 <h4>Delete Template</h4>
-                <p>Are you sure you want to delete <strong>{deletingSliceTemplate}</strong>?</p>
+                <p>Are you sure you want to delete <strong>{sliceTemplates.find(t => t.dir_name === deletingSliceTemplate)?.name ?? deletingSliceTemplate}</strong>?</p>
                 <div className="template-modal-actions">
                   <button onClick={() => setDeletingSliceTemplate(null)}>Cancel</button>
                   <button className="danger" onClick={() => handleDeleteSliceTemplate(deletingSliceTemplate)}>Delete</button>

@@ -14,7 +14,7 @@ interface TitleBarProps {
   dark: boolean;
   currentView: string;
   onToggleDark: () => void;
-  onViewChange: (view: 'topology' | 'sliver' | 'map' | 'files' | 'libraries' | 'project' | 'monitoring' | 'client') => void;
+  onViewChange: (view: 'topology' | 'sliver' | 'map' | 'files' | 'libraries' | 'monitoring' | 'client' | 'ai') => void;
   onOpenSettings: () => void;
   onOpenHelp: () => void;
   projectName?: string;
@@ -22,15 +22,15 @@ interface TitleBarProps {
   onProjectChange?: (uuid: string) => void;
 }
 
-const VIEWS: Array<{ key: 'topology' | 'sliver' | 'map' | 'files' | 'libraries' | 'project' | 'monitoring' | 'client'; label: string; icon: string }> = [
+const VIEWS: Array<{ key: 'topology' | 'sliver' | 'map' | 'files' | 'libraries' | 'monitoring' | 'client' | 'ai'; label: string; icon: string }> = [
   { key: 'topology', label: 'Topology', icon: '\u25A6' },
   { key: 'sliver', label: 'Slivers', icon: '\u2261' },
   { key: 'map', label: 'Map', icon: '\u25C9' },
   { key: 'files', label: 'Files', icon: '\u2630' },
   { key: 'libraries', label: 'Libraries', icon: '\u29C9' },
-  { key: 'project', label: 'Project', icon: '\u25A4' },
   { key: 'monitoring', label: 'Monitoring', icon: '\u25CE' },
   { key: 'client', label: 'Client', icon: '\u25B6' },
+  { key: 'ai', label: 'AI Companion', icon: '\u2726' },
 ];
 
 export default function TitleBar({ dark, currentView, onToggleDark, onViewChange, onOpenSettings, onOpenHelp, projectName, projects, onProjectChange }: TitleBarProps) {

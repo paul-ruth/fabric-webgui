@@ -58,10 +58,10 @@ interface BottomPanelProps {
   recipeConsole: RecipeConsoleLine[];
   recipeRunning: boolean;
   onClearRecipeConsole: () => void;
-  // Boot config console
-  bootConsole: BootConsoleLine[];
-  bootRunning: boolean;
-  onClearBootConsole: () => void;
+  // Boot config console (per-slice)
+  sliceBootLogs: Record<string, BootConsoleLine[]>;
+  sliceBootRunning: Record<string, boolean>;
+  onClearSliceBootLog: (sliceName: string) => void;
 }
 
 // --- Recursive layout tree types ---
@@ -270,7 +270,7 @@ const TERM_THEME = {
   brightWhite: '#ffffff',
 };
 
-export default function BottomPanel({ terminals, onCloseTerminal, validationIssues, validationValid, sliceState, dirty, errors, onClearErrors, sliceErrors, bootConfigErrors, onClearBootConfigErrors, fullWidth = true, onToggleFullWidth, showWidthToggle = false, expanded, onExpandedChange, panelHeight, onPanelHeightChange, statusMessage, loading, recipeConsole, recipeRunning, onClearRecipeConsole, bootConsole, bootRunning, onClearBootConsole }: BottomPanelProps) {
+export default function BottomPanel({ terminals, onCloseTerminal, validationIssues, validationValid, sliceState, dirty, errors, onClearErrors, sliceErrors, bootConfigErrors, onClearBootConfigErrors, fullWidth = true, onToggleFullWidth, showWidthToggle = false, expanded, onExpandedChange, panelHeight, onPanelHeightChange, statusMessage, loading, recipeConsole, recipeRunning, onClearRecipeConsole, sliceBootLogs, sliceBootRunning, onClearSliceBootLog }: BottomPanelProps) {
   const setExpanded = onExpandedChange;
   const setPanelHeight = onPanelHeightChange;
 
@@ -399,14 +399,15 @@ export default function BottomPanel({ terminals, onCloseTerminal, validationIssu
     prevRecipeRunning.current = recipeRunning;
   }, [recipeRunning, setExpanded, activateTab]);
 
-  const prevBootRunning = useRef(bootRunning);
+  const anyBootRunning = Object.values(sliceBootRunning).some(Boolean);
+  const prevAnyBootRunning = useRef(anyBootRunning);
   useEffect(() => {
-    if (bootRunning && !prevBootRunning.current) {
+    if (anyBootRunning && !prevAnyBootRunning.current) {
       activateTab('boot-config');
       setExpanded(true);
     }
-    prevBootRunning.current = bootRunning;
-  }, [bootRunning, setExpanded, activateTab]);
+    prevAnyBootRunning.current = anyBootRunning;
+  }, [anyBootRunning, setExpanded, activateTab]);
 
   // Auto-scroll recipe console
   const recipeConsoleEndRef = useRef<HTMLDivElement>(null);
@@ -418,15 +419,16 @@ export default function BottomPanel({ terminals, onCloseTerminal, validationIssu
     }
   }, [recipeConsole, layout]);
 
-  // Auto-scroll boot config console
+  // Auto-scroll boot config console (scrolls to bottom of all-slice log)
   const bootConsoleEndRef = useRef<HTMLDivElement>(null);
+  const allBootLines = Object.values(sliceBootLogs).flat();
   useEffect(() => {
     const leaves = collectAllLeaves(layout);
     const bootActive = leaves.some(l => l.activeTabId === 'boot-config');
     if (bootActive) {
       bootConsoleEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }
-  }, [bootConsole, layout]);
+  }, [allBootLines.length, layout]);
 
   // If active tab was closed, fix it
   useEffect(() => {
@@ -663,8 +665,8 @@ export default function BottomPanel({ terminals, onCloseTerminal, validationIssu
       case 'boot-config':
         return (
           <>
-            {bootRunning && <span className="bp-tab-indicator warn" />}
-            {!bootRunning && bootConsole.length > 0 && <span className="bp-tab-indicator ok" />}
+            {anyBootRunning && <span className="bp-tab-indicator warn" />}
+            {!anyBootRunning && allBootLines.length > 0 && <span className="bp-tab-indicator ok" />}
           </>
         );
       default:
@@ -741,10 +743,10 @@ export default function BottomPanel({ terminals, onCloseTerminal, validationIssu
       case 'boot-config':
         return (
           <div style={{ display: isActive ? 'flex' : 'none', flex: 1, overflow: 'hidden' }}>
-            <BootConsoleView
-              lines={bootConsole}
-              running={bootRunning}
-              onClear={onClearBootConsole}
+            <AllSliceBootLogsView
+              sliceBootLogs={sliceBootLogs}
+              sliceBootRunning={sliceBootRunning}
+              onClearSliceBootLog={onClearSliceBootLog}
               endRef={bootConsoleEndRef}
             />
           </div>
@@ -878,7 +880,7 @@ export default function BottomPanel({ terminals, onCloseTerminal, validationIssu
           {termCount > 0 && <span className="bottom-panel-badge">{termCount} terminal{termCount !== 1 ? 's' : ''}</span>}
           {containerTermActive && <span className="bottom-panel-badge">local</span>}
           {recipeRunning && <span className="bottom-panel-badge warn">recipe running</span>}
-          {bootRunning && <span className="bottom-panel-badge warn">boot config running</span>}
+          {anyBootRunning && <span className="bottom-panel-badge warn">boot config running</span>}
         </span>
         <span className="bottom-panel-collapsed-actions">
           {statusMessage && (
@@ -967,35 +969,72 @@ function RecipeConsoleView({ lines, running, onClear, endRef }: { lines: RecipeC
   );
 }
 
-// --- Boot Config Console View ---
-function BootConsoleView({ lines, running, onClear, endRef }: { lines: BootConsoleLine[]; running: boolean; onClear: () => void; endRef: React.RefObject<HTMLDivElement> }) {
-  if (lines.length === 0) {
+// --- Per-slice Boot Config Log Lines ---
+function BootLogLines({ lines }: { lines: BootConsoleLine[] }) {
+  return (
+    <>
+      {lines.map((line, i) => (
+        <div key={i} className={`bp-recipe-line bp-recipe-${line.type}`}>
+          {line.type === 'node'     && <span className="bp-recipe-icon">{'\u25A0'}</span>}
+          {line.type === 'step'     && <span className="bp-recipe-icon">{'\u25B6'}</span>}
+          {line.type === 'progress' && <span className="bp-recipe-icon">{'\u2713'}</span>}
+          {line.type === 'output'   && <span className="bp-recipe-icon">{' '}</span>}
+          {line.type === 'error'    && <span className="bp-recipe-icon">{'\u2716'}</span>}
+          {line.type === 'deploy'   && <span className="bp-recipe-icon">{'\u25B6'}</span>}
+          <span>{line.message}</span>
+        </div>
+      ))}
+    </>
+  );
+}
+
+// --- All-Slices Boot Config View ---
+function AllSliceBootLogsView({
+  sliceBootLogs,
+  sliceBootRunning,
+  onClearSliceBootLog,
+  endRef,
+}: {
+  sliceBootLogs: Record<string, BootConsoleLine[]>;
+  sliceBootRunning: Record<string, boolean>;
+  onClearSliceBootLog: (sliceName: string) => void;
+  endRef: React.RefObject<HTMLDivElement>;
+}) {
+  const sliceNames = Object.keys(sliceBootLogs);
+
+  if (sliceNames.length === 0) {
     return (
       <div className="bp-validation-container">
-        <div className="bp-validation-empty">No boot config output. Run boot config from the Editor panel to see execution output here.</div>
+        <div className="bp-validation-empty">No boot config output. Submit a slice to see execution output here.</div>
       </div>
     );
   }
 
   return (
     <div className="bp-recipe-console">
-      <div className="bp-recipe-header">
-        <span>{running ? 'Boot config running...' : 'Boot config complete'}</span>
-        {!running && (
-          <button className="bp-errors-clear" onClick={onClear}>Clear</button>
-        )}
-        {running && <span className="bp-recipe-pulse" />}
-      </div>
-      <div className="bp-recipe-body">
-        {lines.map((line, i) => (
-          <div key={i} className={`bp-recipe-line bp-recipe-${line.type}`}>
-            {line.type === 'node'   && <span className="bp-recipe-icon">{'\u25A0'}</span>}
-            {line.type === 'step'   && <span className="bp-recipe-icon">{'\u25B6'}</span>}
-            {line.type === 'output' && <span className="bp-recipe-icon">{' '}</span>}
-            {line.type === 'error'  && <span className="bp-recipe-icon">{'\u2716'}</span>}
-            <span>{line.message}</span>
-          </div>
-        ))}
+      <div className="bp-recipe-body" style={{ flex: 1 }}>
+        {sliceNames.map((sn) => {
+          const lines = sliceBootLogs[sn] || [];
+          const running = !!sliceBootRunning[sn];
+          return (
+            <div key={sn} style={{ marginBottom: '8px' }}>
+              <div className="bp-recipe-header" style={{ position: 'sticky', top: 0, zIndex: 1 }}>
+                <span style={{ fontWeight: 600 }}>{sn}</span>
+                <span style={{ marginLeft: '8px', opacity: 0.7, fontWeight: 'normal' }}>
+                  {running ? 'running...' : 'complete'}
+                </span>
+                {running && <span className="bp-recipe-pulse" style={{ marginLeft: '8px' }} />}
+                {!running && (
+                  <button className="bp-errors-clear" style={{ marginLeft: 'auto' }}
+                    onClick={() => onClearSliceBootLog(sn)}>Clear</button>
+                )}
+              </div>
+              <div style={{ paddingLeft: '8px' }}>
+                <BootLogLines lines={lines} />
+              </div>
+            </div>
+          );
+        })}
         <div ref={endRef} />
       </div>
     </div>

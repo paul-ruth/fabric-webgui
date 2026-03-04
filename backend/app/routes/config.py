@@ -86,6 +86,18 @@ def _file_exists(name: str) -> bool:
     return os.path.isfile(os.path.join(_config_dir(), name))
 
 
+def _get_ai_api_key() -> str:
+    """Read the FABRIC_AI_API_KEY value from fabric_rc."""
+    rc_path = os.path.join(_config_dir(), "fabric_rc")
+    if os.path.isfile(rc_path):
+        with open(rc_path) as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith("export FABRIC_AI_API_KEY="):
+                    return line.split("=", 1)[1]
+    return ""
+
+
 def _storage_dir() -> str:
     return os.environ.get("FABRIC_STORAGE_DIR", "/fabric_storage")
 
@@ -143,9 +155,10 @@ def get_config_status():
         except Exception:
             token_info = {"error": "Could not decode token"}
 
-    # Check fabric_rc for project_id
+    # Check fabric_rc for project_id and AI API key
     project_id = ""
     bastion_username = ""
+    ai_api_key = ""
     rc_path = os.path.join(config_dir, "fabric_rc")
     if os.path.isfile(rc_path):
         with open(rc_path) as f:
@@ -155,6 +168,8 @@ def get_config_status():
                     project_id = line.split("=", 1)[1]
                 elif line.startswith("export FABRIC_BASTION_USERNAME="):
                     bastion_username = line.split("=", 1)[1]
+                elif line.startswith("export FABRIC_AI_API_KEY="):
+                    ai_api_key = line.split("=", 1)[1]
 
     # Read public key contents for display
     bastion_pub_key = ""
@@ -194,6 +209,7 @@ def get_config_status():
         "slice_key_fingerprint": slice_key_fingerprint,
         "default_slice_key": default_key,
         "slice_key_sets": keys_data.get("keys", []),
+        "ai_api_key_set": bool(ai_api_key),
     }
 
 
@@ -682,6 +698,8 @@ class ConfigSaveRequest(BaseModel):
         "-F {config_dir}/ssh_config "
         "{{ _self_.username }}@{{ _self_.management_ip }}"
     )
+    # AI Companion
+    litellm_api_key: str = ""
 
 
 @router.post("/api/config/save")
@@ -714,6 +732,7 @@ export FABRIC_LOG_LEVEL={req.log_level}
 export FABRIC_LOG_FILE={req.log_file}
 export FABRIC_AVOID={req.avoid}
 export FABRIC_SSH_COMMAND_LINE="{ssh_cmd}"
+export FABRIC_AI_API_KEY={req.litellm_api_key}
 """
 
     rc_path = os.path.join(d, "fabric_rc")

@@ -13,8 +13,8 @@
         "uploads": [],
         "commands": [
           {
-            "id": "1",
-            "command": "chmod +x ~/tools/*.sh && ~/tools/setup-ollama.sh",
+            "id": "setup-ollama",
+            "command": "chmod +x ~/tools/setup-ollama.sh && ~/tools/setup-ollama.sh",
             "order": 0
           }
         ],

@@ -40,6 +40,7 @@ export default function ConfigureView({ onConfigured, onClose }: ConfigureViewPr
   const [sshCommandLine, setSshCommandLine] = useState(
     'ssh -i {{ _self_.private_ssh_key_file }} -F {config_dir}/ssh_config {{ _self_.username }}@{{ _self_.management_ip }}'
   );
+  const [litellmApiKey, setLitellmApiKey] = useState('');
 
   const tokenFileRef = useRef<HTMLInputElement>(null);
   const bastionKeyRef = useRef<HTMLInputElement>(null);
@@ -257,6 +258,7 @@ export default function ConfigureView({ onConfigured, onClose }: ConfigureViewPr
         log_file: logFile,
         avoid: Array.from(avoidSet).join(','),
         ssh_command_line: sshCommandLine,
+        litellm_api_key: litellmApiKey,
       });
       if (result.configured) {
         setMessage({ text: 'Configuration saved! FABRIC is ready.', type: 'success' });
@@ -583,6 +585,23 @@ export default function ConfigureView({ onConfigured, onClose }: ConfigureViewPr
               )}
               <p>SSH Command Line</p>
               <input type="text" value={sshCommandLine} onChange={(e) => setSshCommandLine(e.target.value)} />
+
+              <p style={{ marginTop: 16, fontWeight: 600 }}>AI Companion</p>
+              <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2, marginBottom: 6 }}>
+                API key for FABRIC AI services (ai.fabric-testbed.net). Used by FabChat, Aider, and OpenCode.
+              </p>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <input
+                  type="password"
+                  value={litellmApiKey}
+                  onChange={(e) => setLitellmApiKey(e.target.value)}
+                  placeholder="Enter API key..."
+                  style={{ flex: 1 }}
+                />
+                {status?.ai_api_key_set && !litellmApiKey && (
+                  <span style={{ fontSize: 12, color: '#008e7a', whiteSpace: 'nowrap' }}>{'\u2713'} Configured</span>
+                )}
+              </div>
             </div>
           )}
         </div>

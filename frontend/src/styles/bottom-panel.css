@@ -480,9 +480,10 @@
   width: 14px;
   text-align: center;
 }
-.bp-recipe-step   { color: var(--fabric-primary); }
-.bp-recipe-output { color: var(--fabric-text-muted); }
-.bp-recipe-error  { color: var(--fabric-coral, #e25241); }
+.bp-recipe-step     { color: var(--fabric-primary); }
+.bp-recipe-progress { color: var(--fabric-teal, #008e7a); font-weight: 600; }
+.bp-recipe-output   { color: var(--fabric-text-muted); }
+.bp-recipe-error    { color: var(--fabric-coral, #e25241); }
 
 /* --- Split-Pane Layout --- */
 

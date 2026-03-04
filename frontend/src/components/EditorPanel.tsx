@@ -1,6 +1,6 @@
 'use client';
 import { useState, useEffect, useCallback, useRef } from 'react';
-import type { SliceData, SiteInfo, ComponentModel, SliceNode, SliceNetwork, SliceFacilityPort, BootConfig, BootUpload, BootCommand, BootExecResult, FileEntry, SliceKeySet, VMTemplateSummary, HostInfo, IpHint } from '../types/fabric';
+import type { SliceData, SiteInfo, ComponentModel, SliceNode, SliceNetwork, SliceFacilityPort, BootConfig, BootUpload, BootCommand, BootExecResult, FileEntry, SliceKeySet, VMTemplateSummary, HostInfo, IpHint, L3Config } from '../types/fabric';
 import * as api from '../api/client';
 import Tooltip from './Tooltip';
 import SliverComboBox from './editor/SliverComboBox';
@@ -2236,7 +2236,14 @@ function FacilityPortForm({
 // --- L3 IP Hints Editor (FABNetv4/v6 networks) ---
 type HintMode = 'auto' | 'fixed' | 'range';
 
-function L3IpHintsEditor({
+const DEFAULT_L3_CONFIG: L3Config = {
+  mode: 'auto',
+  route_mode: 'default_fabnet',
+  custom_routes: [],
+  default_fabnet_subnet: '10.128.0.0/10',
+};
+
+function L3ConfigEditor({
   network, sliceName, isDraft, loading,
 }: {
   network: SliceNetwork;
@@ -2244,51 +2251,35 @@ function L3IpHintsEditor({
   isDraft: boolean;
   loading: boolean;
 }) {
+  const [l3, setL3] = useState<L3Config>(network.l3_config || DEFAULT_L3_CONFIG);
   const [hints, setHints] = useState<Record<string, IpHint>>(network.ip_hints || {});
   const [saving, setSaving] = useState(false);
   const [applying, setApplying] = useState(false);
   const [error, setError] = useState('');
   const [assignments, setAssignments] = useState<Record<string, string>>({});
+  const [newRoute, setNewRoute] = useState('');
 
-  // Reset when network changes
+  // Fetch L3 config from backend on mount/network change
   useEffect(() => {
+    setL3(network.l3_config || DEFAULT_L3_CONFIG);
     setHints(network.ip_hints || {});
     setError('');
     setAssignments({});
-  }, [network.name, network.ip_hints]);
+    // Load saved L3 config from backend
+    api.getL3Config(sliceName, network.name).then(r => {
+      if (r.l3_config && Object.keys(r.l3_config).length > 0) setL3(r.l3_config as L3Config);
+    }).catch(() => {});
+    // Load saved IP hints from backend
+    api.getIpHints(sliceName, network.name).then(r => {
+      if (r.hints && Object.keys(r.hints).length > 0) setHints(r.hints);
+    }).catch(() => {});
+  }, [sliceName, network.name]);
 
-  const getMode = (iface: string): HintMode => {
-    const h = hints[iface];
-    if (!h) return 'auto';
-    if (h.last_octet !== undefined) return 'fixed';
-    if (h.last_octet_range) return 'range';
-    return 'auto';
-  };
-
-  const setMode = (iface: string, mode: HintMode) => {
+  const setOctet = (iface: string, value: string) => {
     setHints(prev => {
       const next = { ...prev };
-      if (mode === 'auto') {
-        delete next[iface];
-      } else if (mode === 'fixed') {
-        next[iface] = { last_octet: 10 };
-      } else {
-        next[iface] = { last_octet_range: '10-50' };
-      }
-      return next;
-    });
-  };
-
-  const setValue = (iface: string, value: string) => {
-    setHints(prev => {
-      const next = { ...prev };
-      const mode = getMode(iface);
-      if (mode === 'fixed') {
-        const n = parseInt(value);
-        next[iface] = { last_octet: isNaN(n) ? undefined : n };
-      } else if (mode === 'range') {
-        next[iface] = { last_octet_range: value };
-      }
+      const n = parseInt(value);
+      next[iface] = { last_octet: isNaN(n) ? undefined : n };
       return next;
     });
   };
@@ -2297,9 +2288,12 @@ function L3IpHintsEditor({
     setSaving(true);
     setError('');
     try {
-      await api.setIpHints(sliceName, network.name, hints);
+      await api.setL3Config(sliceName, network.name, l3);
+      if (l3.mode === 'user_octet') {
+        await api.setIpHints(sliceName, network.name, hints);
+      }
     } catch (e: any) {
-      setError(e.message || 'Failed to save hints');
+      setError(e.message || 'Failed to save');
     } finally {
       setSaving(false);
     }
@@ -2309,16 +2303,41 @@ function L3IpHintsEditor({
     setApplying(true);
     setError('');
     try {
+      // Save first to ensure routes are stored
+      await api.setL3Config(sliceName, network.name, l3);
+      await api.setIpHints(sliceName, network.name, hints);
       const result = await api.applyIpHints(sliceName, network.name);
       setAssignments(result.assignments || {});
     } catch (e: any) {
-      setError(e.message || 'Failed to apply hints');
+      setError(e.message || 'Failed to apply');
     } finally {
       setApplying(false);
     }
   };
 
+  const addCustomRoute = () => {
+    const trimmed = newRoute.trim();
+    if (!trimmed) return;
+    setL3(prev => ({ ...prev, custom_routes: [...prev.custom_routes, trimmed] }));
+    setNewRoute('');
+  };
+
+  const removeCustomRoute = (index: number) => {
+    setL3(prev => ({ ...prev, custom_routes: prev.custom_routes.filter((_, i) => i !== index) }));
+  };
+
   const hasSubnet = !!network.subnet;
+
+  const modeButtonStyle = (active: boolean): React.CSSProperties => ({
+    flex: 1,
+    padding: '4px 6px',
+    fontSize: '0.8em',
+    border: `1px solid ${active ? 'var(--fabric-primary, #5798bc)' : 'var(--fabric-border, #ccc)'}`,
+    borderRadius: 4,
+    background: active ? 'var(--fabric-primary, #5798bc)' : 'transparent',
+    color: active ? '#fff' : 'inherit',
+    cursor: 'pointer',
+  });
 
   return (
     <>
@@ -2339,92 +2358,166 @@ function L3IpHintsEditor({
 
       {!hasSubnet && isDraft && (
         <div style={{ fontSize: 11, color: 'var(--fabric-text-muted)', marginTop: 4, marginBottom: 8 }}>
-          Subnet will be assigned by FABRIC at submit time. Set last-octet preferences below.
+          Subnet will be assigned by FABRIC at submit time.
         </div>
       )}
 
-      {network.interfaces.length > 0 && (
+      {/* Section 1: Config Mode */}
+      <div className="editor-section-divider" />
+      <div className="editor-section-label">
+        <Tooltip text="How IP addresses are assigned on this FABNet network">L3 Config Mode</Tooltip>
+      </div>
+      <div style={{ display: 'flex', gap: 4, marginBottom: 8 }}>
+        <button style={modeButtonStyle(l3.mode === 'auto')} onClick={() => setL3(prev => ({ ...prev, mode: 'auto' }))} disabled={loading}>
+          Auto
+        </button>
+        <button style={modeButtonStyle(l3.mode === 'manual')} onClick={() => setL3(prev => ({ ...prev, mode: 'manual' }))} disabled={loading}>
+          Manual
+        </button>
+        <button style={modeButtonStyle(l3.mode === 'user_octet')} onClick={() => setL3(prev => ({ ...prev, mode: 'user_octet' }))} disabled={loading}>
+          User Octet
+        </button>
+      </div>
+      <div style={{ fontSize: 11, color: 'var(--fabric-text-muted)', marginBottom: 8 }}>
+        {l3.mode === 'auto' && 'FABLib automatically assigns IPs and configures routing.'}
+        {l3.mode === 'manual' && 'No automatic configuration. Configure in boot scripts.'}
+        {l3.mode === 'user_octet' && 'Choose last octet per interface. Works with /24 subnets.'}
+      </div>
+
+      {/* Section 2: Route Configuration (user_octet only) */}
+      {l3.mode === 'user_octet' && (
         <>
           <div className="editor-section-divider" />
           <div className="editor-section-label">
-            <Tooltip text="Control the last octet of IPs on this FABNet network">IP Hints</Tooltip>
+            <Tooltip text="Subnet routes added to each interface after IP assignment">Route Configuration</Tooltip>
           </div>
-          {network.interfaces.map((iface) => {
-            const mode = getMode(iface.name);
-            const h = hints[iface.name];
-            const assigned = assignments[iface.name];
-            return (
-              <div key={iface.name} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4, fontSize: '0.82em' }}>
-                <span style={{ minWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={iface.name}>
-                  {iface.name}
-                </span>
-                <select
-                  value={mode}
-                  onChange={(e) => setMode(iface.name, e.target.value as HintMode)}
-                  style={{ width: 72, fontSize: '0.95em' }}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 8, fontSize: '0.82em' }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+              <input
+                type="radio"
+                name={`route-mode-${network.name}`}
+                checked={l3.route_mode === 'default_fabnet'}
+                onChange={() => setL3(prev => ({ ...prev, route_mode: 'default_fabnet' }))}
+                disabled={loading}
+              />
+              Default FABNet Subnet
+            </label>
+            {l3.route_mode === 'default_fabnet' && (
+              <div style={{ marginLeft: 22 }}>
+                <input
+                  type="text"
+                  value={l3.default_fabnet_subnet}
+                  onChange={(e) => setL3(prev => ({ ...prev, default_fabnet_subnet: e.target.value }))}
+                  style={{ width: 140, fontSize: '0.95em' }}
+                  placeholder="10.128.0.0/10"
                   disabled={loading}
-                >
-                  <option value="auto">Auto</option>
-                  <option value="fixed">Fixed</option>
-                  <option value="range">Range</option>
-                </select>
-                {mode === 'fixed' && (
-                  <input
-                    type="number"
-                    min={1}
-                    max={254}
-                    value={h?.last_octet ?? ''}
-                    onChange={(e) => setValue(iface.name, e.target.value)}
-                    style={{ width: 56, fontSize: '0.95em' }}
-                    placeholder="1-254"
-                    disabled={loading}
-                  />
-                )}
-                {mode === 'range' && (
+                />
+              </div>
+            )}
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+              <input
+                type="radio"
+                name={`route-mode-${network.name}`}
+                checked={l3.route_mode === 'custom'}
+                onChange={() => setL3(prev => ({ ...prev, route_mode: 'custom' }))}
+                disabled={loading}
+              />
+              Custom Subnets
+            </label>
+            {l3.route_mode === 'custom' && (
+              <div style={{ marginLeft: 22 }}>
+                {l3.custom_routes.map((route, i) => (
+                  <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 4, marginBottom: 2 }}>
+                    <span style={{ flex: 1 }}>{route}</span>
+                    <button
+                      style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--fabric-coral, #e25241)', fontSize: 14 }}
+                      onClick={() => removeCustomRoute(i)}
+                      title="Remove route"
+                      disabled={loading}
+                    >
+                      {'\u2715'}
+                    </button>
+                  </div>
+                ))}
+                <div style={{ display: 'flex', gap: 4, marginTop: 2 }}>
                   <input
                     type="text"
-                    value={h?.last_octet_range ?? ''}
-                    onChange={(e) => setValue(iface.name, e.target.value)}
-                    style={{ width: 72, fontSize: '0.95em' }}
-                    placeholder="10-50"
+                    value={newRoute}
+                    onChange={(e) => setNewRoute(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter') addCustomRoute(); }}
+                    placeholder="e.g. 10.128.0.0/10"
+                    style={{ flex: 1, fontSize: '0.95em' }}
                     disabled={loading}
                   />
-                )}
-                {mode === 'auto' && <span style={{ width: 56 }} />}
-                {assigned && (
-                  <span style={{ color: 'var(--fabric-teal, #008e7a)', fontWeight: 600 }}>{assigned}</span>
-                )}
-                {!assigned && iface.ip_addr && (
-                  <span style={{ color: 'var(--fabric-text-muted)' }}>{iface.ip_addr}</span>
-                )}
+                  <button className="primary-btn" onClick={addCustomRoute} disabled={loading || !newRoute.trim()} style={{ fontSize: '0.85em', padding: '2px 8px' }}>
+                    Add
+                  </button>
+                </div>
               </div>
-            );
-          })}
-
-          {error && <div className="form-error" style={{ marginTop: 4 }}>{error}</div>}
-
-          <div style={{ display: 'flex', gap: 6, marginTop: 6, marginBottom: 8 }}>
-            <button
-              className="primary-btn"
-              disabled={saving || loading}
-              onClick={handleSave}
-              style={{ flex: 1 }}
-            >
-              {saving ? 'Saving…' : 'Save Hints'}
-            </button>
-            {hasSubnet && (
-              <button
-                className="primary-btn"
-                disabled={applying || loading}
-                onClick={handleApply}
-                style={{ flex: 1 }}
-              >
-                {applying ? 'Applying…' : 'Apply IP Hints'}
-              </button>
             )}
           </div>
+
+          {/* Section 3: Per-Interface Octets */}
+          {network.interfaces.length > 0 && (
+            <>
+              <div className="editor-section-divider" />
+              <div className="editor-section-label">
+                <Tooltip text="Set the last octet (1-254) for each interface's IP address">Per-Interface Octets</Tooltip>
+              </div>
+              {network.interfaces.map((iface) => {
+                const h = hints[iface.name];
+                const assigned = assignments[iface.name];
+                return (
+                  <div key={iface.name} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4, fontSize: '0.82em' }}>
+                    <span style={{ minWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={iface.name}>
+                      {iface.name}
+                    </span>
+                    <input
+                      type="number"
+                      min={1}
+                      max={254}
+                      value={h?.last_octet ?? ''}
+                      onChange={(e) => setOctet(iface.name, e.target.value)}
+                      style={{ width: 56, fontSize: '0.95em' }}
+                      placeholder="1-254"
+                      disabled={loading}
+                    />
+                    {assigned && (
+                      <span style={{ color: 'var(--fabric-teal, #008e7a)', fontWeight: 600 }}>{assigned}</span>
+                    )}
+                    {!assigned && iface.ip_addr && (
+                      <span style={{ color: 'var(--fabric-text-muted)' }}>{iface.ip_addr}</span>
+                    )}
+                  </div>
+                );
+              })}
+            </>
+          )}
         </>
       )}
+
+      {error && <div className="form-error" style={{ marginTop: 4 }}>{error}</div>}
+
+      <div style={{ display: 'flex', gap: 6, marginTop: 6, marginBottom: 8 }}>
+        <button
+          className="primary-btn"
+          disabled={saving || loading}
+          onClick={handleSave}
+          style={{ flex: 1 }}
+        >
+          {saving ? 'Saving…' : 'Save'}
+        </button>
+        {hasSubnet && l3.mode === 'user_octet' && (
+          <button
+            className="primary-btn"
+            disabled={applying || loading}
+            onClick={handleApply}
+            style={{ flex: 1 }}
+          >
+            {applying ? 'Applying…' : 'Apply'}
+          </button>
+        )}
+      </div>
     </>
   );
 }
@@ -2590,7 +2683,7 @@ function NetworkReadOnlyView({
           )}
         </>
       ) : (
-        <L3IpHintsEditor
+        <L3ConfigEditor
           network={network}
           sliceName={sliceName}
           isDraft={isDraft}

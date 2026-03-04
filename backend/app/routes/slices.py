@@ -78,6 +78,8 @@ _draft_is_new: dict[str, bool] = {}
 _draft_site_groups: dict[str, dict[str, str]] = {}
 # Track IP hints for L3 networks: slice_name -> {net_name -> {iface_name -> hint}}
 _draft_ip_hints: dict[str, dict[str, dict[str, dict]]] = {}
+# Track L3 config for FABNet networks: slice_name -> {net_name -> config_dict}
+_draft_l3_config: dict[str, dict[str, dict]] = {}
 # Track which project a draft belongs to
 _draft_project_id: dict[str, str] = {}
 
@@ -112,6 +114,9 @@ def _persist_draft(name: str, slice_obj: Any) -> None:
         ip_hints = _draft_ip_hints.get(name, {})
         if ip_hints:
             meta["ip_hints"] = ip_hints
+        l3_config = _draft_l3_config.get(name, {})
+        if l3_config:
+            meta["l3_config"] = l3_config
         pid = _draft_project_id.get(name, os.environ.get("FABRIC_PROJECT_ID", ""))
         if pid:
             meta["project_id"] = pid
@@ -158,6 +163,7 @@ def _load_persistent_drafts() -> None:
         name = entry  # fallback to dir name
         groups: dict[str, str] = {}
         ip_hints: dict[str, dict[str, dict]] = {}
+        l3_config: dict[str, dict] = {}
         draft_pid = ""
         if os.path.isfile(meta_path):
             try:
@@ -166,6 +172,7 @@ def _load_persistent_drafts() -> None:
                 name = meta.get("name", entry)
                 groups = meta.get("site_groups", {})
                 ip_hints = meta.get("ip_hints", {})
+                l3_config = meta.get("l3_config", {})
                 draft_pid = meta.get("project_id", "")
             except Exception:
                 pass
@@ -187,6 +194,8 @@ def _load_persistent_drafts() -> None:
                 _draft_site_groups[name] = groups
             if ip_hints:
                 _draft_ip_hints[name] = ip_hints
+            if l3_config:
+                _draft_l3_config[name] = l3_config
             if draft_pid:
                 _draft_project_id[name] = draft_pid
             register_slice(name, state="Draft", project_id=draft_pid)
@@ -212,6 +221,7 @@ def _pop_draft(name: str) -> tuple[Any | None, bool]:
         is_new = _draft_is_new.pop(name, True)
         _draft_site_groups.pop(name, None)
         _draft_ip_hints.pop(name, None)
+        _draft_l3_config.pop(name, None)
         _draft_project_id.pop(name, None)
         return obj, is_new
 
@@ -266,6 +276,26 @@ def _get_all_ip_hints(name: str) -> dict[str, dict[str, dict]]:
     """Get all IP hints for a slice (net_name → {iface → hint})."""
     with _draft_lock:
         return {k: dict(v) for k, v in _draft_ip_hints.get(name, {}).items()}
+
+
+def _store_l3_config(name: str, net_name: str, config: dict) -> None:
+    """Store L3 config for a specific network in a slice."""
+    with _draft_lock:
+        if name not in _draft_l3_config:
+            _draft_l3_config[name] = {}
+        _draft_l3_config[name][net_name] = config
+
+
+def _get_l3_config(name: str, net_name: str) -> dict:
+    """Get L3 config for a specific network (empty dict if none)."""
+    with _draft_lock:
+        return dict(_draft_l3_config.get(name, {}).get(net_name, {}))
+
+
+def _get_all_l3_configs(name: str) -> dict[str, dict]:
+    """Get all L3 configs for a slice (net_name → config)."""
+    with _draft_lock:
+        return {k: dict(v) for k, v in _draft_l3_config.get(name, {}).items()}
 
 
 def _get_slice_obj(name: str):
@@ -1585,6 +1615,18 @@ async def apply_ip_hints(slice_name: str, net_name: str) -> dict[str, Any]:
                     used_octets.add(candidate)
                     break
 
+        # Build routes list from l3_config
+        l3_cfg = _get_l3_config(slice_name, net_name)
+        routes: list[str] = []
+        route_mode = l3_cfg.get("route_mode", "default_fabnet")
+        if l3_cfg.get("mode") == "user_octet":
+            if route_mode == "default_fabnet":
+                default_subnet = l3_cfg.get("default_fabnet_subnet", "10.128.0.0/10")
+                if default_subnet:
+                    routes.append(default_subnet)
+            elif route_mode == "custom":
+                routes.extend(l3_cfg.get("custom_routes", []))
+
         # Write boot config network entries for each assignment
         cidr_prefix = str(network.prefixlen)
         for iface_name, ip_str in assignments.items():
@@ -1608,13 +1650,16 @@ async def apply_ip_hints(slice_name: str, net_name: str) -> dict[str, Any]:
                 bc["network"] = [e for e in bc.get("network", [])
                                  if e.get("iface") != iface_name]
 
-                bc["network"].append({
+                entry: dict[str, Any] = {
                     "id": f"ip-hint-{iface_name}",
                     "iface": iface_name,
                     "mode": "manual",
                     "ip": f"{ip_str}/{cidr_prefix}",
                     "order": 100,
-                })
+                }
+                if routes:
+                    entry["routes"] = routes
+                bc["network"].append(entry)
                 ud["boot_config"] = bc
                 fab_node.set_user_data(ud)
             except Exception as ex:
@@ -1629,6 +1674,39 @@ async def apply_ip_hints(slice_name: str, net_name: str) -> dict[str, Any]:
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# --- L3 Config for FABNet networks ---
+
+class L3ConfigRequest(BaseModel):
+    mode: str = "auto"  # auto | manual | user_octet
+    route_mode: str = "default_fabnet"  # default_fabnet | custom
+    custom_routes: List[str] = []
+    default_fabnet_subnet: str = "10.128.0.0/10"
+
+
+@router.get("/slices/{slice_name}/networks/{net_name}/l3-config")
+def get_l3_config_endpoint(slice_name: str, net_name: str) -> dict[str, Any]:
+    """Get L3 config for a FABNet network."""
+    return {"network": net_name, "l3_config": _get_l3_config(slice_name, net_name)}
+
+
+@router.put("/slices/{slice_name}/networks/{net_name}/l3-config")
+def set_l3_config_endpoint(slice_name: str, net_name: str, req: L3ConfigRequest) -> dict[str, Any]:
+    """Save L3 config for a FABNet network."""
+    config = {
+        "mode": req.mode,
+        "route_mode": req.route_mode,
+        "custom_routes": req.custom_routes,
+        "default_fabnet_subnet": req.default_fabnet_subnet,
+    }
+    _store_l3_config(slice_name, net_name, config)
+    # Re-persist draft if it's a new draft
+    if _is_draft(slice_name) and _is_new_draft(slice_name):
+        draft = _get_draft(slice_name)
+        if draft:
+            _persist_draft(slice_name, draft)
+    return {"network": net_name, "l3_config": config, "status": "ok"}
 
 
 # --- Post-boot config ---
@@ -2029,6 +2107,7 @@ def build_slice_model(slice_name: str) -> dict:
         model["nodes"].append(node_model)
 
     all_hints = _get_all_ip_hints(slice_name)
+    all_l3_configs = _get_all_l3_configs(slice_name)
     for net in data.get("networks", []):
         net_model: dict[str, Any] = {
             "name": net["name"],
@@ -2051,6 +2130,10 @@ def build_slice_model(slice_name: str) -> dict:
         net_hints = all_hints.get(net["name"])
         if net_hints:
             net_model["ip_hints"] = net_hints
+        # Export L3 config if present
+        net_l3 = all_l3_configs.get(net["name"])
+        if net_l3:
+            net_model["l3_config"] = net_l3
         model["networks"].append(net_model)
 
     return model
@@ -2217,6 +2300,10 @@ def import_slice(model: SliceModelImport) -> dict[str, Any]:
             net_hints = net_def.get("ip_hints")
             if net_hints and isinstance(net_hints, dict):
                 _store_ip_hints(model.name, net_def["name"], net_hints)
+            # Restore L3 config from imported model
+            net_l3 = net_def.get("l3_config")
+            if net_l3 and isinstance(net_l3, dict):
+                _store_l3_config(model.name, net_def["name"], net_l3)
 
         # Persist boot configs to disk so they survive the submit cycle
         # (FABlib user_data may not round-trip through FABRIC control framework)

@@ -1,6 +1,6 @@
 /** API client for the FABRIC Web GUI backend. */
 
-import type { SliceSummary, SliceData, SiteInfo, SiteDetail, LinkInfo, ComponentModel, ConfigStatus, ProjectsResponse, ValidationResult, SiteMetrics, LinkMetrics, FileEntry, ProvisionRule, BootConfig, BootExecResult, SliceKeySet, VMTemplateSummary, VMTemplateDetail, VMTemplateVariantDetail, HostInfo, ProjectDetails, ToolFile, RecipeSummary, RecipeExecResult, UpdateInfo, IpHint } from '../types/fabric';
+import type { SliceSummary, SliceData, SiteInfo, SiteDetail, LinkInfo, ComponentModel, ConfigStatus, ProjectsResponse, ValidationResult, SiteMetrics, LinkMetrics, FileEntry, ProvisionRule, BootConfig, BootExecResult, SliceKeySet, VMTemplateSummary, VMTemplateDetail, VMTemplateVariantDetail, HostInfo, ProjectDetails, ToolFile, RecipeSummary, RecipeExecResult, UpdateInfo, IpHint, L3Config } from '../types/fabric';
 
 const BASE = '/api';
 
@@ -201,6 +201,19 @@ export function setIpHints(sliceName: string, netName: string, hints: Record<str
 export function applyIpHints(sliceName: string, netName: string): Promise<{ network: string; assignments: Record<string, string>; status: string }> {
   return fetchJson(`/slices/${encodeURIComponent(sliceName)}/networks/${encodeURIComponent(netName)}/apply-ip-hints`, {
     method: 'POST',
+  });
+}
+
+// --- L3 Config ---
+
+export function getL3Config(sliceName: string, netName: string): Promise<{ network: string; l3_config: L3Config }> {
+  return fetchJson(`/slices/${encodeURIComponent(sliceName)}/networks/${encodeURIComponent(netName)}/l3-config`);
+}
+
+export function setL3Config(sliceName: string, netName: string, config: L3Config): Promise<{ network: string; l3_config: L3Config; status: string }> {
+  return fetchJson(`/slices/${encodeURIComponent(sliceName)}/networks/${encodeURIComponent(netName)}/l3-config`, {
+    method: 'PUT',
+    body: JSON.stringify(config),
   });
 }
 
@@ -902,6 +915,7 @@ export function saveConfig(config: {
   log_file?: string;
   avoid?: string;
   ssh_command_line?: string;
+  litellm_api_key?: string;
 }): Promise<{ status: string; configured: boolean }> {
   return fetchJson('/config/save', {
     method: 'POST',

@@ -14,7 +14,12 @@
           "name": "nic1",
           "model": "NIC_Basic"
         }
-      ]
+      ],
+      "boot_config": {
+        "uploads": [],
+        "commands": [],
+        "network": []
+      }
     },
     {
       "name": "node-b",
@@ -28,7 +33,12 @@
           "name": "nic1",
           "model": "NIC_Basic"
         }
-      ]
+      ],
+      "boot_config": {
+        "uploads": [],
+        "commands": [],
+        "network": []
+      }
     }
   ],
   "networks": [

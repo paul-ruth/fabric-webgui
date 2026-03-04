@@ -24,6 +24,8 @@ function buildStylesheet(dark: boolean): any[] {
   const l3NodeBg = dark ? '#1a3a30' : '#e0f2f1';
   const fpColor = dark ? '#ffa562' : '#ff8542';
   const fpNodeBg = dark ? '#3a2008' : '#fff3e0';
+  const internetColor = dark ? '#a78bfa' : '#7c3aed';
+  const internetBg = dark ? '#1e1040' : '#ede9fe';
   const selectOverlay = dark ? '#ffa562' : '#ff8542';
 
   // Component badge colors by type
@@ -130,6 +132,26 @@ function buildStylesheet(dark: boolean): any[] {
       'text-background-color': edgeLabelBg, 'text-background-opacity': 1,
       'text-background-padding': '2px', 'text-wrap': 'wrap', 'color': edgeText,
       'font-family': 'Montserrat, sans-serif',
+    }},
+    { selector: '.fabnet-internet', style: {
+      'shape': 'ellipse', 'width': 110, 'height': 90, 'background-color': internetBg,
+      'border-width': 3, 'border-color': internetColor, 'border-style': 'dashed',
+      'label': 'data(label)', 'text-valign': 'center', 'text-halign': 'center',
+      'font-size': '10px', 'font-weight': 'bold', 'text-wrap': 'wrap',
+      'text-max-width': '100px', 'color': internetColor,
+      'font-family': 'Montserrat, sans-serif',
+    }},
+    { selector: '.fabnet-internet-hidden', style: {
+      'display': 'none',
+    }},
+    { selector: '.edge-fabnet-internet', style: {
+      'width': 2, 'line-color': internetColor, 'line-style': 'dashed',
+      'target-arrow-color': internetColor, 'target-arrow-shape': 'triangle',
+      'curve-style': 'unbundled-bezier',
+      'font-family': 'Montserrat, sans-serif',
+    }},
+    { selector: '.edge-fabnet-internet-hidden', style: {
+      'display': 'none',
     }},
     { selector: '.facility-port', style: {
       'shape': 'diamond', 'width': 80, 'height': 70, 'background-color': fpNodeBg,
@@ -248,6 +270,9 @@ export default function CytoscapeGraph({
   const [showSliceBox, setShowSliceBox] = useState(true);
   const showSliceBoxRef = useRef(showSliceBox);
   showSliceBoxRef.current = showSliceBox;
+  const [showFabnetInternet, setShowFabnetInternet] = useState(true);
+  const showFabnetInternetRef = useRef(showFabnetInternet);
+  showFabnetInternetRef.current = showFabnetInternet;
 
   // Close context menu on clicks or escape
   const menuOpenTime = useRef(0);
@@ -449,6 +474,8 @@ export default function CytoscapeGraph({
     applyComponentVisibility(cy, showComponentsRef.current);
     // Apply slice box visibility before layout
     applySliceBoxVisibility(cy, showSliceBoxRef.current);
+    // Apply fabnet internet visibility before layout
+    applyFabnetInternetVisibility(cy, showFabnetInternetRef.current);
 
     // Run layout on non-component elements; then position components at VM edges
     const layoutElements = cy.elements().not('.component');
@@ -492,6 +519,13 @@ export default function CytoscapeGraph({
     if (!cy) return;
     applySliceBoxVisibility(cy, showSliceBox);
   }, [showSliceBox]);
+
+  // Toggle fabnet internet node visibility
+  useEffect(() => {
+    const cy = cyRef.current;
+    if (!cy) return;
+    applyFabnetInternetVisibility(cy, showFabnetInternet);
+  }, [showFabnetInternet]);
 
   const handleFit = useCallback(() => {
     cyRef.current?.fit(undefined, 30);
@@ -569,6 +603,14 @@ export default function CytoscapeGraph({
             onChange={(e) => setShowComponents(e.target.checked)}
           />
           Components
+        </label>
+        <label className="graph-toggle">
+          <input
+            type="checkbox"
+            checked={showFabnetInternet}
+            onChange={(e) => setShowFabnetInternet(e.target.checked)}
+          />
+          FABNet Internet
         </label>
       </div>
 
@@ -738,6 +780,23 @@ function applyComponentVisibility(cy: Core, show: boolean) {
           edge.move({ source: sourceVm });
         }
       });
+    }
+  });
+}
+
+/**
+ * Show or hide the synthetic FABRIC Internet node and its uplink edges.
+ */
+function applyFabnetInternetVisibility(cy: Core, show: boolean) {
+  cy.batch(() => {
+    const internetNode = cy.getElementById('fabnet-internet-v4');
+    const internetEdges = cy.edges('.edge-fabnet-internet');
+    if (show) {
+      internetNode.removeClass('fabnet-internet-hidden');
+      internetEdges.removeClass('edge-fabnet-internet-hidden');
+    } else {
+      internetNode.addClass('fabnet-internet-hidden');
+      internetEdges.addClass('edge-fabnet-internet-hidden');
     }
   });
 }

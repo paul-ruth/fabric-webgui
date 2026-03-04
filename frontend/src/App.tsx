@@ -8,7 +8,6 @@ import SliverView from './components/SliverView';
 import AllSliversView from './components/AllSliversView';
 import EditorPanel from './components/EditorPanel';
 import LibrariesPanel from './components/LibrariesPanel';
-import ProjectView from './components/ProjectView';
 import MonitoringView from './components/MonitoringView';
 import LibrariesView from './components/LibrariesView';
 import DetailPanel from './components/DetailPanel';
@@ -19,6 +18,7 @@ import ConfigureView from './components/ConfigureView';
 import FileTransferView from './components/FileTransferView';
 import HelpView from './components/HelpView';
 import ClientView from './components/ClientView';
+import AICompanionView from './components/AICompanionView';
 import type { ClientTarget } from './components/ClientView';
 import HelpContextMenu from './components/HelpContextMenu';
 import GuidedTour from './components/GuidedTour';
@@ -39,10 +39,10 @@ export default function App() {
   const [recipeConsole, setRecipeConsole] = useState<RecipeConsoleLine[]>([]);
   const [recipeRunning, setRecipeRunning] = useState(false);
   const [executingRecipeName, setExecutingRecipeName] = useState<string | null>(null);
-  const [bootConsole, setBootConsole] = useState<BootConsoleLine[]>([]);
-  const [bootRunning, setBootRunning] = useState(false);
-  const [bootNodeStatus, setBootNodeStatus] = useState<Record<string, 'pending' | 'running' | 'done' | 'error'>>({});
-  const [currentView, setCurrentView] = useState<'topology' | 'sliver' | 'map' | 'files' | 'libraries' | 'project' | 'monitoring' | 'client'>('topology');
+  const [sliceBootLogs, setSliceBootLogs] = useState<Record<string, BootConsoleLine[]>>({});
+  const [sliceBootRunning, setSliceBootRunning] = useState<Record<string, boolean>>({});
+  const [sliceBootNodeStatus, setSliceBootNodeStatus] = useState<Record<string, Record<string, 'pending' | 'running' | 'done' | 'error'>>>({});
+  const [currentView, setCurrentView] = useState<'topology' | 'sliver' | 'map' | 'files' | 'libraries' | 'monitoring' | 'client' | 'ai'>('topology');
   const [clientTarget, setClientTarget] = useState<ClientTarget | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [isConfigured, setIsConfigured] = useState<boolean | null>(null);
@@ -262,56 +262,56 @@ export default function App() {
     }
   }, [selectedSliceName]);
 
-  // Boot config streaming handler — optionally accepts a slice name for auto-run scenarios
+  // Boot config streaming handler — per-slice, supports concurrent runs across multiple slices
   const handleRunBootConfigStream = useCallback(async (sliceNameOverride?: string) => {
     const target = sliceNameOverride || selectedSliceName;
     console.log(`[bootConfigStream] called with override=${sliceNameOverride} selected=${selectedSliceName} target=${target}`);
     if (!target) return;
-    setBootRunning(true);
-    // Initialize all nodes as pending
-    if (sliceData?.nodes) {
-      const initial: Record<string, 'pending' | 'running' | 'done' | 'error'> = {};
-      for (const n of sliceData.nodes) initial[n.name] = 'pending';
-      setBootNodeStatus(initial);
-    }
-    setBootConsole([{ type: 'step', message: `Starting boot config for slice "${target}" (waiting for SSH)...` }]);
+
+    setSliceBootRunning(prev => ({ ...prev, [target]: true }));
+    setSliceBootLogs(prev => ({
+      ...prev,
+      [target]: [{ type: 'step', message: `Starting boot config for slice "${target}" (waiting for SSH)...` }],
+    }));
+
+    const appendLine = (line: BootConsoleLine) => {
+      setSliceBootLogs(prev => ({
+        ...prev,
+        [target]: [...(prev[target] || []), line],
+      }));
+    };
+
     try {
       await api.executeBootConfigStream(target, (evt) => {
         if (evt.event === 'done') {
-          setBootConsole(prev => [...prev, {
-            type: evt.status === 'ok' ? 'step' : 'error',
-            message: evt.message || `Done — ${evt.status}`
-          }]);
-          setBootRunning(false);
-          // Mark any remaining 'running' nodes as 'done'
-          setBootNodeStatus(prev => {
-            const next = { ...prev };
-            for (const k of Object.keys(next)) {
-              if (next[k] === 'running' || next[k] === 'pending') next[k] = 'done';
+          appendLine({ type: evt.status === 'ok' ? 'step' : 'error', message: evt.message || `Done — ${evt.status}` });
+          setSliceBootRunning(prev => ({ ...prev, [target]: false }));
+          setSliceBootNodeStatus(prev => {
+            const nodeStatus = { ...(prev[target] || {}) };
+            for (const k of Object.keys(nodeStatus)) {
+              if (nodeStatus[k] === 'running' || nodeStatus[k] === 'pending') nodeStatus[k] = 'done';
             }
-            return next;
+            return { ...prev, [target]: nodeStatus };
           });
         } else if (evt.event === 'node' && evt.node) {
-          // A 'node' event with status means that node finished
           if (evt.status === 'ok') {
-            setBootNodeStatus(prev => ({ ...prev, [evt.node!]: 'done' }));
+            setSliceBootNodeStatus(prev => ({ ...prev, [target]: { ...(prev[target] || {}), [evt.node!]: 'done' } }));
           } else {
-            // Starting a new node
-            setBootNodeStatus(prev => ({ ...prev, [evt.node!]: 'running' }));
+            setSliceBootNodeStatus(prev => ({ ...prev, [target]: { ...(prev[target] || {}), [evt.node!]: 'running' } }));
           }
-          setBootConsole(prev => [...prev, { type: evt.event, message: evt.message || '' }]);
+          appendLine({ type: evt.event, message: evt.message || '' });
         } else if (evt.event === 'error' && evt.node) {
-          setBootNodeStatus(prev => ({ ...prev, [evt.node!]: 'error' }));
-          setBootConsole(prev => [...prev, { type: evt.event, message: evt.message || '' }]);
+          setSliceBootNodeStatus(prev => ({ ...prev, [target]: { ...(prev[target] || {}), [evt.node!]: 'error' } }));
+          appendLine({ type: evt.event, message: evt.message || '' });
         } else {
-          setBootConsole(prev => [...prev, { type: evt.event, message: evt.message || '' }]);
+          appendLine({ type: evt.event, message: evt.message || '' });
         }
       });
     } catch (e: any) {
-      setBootConsole(prev => [...prev, { type: 'error', message: e.message }]);
-      setBootRunning(false);
+      appendLine({ type: 'error', message: e.message });
+      setSliceBootRunning(prev => ({ ...prev, [target]: false }));
     }
-  }, [selectedSliceName, sliceData?.nodes]);
+  }, [selectedSliceName]);
 
   // Check config status on mount
   useEffect(() => {
@@ -682,42 +682,42 @@ export default function App() {
                 setSliceData(data);
               } catch { /* ignore */ }
             }
-            // Get node names for per-node progress tracking
-            let sliceNodeNames: string[] = [];
-            try {
-              const sd = await api.getSlice(entry.name);
-              sliceNodeNames = sd.nodes.map((n: any) => n.name);
-              if (entry.name === currentName) setSliceData(sd);
-            } catch { /* fallback: empty list, will use batch call */ }
+            // Fire and forget — each slice configures independently in parallel
+            const sliceName = entry.name;
+            (async () => {
+              // Get node names for per-node progress tracking
+              let sliceNodeNames: string[] = [];
+              try {
+                const sd = await api.getSlice(sliceName);
+                sliceNodeNames = sd.nodes.map((n: any) => n.name);
+                if (sliceName === currentName) setSliceData(sd);
+              } catch { /* fallback */ }
 
-            // Run FABlib's native post_boot_config (L3 networking, hostnames, IPs, routes)
-            setStatusMessage(`Running FABlib post-boot config on ${entry.name}...`);
-            try {
-              await api.runPostBootConfig(entry.name);
-            } catch (e: any) {
-              addError(`FABlib post_boot_config failed for ${entry.name}: ${e.message}`);
-            }
+              // Run FABlib's native post_boot_config (assigns IPs/hostnames)
+              try {
+                await api.runPostBootConfig(sliceName);
+              } catch (e: any) {
+                addError(`FABlib post_boot_config failed for ${sliceName}: ${e.message}`);
+              }
 
-            // Run boot configs via streaming endpoint (includes SSH readiness check)
-            setStatusMessage(`Running post-boot config on ${entry.name} (waiting for SSH)...`);
-            await handleRunBootConfigStream(entry.name);
+              // Run boot configs via streaming endpoint (includes deploy.sh + SSH readiness)
+              await handleRunBootConfigStream(sliceName);
 
-            // Auto-enable monitoring if user flagged it pre-submit
-            if (monitoringPendingRef.current.has(entry.name)) {
-              monitoringPendingRef.current.delete(entry.name);
-              setMonitoringEnabledSlices(prev => { const next = new Set(prev); next.delete(entry.name); return next; });
-              setStatusMessage(`Enabling monitoring on ${entry.name}...`);
-              if (sliceNodeNames.length > 0) {
-                await enableMonitoringPerNode(entry.name, sliceNodeNames);
-              } else {
-                try {
-                  await api.enableMonitoring(entry.name);
-                } catch (e: any) {
-                  addError(`Auto-enable monitoring failed for ${entry.name}: ${e.message}`);
+              // Auto-enable monitoring if user flagged it pre-submit
+              if (monitoringPendingRef.current.has(sliceName)) {
+                monitoringPendingRef.current.delete(sliceName);
+                setMonitoringEnabledSlices(prev => { const next = new Set(prev); next.delete(sliceName); return next; });
+                if (sliceNodeNames.length > 0) {
+                  await enableMonitoringPerNode(sliceName, sliceNodeNames);
+                } else {
+                  try {
+                    await api.enableMonitoring(sliceName);
+                  } catch (e: any) {
+                    addError(`Auto-enable monitoring failed for ${sliceName}: ${e.message}`);
+                  }
                 }
               }
-            }
-            setStatusMessage('');
+            })();
           }
         }
 
@@ -1440,7 +1440,9 @@ export default function App() {
       )}
 
       <div style={{ flex: 1, display: (settingsOpen || helpOpen) ? 'none' : 'flex', overflow: 'hidden' }}>
-        {currentView === 'client' ? (
+        {currentView === 'ai' ? (
+          <AICompanionView />
+        ) : currentView === 'client' ? (
           <ClientView
             slices={slices}
             selectedSliceName={selectedSliceName}
@@ -1448,8 +1450,6 @@ export default function App() {
             clientTarget={clientTarget}
             onTargetChange={setClientTarget}
           />
-        ) : currentView === 'project' ? (
-          <ProjectView projectId={projectId} slices={slices} onRefreshSlices={refreshSliceList} />
         ) : currentView === 'monitoring' ? (
           <MonitoringView sliceName={selectedSliceName || null} sliceData={sliceData} monitoringPending={monitoringEnabledSlices.has(selectedSliceName)} nodeActivity={nodeActivity} />
         ) : currentView === 'libraries' ? (
@@ -1492,7 +1492,7 @@ export default function App() {
                       onSaveVmTemplate={handleSaveVmTemplate}
                       onBootConfigErrors={setBootConfigErrors}
                       onRunBootConfig={handleRunBootConfigStream}
-                      bootRunning={bootRunning}
+                      bootRunning={!!sliceBootRunning[selectedSliceName]}
                       monitoringEnabled={monitoringEnabledSlices.has(selectedSliceName)}
                       onToggleMonitoring={(enabled) => setMonitoringEnabled(selectedSliceName, enabled)}
                     />
@@ -1682,7 +1682,7 @@ export default function App() {
                       dark={dark}
                       sliceData={sliceData}
                       recipes={recipes}
-                      bootNodeStatus={bootNodeStatus}
+                      bootNodeStatus={sliceBootNodeStatus[selectedSliceName] ?? {}}
                       onLayoutChange={setLayout}
                       onNodeClick={handleNodeClick}
                       onEdgeClick={handleEdgeClick}
@@ -1702,36 +1702,6 @@ export default function App() {
                       onContextAction={handleContextAction}
                       nodeActivity={nodeActivity}
                       recipes={recipes}
-                    />
-                  )}
-                  {!consoleFullWidth && !settingsOpen && !helpOpen && (
-                    <BottomPanel
-                      terminals={terminalTabs}
-                      onCloseTerminal={handleCloseTerminal}
-                      validationIssues={validationIssues}
-                      validationValid={validationValid}
-                      sliceState={sliceData?.state ?? ''}
-                      dirty={sliceData?.dirty ?? false}
-                      errors={errors}
-                      onClearErrors={() => { setErrors([]); setValidationIssues([]); setValidationValid(false); }}
-                      sliceErrors={sliceData?.error_messages ?? []}
-                      bootConfigErrors={bootConfigErrors}
-                      onClearBootConfigErrors={() => setBootConfigErrors([])}
-                      fullWidth={consoleFullWidth}
-                      onToggleFullWidth={() => setConsoleFullWidth(fw => !fw)}
-                      showWidthToggle={currentView === 'topology' || currentView === 'sliver'}
-                      expanded={consoleExpanded}
-                      onExpandedChange={setConsoleExpanded}
-                      panelHeight={consoleHeight}
-                      onPanelHeightChange={setConsoleHeight}
-                      statusMessage={statusMessage}
-                      loading={loading}
-                      recipeConsole={recipeConsole}
-                      recipeRunning={recipeRunning}
-                      onClearRecipeConsole={() => setRecipeConsole([])}
-                      bootConsole={bootConsole}
-                      bootRunning={bootRunning}
-                      onClearBootConsole={() => setBootConsole([])}
                     />
                   )}
                 </div>
@@ -1757,7 +1727,8 @@ export default function App() {
         )}
       </div>
 
-      {!settingsOpen && !helpOpen && currentView !== 'files' && currentView !== 'project' && (consoleFullWidth || (currentView !== 'topology' && currentView !== 'sliver')) && (
+      {/* Always render BottomPanel to preserve terminal connections across view switches */}
+      <div style={{ display: (settingsOpen || helpOpen || currentView === 'files') ? 'none' : undefined }}>
         <BottomPanel
           terminals={terminalTabs}
           onCloseTerminal={handleCloseTerminal}
@@ -1770,7 +1741,7 @@ export default function App() {
           sliceErrors={sliceData?.error_messages ?? []}
           bootConfigErrors={bootConfigErrors}
           onClearBootConfigErrors={() => setBootConfigErrors([])}
-          fullWidth={consoleFullWidth}
+          fullWidth={consoleFullWidth || (currentView !== 'topology' && currentView !== 'sliver')}
           onToggleFullWidth={() => setConsoleFullWidth(fw => !fw)}
           showWidthToggle={currentView === 'topology' || currentView === 'sliver'}
           expanded={consoleExpanded}
@@ -1782,11 +1753,11 @@ export default function App() {
           recipeConsole={recipeConsole}
           recipeRunning={recipeRunning}
           onClearRecipeConsole={() => setRecipeConsole([])}
-          bootConsole={bootConsole}
-          bootRunning={bootRunning}
-          onClearBootConsole={() => setBootConsole([])}
+          sliceBootLogs={sliceBootLogs}
+          sliceBootRunning={sliceBootRunning}
+          onClearSliceBootLog={(sn) => setSliceBootLogs(prev => { const next = { ...prev }; delete next[sn]; return next; })}
         />
-      )}
+      </div>
 
       {/* Save Template Modal (slice or VM) */}
       {saveTemplateModal && (

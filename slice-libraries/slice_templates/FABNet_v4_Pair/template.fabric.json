@@ -1,10 +1,10 @@
 {
   "format": "fabric-slice-v1",
-  "name": "L2 Bridge",
+  "name": "L3 Network (FABNetv4)",
   "nodes": [
     {
-      "name": "node1",
-      "site": "@lan",
+      "name": "node-a",
+      "site": "@pair-a",
       "cores": 2,
       "ram": 8,
       "disk": 10,
@@ -22,8 +22,8 @@
       }
     },
     {
-      "name": "node2",
-      "site": "@lan",
+      "name": "node-b",
+      "site": "@pair-b",
       "cores": 2,
       "ram": 8,
       "disk": 10,
@@ -43,14 +43,30 @@
   ],
   "networks": [
     {
-      "name": "lan",
-      "type": "L2Bridge",
-      "subnet": "192.168.1.0/24",
-      "ip_mode": "auto",
+      "name": "fabnet-a",
+      "type": "FABNetv4",
       "interfaces": [
-        "node1-nic1-p1",
-        "node2-nic1-p1"
-      ]
+        "node-a-nic1-p1"
+      ],
+      "l3_config": {
+        "mode": "auto",
+        "route_mode": "default_fabnet",
+        "custom_routes": [],
+        "default_fabnet_subnet": "10.128.0.0/10"
+      }
+    },
+    {
+      "name": "fabnet-b",
+      "type": "FABNetv4",
+      "interfaces": [
+        "node-b-nic1-p1"
+      ],
+      "l3_config": {
+        "mode": "auto",
+        "route_mode": "default_fabnet",
+        "custom_routes": [],
+        "default_fabnet_subnet": "10.128.0.0/10"
+      }
     }
   ]
 }
