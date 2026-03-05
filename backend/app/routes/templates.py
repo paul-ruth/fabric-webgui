@@ -283,13 +283,37 @@ def list_templates() -> list[dict[str, Any]]:
         return []
     results = []
     for entry in sorted(os.listdir(tdir)):
-        meta_path = os.path.join(tdir, entry, "metadata.json")
+        entry_dir = os.path.join(tdir, entry)
+        if not os.path.isdir(entry_dir):
+            continue
+        meta_path = os.path.join(entry_dir, "metadata.json")
+        tmpl_path = os.path.join(entry_dir, "template.fabric.json")
+
+        # Auto-generate metadata for directories that have a template but no metadata
+        # (e.g. created by Weave or manually)
+        if os.path.isfile(tmpl_path) and not os.path.isfile(meta_path):
+            try:
+                with open(tmpl_path) as f:
+                    model = json.load(f)
+                auto_meta = {
+                    "name": model.get("name", entry),
+                    "description": "",
+                    "source_slice": "",
+                    "builtin": False,
+                    "created": datetime.now(timezone.utc).isoformat(),
+                    "node_count": len(model.get("nodes", [])),
+                    "network_count": len(model.get("networks", [])),
+                }
+                with open(meta_path, "w") as f:
+                    json.dump(auto_meta, f, indent=2)
+            except Exception:
+                pass
+
         if os.path.isfile(meta_path):
             try:
                 with open(meta_path) as f:
                     meta = json.load(f)
                 meta["dir_name"] = entry
-                # Ensure builtin field is present
                 if "builtin" not in meta:
                     meta["builtin"] = False
                 results.append(meta)

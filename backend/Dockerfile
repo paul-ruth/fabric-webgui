@@ -20,6 +20,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl \
 # aider-chat is large; install with minimal deps
 RUN pip install --no-cache-dir aider-chat || true
 RUN npm install -g @anthropic-ai/claude-code 2>/dev/null || true
+RUN npm install -g opencode-ai 2>/dev/null || true
 
 COPY scripts/ scripts/
 COPY app/ app/
@@ -29,6 +30,9 @@ COPY slice-libraries/ slice-libraries/
 
 RUN mkdir -p /fabric_config && chmod 700 /fabric_config
 RUN mkdir -p /fabric_storage && chmod 755 /fabric_storage
+
+# Seed OpenCode config (FABRIC AI server + default model)
+COPY opencode.json /fabric_storage/opencode.json
 
 EXPOSE 8000
 

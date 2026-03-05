@@ -81,6 +81,11 @@ export default function LibrariesPanel({
     refreshSliceTemplates();
   }, [refreshSliceTemplates]);
 
+  // Re-fetch when slice tab becomes active
+  useEffect(() => {
+    if (activeTab === 'slice') refreshSliceTemplates();
+  }, [activeTab]);  // eslint-disable-line react-hooks/exhaustive-deps
+
   const handleLoadSliceTemplate = async () => {
     if (!loadingTemplateDirName) return;
     const name = loadSliceName.trim() || loadingTemplate || loadingTemplateDirName;
@@ -143,6 +148,11 @@ export default function LibrariesPanel({
     refreshVmTemplates();
   }, [refreshVmTemplates]);
 
+  // Re-fetch when VM tab becomes active
+  useEffect(() => {
+    if (activeTab === 'vm') refreshVmTemplates();
+  }, [activeTab]);  // eslint-disable-line react-hooks/exhaustive-deps
+
   // ─── Recipes state ───
   const [recipes, setRecipes] = useState<RecipeSummary[]>([]);
   const [recipesLoading, setRecipesLoading] = useState(false);
@@ -164,6 +174,21 @@ export default function LibrariesPanel({
   useEffect(() => {
     refreshRecipes();
   }, [refreshRecipes]);
+
+  // Re-fetch when recipes tab becomes active
+  useEffect(() => {
+    if (activeTab === 'recipes') refreshRecipes();
+  }, [activeTab]);  // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Periodic polling — pick up templates created by Weave or manually
+  useEffect(() => {
+    const interval = setInterval(() => {
+      if (activeTab === 'slice') refreshSliceTemplates();
+      else if (activeTab === 'vm') refreshVmTemplates();
+      else if (activeTab === 'recipes') refreshRecipes();
+    }, 15_000);
+    return () => clearInterval(interval);
+  }, [activeTab, refreshSliceTemplates, refreshVmTemplates, refreshRecipes]);
 
   const handleExecuteRecipe = (recipeDirName: string, nodeName: string) => {
     setRecipeNodePicker(null);
@@ -256,6 +281,19 @@ export default function LibrariesPanel({
             Libraries
           </span>
         </Tooltip>
+        <button
+          className="collapse-btn"
+          onClick={(e) => {
+            e.stopPropagation();
+            if (activeTab === 'slice') refreshSliceTemplates();
+            else if (activeTab === 'vm') refreshVmTemplates();
+            else if (activeTab === 'recipes') refreshRecipes();
+          }}
+          title="Refresh"
+          style={{ marginRight: 2 }}
+        >
+          {'\u21BB'}
+        </button>
         <button className="collapse-btn" onClick={(e) => { e.stopPropagation(); onCollapse(); }} title="Collapse">
           {panelIcon || '\u29C9'}
         </button>

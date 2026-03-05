@@ -1,0 +1,19 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "openai/qwen3-coder-30b",
+  "small_model": "openai/qwen3-coder-30b",
+  "provider": {
+    "openai": {
+      "api": "env:OPENAI_API_KEY"
+    }
+  },
+  "agent": {
+    "build": { "model": "openai/qwen3-coder-30b" },
+    "plan": { "model": "openai/qwen3-coder-30b" },
+    "explore": { "model": "openai/qwen3-coder-30b" },
+    "general": { "model": "openai/qwen3-coder-30b" },
+    "summary": { "model": "openai/qwen3-coder-30b" },
+    "title": { "model": "openai/qwen3-coder-30b" },
+    "compaction": { "model": "openai/qwen3-coder-30b" }
+  }
+}

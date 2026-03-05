@@ -5,6 +5,8 @@ import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
 import { buildWsUrl } from '../utils/wsUrl';
 import { getConfig } from '../api/client';
+import ContainerFileBrowser from './ContainerFileBrowser';
+import WeaveChat from './WeaveChat';
 import '../styles/ai-companion.css';
 
 const TERM_THEME = {
@@ -42,11 +44,11 @@ interface ToolDef {
 
 const TOOLS: ToolDef[] = [
   {
-    id: 'fabchat',
-    name: 'FabChat',
-    desc: 'FABRIC-aware AI chat assistant. Ask about slice design, FABLib, networking, and troubleshooting.',
-    icon: 'FC',
-    iconClass: 'fabchat',
+    id: 'weave',
+    name: 'Weave',
+    desc: 'FABRIC AI coding assistant. Read and edit files, run commands, search code, and manage experiments — powered by FABRIC\'s self-hosted LLM.',
+    icon: 'W',
+    iconClass: 'weave',
     needsKey: true,
   },
   {
@@ -88,6 +90,11 @@ export default function AICompanionView() {
   const [activeTab, setActiveTab] = useState<string | null>(null);
   const [showWarning, setShowWarning] = useState<ToolDef | null>(null);
 
+  // Resizable split pane
+  const [splitPercent, setSplitPercent] = useState(50);
+  const splitDragging = useRef(false);
+  const splitContainerRef = useRef<HTMLDivElement>(null);
+
   useEffect(() => {
     getConfig().then((s) => setHasKey(!!s.ai_api_key_set)).catch(() => setHasKey(false));
   }, []);
@@ -116,6 +123,28 @@ export default function AICompanionView() {
       return next;
     });
   }, [activeTab]);
+
+  // Split divider drag handler
+  const handleDividerMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    splitDragging.current = true;
+
+    const onMouseMove = (ev: MouseEvent) => {
+      if (!splitDragging.current || !splitContainerRef.current) return;
+      const rect = splitContainerRef.current.getBoundingClientRect();
+      const pct = ((ev.clientX - rect.left) / rect.width) * 100;
+      setSplitPercent(Math.max(20, Math.min(80, pct)));
+    };
+
+    const onMouseUp = () => {
+      splitDragging.current = false;
+      document.removeEventListener('mousemove', onMouseMove);
+      document.removeEventListener('mouseup', onMouseUp);
+    };
+
+    document.addEventListener('mousemove', onMouseMove);
+    document.addEventListener('mouseup', onMouseUp);
+  }, []);
 
   const showCards = tabs.length === 0;
 
@@ -147,7 +176,7 @@ export default function AICompanionView() {
                 : { cls: 'key-required', text: 'Key Required' };
 
             return (
-              <div className="ai-card" key={tool.id} onDoubleClick={() => { if (!tool.needsKey || ready) handleLaunch(tool); }}>
+              <div className="ai-card" key={tool.id}>
                 <div className="ai-card-header">
                   <div className={`ai-card-icon ${tool.iconClass}`}>{tool.icon}</div>
                   <div className="ai-card-name">{tool.name}</div>
@@ -168,26 +197,38 @@ export default function AICompanionView() {
           })}
         </div>
       ) : (
-        <div className="ai-tabs-area">
-          <div className="ai-tab-bar">
-            {tabs.map((tab) => (
-              <div
-                key={tab.id}
-                className={`ai-tab ${activeTab === tab.id ? 'active' : ''}`}
-                onClick={() => setActiveTab(tab.id)}
-              >
-                {tab.label}
-                <button className="ai-tab-close" onClick={(e) => { e.stopPropagation(); closeTab(tab.id); }}>{'\u2715'}</button>
+        <div className="ai-split" ref={splitContainerRef}>
+          <div className="ai-split-left" style={{ width: `${splitPercent}%` }}>
+            <div className="ai-tabs-area">
+              <div className="ai-tab-bar">
+                {tabs.map((tab) => (
+                  <div
+                    key={tab.id}
+                    className={`ai-tab ${activeTab === tab.id ? 'active' : ''}`}
+                    onClick={() => setActiveTab(tab.id)}
+                  >
+                    {tab.label}
+                    <button className="ai-tab-close" onClick={(e) => { e.stopPropagation(); closeTab(tab.id); }}>{'\u2715'}</button>
+                  </div>
+                ))}
+                <button className="ai-tab-new" onClick={() => setTabs([])} title="Back to launcher">{'\u2b12'}</button>
               </div>
-            ))}
-            <button className="ai-tab-new" onClick={() => setTabs([])} title="Back to launcher">{'\u2b12'}</button>
+              <div className="ai-terminal-pane">
+                {tabs.map((tab) => (
+                  <div key={tab.id} style={{ width: '100%', height: '100%', display: activeTab === tab.id ? 'block' : 'none' }}>
+                    {tab.toolId === 'weave' ? (
+                      <WeaveChat />
+                    ) : (
+                      <AITerminalPane toolId={tab.toolId} tabId={tab.id} />
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
           </div>
-          <div className="ai-terminal-pane">
-            {tabs.map((tab) => (
-              <div key={tab.id} style={{ width: '100%', height: '100%', display: activeTab === tab.id ? 'block' : 'none' }}>
-                <AITerminalPane toolId={tab.toolId} tabId={tab.id} />
-              </div>
-            ))}
+          <div className="ai-split-divider" onMouseDown={handleDividerMouseDown} />
+          <div className="ai-split-right" style={{ width: `calc(${100 - splitPercent}% - 5px)` }}>
+            <ContainerFileBrowser />
           </div>
         </div>
       )}

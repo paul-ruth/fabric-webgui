@@ -253,11 +253,31 @@ def list_vm_templates() -> list[dict[str, Any]]:
         return []
     results = []
     for entry in sorted(os.listdir(tdir)):
-        tmpl_path = os.path.join(tdir, entry, "vm-template.json")
+        entry_dir = os.path.join(tdir, entry)
+        if not os.path.isdir(entry_dir):
+            continue
+        tmpl_path = os.path.join(entry_dir, "vm-template.json")
+
+        # Auto-populate required fields for manually created templates
         if os.path.isfile(tmpl_path):
             try:
                 with open(tmpl_path) as f:
                     data = json.load(f)
+                # Ensure minimum required fields exist
+                changed = False
+                if "name" not in data:
+                    data["name"] = entry
+                    changed = True
+                if "created" not in data:
+                    data["created"] = datetime.now(timezone.utc).isoformat()
+                    changed = True
+                if "builtin" not in data:
+                    data["builtin"] = False
+                    changed = True
+                if changed:
+                    with open(tmpl_path, "w") as f:
+                        json.dump(data, f, indent=2)
+
                 variants = data.get("variants", {})
                 summary: dict[str, Any] = {
                     "name": data.get("name", entry),

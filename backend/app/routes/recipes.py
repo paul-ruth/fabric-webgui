@@ -197,11 +197,25 @@ def list_recipes() -> list[dict[str, Any]]:
         return []
     results = []
     for entry in sorted(os.listdir(rdir)):
-        recipe_path = os.path.join(rdir, entry, "recipe.json")
+        entry_dir = os.path.join(rdir, entry)
+        if not os.path.isdir(entry_dir):
+            continue
+        recipe_path = os.path.join(entry_dir, "recipe.json")
         if os.path.isfile(recipe_path):
             try:
                 with open(recipe_path) as f:
                     data = json.load(f)
+                # Auto-populate required fields for manually created recipes
+                changed = False
+                if "name" not in data:
+                    data["name"] = entry
+                    changed = True
+                if "builtin" not in data:
+                    data["builtin"] = False
+                    changed = True
+                if changed:
+                    with open(recipe_path, "w") as f:
+                        json.dump(data, f, indent=2)
                 results.append({
                     "name": data.get("name", entry),
                     "version": data.get("version", ""),

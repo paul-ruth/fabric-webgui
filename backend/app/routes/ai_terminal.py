@@ -20,13 +20,36 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 # Tool definitions: env setup and command for each AI tool
+# Default opencode.json — sets model to one available on the FABRIC AI server
+_OPENCODE_CONFIG = {
+    "$schema": "https://opencode.ai/config.json",
+    "model": "openai/qwen3-coder-30b",
+    "small_model": "openai/qwen3-coder-30b",
+    "provider": {
+        "openai": {
+            "api": "env:OPENAI_API_KEY",
+        },
+    },
+    "agent": {
+        "build": {"model": "openai/qwen3-coder-30b"},
+        "plan": {"model": "openai/qwen3-coder-30b"},
+        "explore": {"model": "openai/qwen3-coder-30b"},
+        "general": {"model": "openai/qwen3-coder-30b"},
+        "summary": {"model": "openai/qwen3-coder-30b"},
+        "title": {"model": "openai/qwen3-coder-30b"},
+        "compaction": {"model": "openai/qwen3-coder-30b"},
+    },
+}
+
+# Tool definitions: env setup and command for each AI tool
 TOOL_CONFIGS = {
-    "fabchat": {
+    "weave": {
         "env": lambda key: {
             "OPENAI_API_KEY": key,
-            "OPENAI_API_BASE": "https://ai.fabric-testbed.net/v1",
+            "OPENAI_BASE_URL": "https://ai.fabric-testbed.net/v1",
+            "WEAVE_MODEL": "qwen3-coder-30b",
         },
-        "cmd": ["python3", "/app/scripts/fabchat.py"],
+        "cmd": ["python3", "/app/scripts/weave.py"],
         "needs_key": True,
     },
     "aider": {
@@ -34,13 +57,20 @@ TOOL_CONFIGS = {
             "OPENAI_API_KEY": key,
             "OPENAI_API_BASE": "https://ai.fabric-testbed.net/v1",
         },
-        "cmd": ["aider", "--model", "openai/gpt-4o"],
+        "cmd": [
+            "aider",
+            "--architect",
+            "--model", "openai/qwen3-coder-30b",
+            "--no-auto-lint",
+            "--no-auto-test",
+            "--no-git-commit-verify",
+        ],
         "needs_key": True,
     },
     "opencode": {
         "env": lambda key: {
             "OPENAI_API_KEY": key,
-            "OPENAI_API_BASE": "https://ai.fabric-testbed.net/v1",
+            "OPENAI_BASE_URL": "https://ai.fabric-testbed.net/v1",
         },
         "cmd": ["opencode"],
         "needs_key": True,
@@ -84,6 +114,20 @@ async def ai_terminal_ws(websocket: WebSocket, tool: str):
         tool_env.update(config["env"](api_key))
 
         cwd = "/fabric_storage/" if os.path.isdir("/fabric_storage") else os.path.expanduser("~")
+
+        # Ensure git is ready for aider (needs user config + initial commit)
+        if tool == "aider":
+            _ensure_git_ready(cwd)
+
+        # Write opencode.json so all agents use the FABRIC AI model
+        if tool == "opencode":
+            _ensure_git_ready(cwd)
+            oc_cfg = os.path.join(cwd, "opencode.json")
+            try:
+                with open(oc_cfg, "w") as f:
+                    json.dump(_OPENCODE_CONFIG, f, indent=2)
+            except OSError:
+                pass
 
         proc = subprocess.Popen(
             config["cmd"],
@@ -144,6 +188,36 @@ async def ai_terminal_ws(websocket: WebSocket, tool: str):
                     proc.kill()
                 except Exception:
                     pass
+
+
+def _ensure_git_ready(cwd: str) -> None:
+    """Make sure cwd has a usable git repo with user config and an initial commit."""
+    try:
+        subprocess.run(
+            ["git", "config", "user.name"],
+            cwd=cwd, capture_output=True, check=True,
+        )
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        subprocess.run(
+            ["git", "config", "--global", "user.name", "FABRIC User"],
+            cwd=cwd, capture_output=True,
+        )
+        subprocess.run(
+            ["git", "config", "--global", "user.email", "user@fabric-testbed.net"],
+            cwd=cwd, capture_output=True,
+        )
+
+    # Ensure there is at least one commit (aider requires it)
+    result = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=cwd, capture_output=True,
+    )
+    if result.returncode != 0:
+        subprocess.run(["git", "add", "-A"], cwd=cwd, capture_output=True)
+        subprocess.run(
+            ["git", "commit", "--allow-empty", "-m", "Initial commit"],
+            cwd=cwd, capture_output=True,
+        )
 
 
 def _read_master(fd: int) -> str:

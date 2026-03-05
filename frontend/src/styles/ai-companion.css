@@ -19,7 +19,6 @@
 }
 
 .ai-card {
-  cursor: pointer;
   background: var(--bg-secondary);
   border: 1px solid var(--border);
   border-radius: 10px;
@@ -53,7 +52,7 @@
   flex-shrink: 0;
 }
 
-.ai-card-icon.fabchat { background: linear-gradient(135deg, #5798bc, #1f6a8c); color: #fff; }
+.ai-card-icon.weave { background: linear-gradient(135deg, #5798bc, #008e7a); color: #fff; font-style: italic; }
 .ai-card-icon.aider { background: linear-gradient(135deg, #008e7a, #006b5a); color: #fff; }
 .ai-card-icon.opencode { background: linear-gradient(135deg, #6c5ce7, #a29bfe); color: #fff; }
 .ai-card-icon.claude { background: linear-gradient(135deg, #d4a574, #c4956a); color: #fff; }
@@ -104,6 +103,47 @@
 
 .ai-launch-btn:hover { background: #1f6a8c; }
 .ai-launch-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* --- Split pane layout --- */
+.ai-split {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.ai-split-left {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.ai-split-divider {
+  width: 5px;
+  cursor: col-resize;
+  background: var(--border);
+  flex-shrink: 0;
+  transition: background 0.15s;
+}
+
+.ai-split-divider:hover {
+  background: #5798bc;
+}
+
+.ai-split-right {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.ai-split-right .cfb-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
 
 /* --- Tab bar + terminal area --- */
 .ai-tabs-area {
