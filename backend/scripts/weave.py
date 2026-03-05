@@ -179,6 +179,15 @@ def _build_system_prompt(cwd: str) -> str:
 
     parts = [base, "", f"Working directory: {cwd}", ""]
 
+    if _fablib_tools_available:
+        parts.append("## FABRIC Authentication")
+        parts.append("")
+        parts.append("The user's FABRIC token is at `/fabric_storage/.fabric_config/id_token.json`.")
+        parts.append("Config is at `/fabric_storage/.fabric_config/fabric_rc`.")
+        parts.append("FABlib is pre-configured — all FABlib tools use the user's credentials automatically.")
+        parts.append("If tools return token errors, direct the user to refresh via the Configure view.")
+        parts.append("")
+
     if skills:
         parts.append("## Currently Available Skills")
         parts.append("")

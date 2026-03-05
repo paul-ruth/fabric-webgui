@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -143,6 +144,53 @@ FABLIB_TOOLS = [
             "slice_name": {"type": "string", "description": "Name of the slice"},
             "days": {"type": "integer", "description": "Number of days to extend (default: 7)"},
         }, "required": ["slice_name"]},
+    }},
+    {"type": "function", "function": {
+        "name": "fabric_get_config",
+        "description": (
+            "Show the current FABRIC configuration including project ID, token path, "
+            "bastion host, key paths, log level, and other fabric_rc settings."
+        ),
+        "parameters": {"type": "object", "properties": {}, "required": []},
+    }},
+    {"type": "function", "function": {
+        "name": "fabric_set_config",
+        "description": (
+            "Set a FABRIC configuration value. Updates fabric_rc and environment. "
+            "Common keys: FABRIC_PROJECT_ID, FABRIC_TOKEN_LOCATION, "
+            "FABRIC_BASTION_HOST, FABRIC_BASTION_USERNAME, FABRIC_LOG_LEVEL, "
+            "FABRIC_AVOID, FABRIC_AI_API_KEY, FABRIC_SLICE_PRIVATE_KEY_FILE, "
+            "FABRIC_SLICE_PUBLIC_KEY_FILE."
+        ),
+        "parameters": {"type": "object", "properties": {
+            "key": {"type": "string", "description": "Config key (e.g. FABRIC_PROJECT_ID)"},
+            "value": {"type": "string", "description": "Value to set"},
+        }, "required": ["key", "value"]},
+    }},
+    {"type": "function", "function": {
+        "name": "fabric_load_rc",
+        "description": (
+            "Load FABRIC settings from a fabric_rc file. Reads all 'export KEY=VALUE' "
+            "lines and applies them to the current configuration."
+        ),
+        "parameters": {"type": "object", "properties": {
+            "path": {"type": "string", "description": "Path to the fabric_rc file to load"},
+        }, "required": ["path"]},
+    }},
+    {"type": "function", "function": {
+        "name": "fabric_list_projects",
+        "description": (
+            "List FABRIC projects the user belongs to. Shows project name, UUID, "
+            "and which one is currently active."
+        ),
+        "parameters": {"type": "object", "properties": {}, "required": []},
+    }},
+    {"type": "function", "function": {
+        "name": "fabric_set_project",
+        "description": "Set the active FABRIC project by project ID or name.",
+        "parameters": {"type": "object", "properties": {
+            "project": {"type": "string", "description": "Project UUID or name"},
+        }, "required": ["project"]},
     }},
 ]
 
@@ -581,6 +629,233 @@ def tool_fabric_renew_slice(slice_name: str, days: int = 7) -> str:
         return f"Error renewing slice '{slice_name}': {e}"
 
 
+# ── Config helpers ────────────────────────────────────────────────────────────
+
+def _config_dir() -> str:
+    return os.environ.get("FABRIC_CONFIG_DIR", "/fabric_storage/.fabric_config")
+
+
+def _rc_path() -> str:
+    return os.path.join(_config_dir(), "fabric_rc")
+
+
+def _read_rc() -> dict[str, str]:
+    """Read fabric_rc into a dict of key -> value."""
+    settings: dict[str, str] = {}
+    path = _rc_path()
+    if not os.path.isfile(path):
+        return settings
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if line.startswith("export ") and "=" in line:
+                kv = line[len("export "):]
+                key, _, value = kv.partition("=")
+                settings[key.strip()] = value.strip()
+    return settings
+
+
+def _write_rc(settings: dict[str, str]) -> None:
+    """Write settings dict back to fabric_rc."""
+    path = _rc_path()
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    lines = [f"export {k}={v}" for k, v in settings.items()]
+    with open(path, "w") as f:
+        f.write("\n".join(lines) + "\n")
+
+
+def _apply_settings(settings: dict[str, str]) -> None:
+    """Apply settings to environment and reset FABlib."""
+    for k, v in settings.items():
+        os.environ[k] = v
+    try:
+        from app.fablib_manager import reset_fablib
+        reset_fablib()
+    except Exception:
+        pass
+
+
+def _decode_token_projects() -> list[dict]:
+    """Decode projects from the FABRIC JWT token."""
+    import base64
+    token_path = os.environ.get(
+        "FABRIC_TOKEN_LOCATION",
+        os.path.join(_config_dir(), "id_token.json"),
+    )
+    try:
+        with open(token_path) as f:
+            data = json.load(f)
+        token = data.get("id_token", "")
+        parts = token.split(".")
+        if len(parts) != 3:
+            return []
+        payload = parts[1] + "=" * (4 - len(parts[1]) % 4)
+        decoded = json.loads(base64.urlsafe_b64decode(payload))
+        raw_projects = decoded.get("projects", [])
+        # Projects may be dicts or strings
+        projects = []
+        for p in raw_projects:
+            if isinstance(p, dict):
+                projects.append(p)
+            elif isinstance(p, str):
+                # Try to parse "uuid:name" or just uuid
+                if ":" in p:
+                    pid, _, pname = p.partition(":")
+                    projects.append({"uuid": pid, "name": pname})
+                else:
+                    projects.append({"uuid": p, "name": p})
+        return projects
+    except Exception as e:
+        logger.debug("Failed to decode token projects: %s", e)
+        return []
+
+
+def tool_fabric_get_config() -> str:
+    """Show current FABRIC configuration."""
+    settings = _read_rc()
+    if not settings:
+        return "No fabric_rc found. FABRIC is not configured."
+
+    # Group settings logically
+    groups = {
+        "Project": ["FABRIC_PROJECT_ID"],
+        "Token": ["FABRIC_TOKEN_LOCATION"],
+        "Bastion": ["FABRIC_BASTION_HOST", "FABRIC_BASTION_USERNAME",
+                     "FABRIC_BASTION_KEY_LOCATION", "FABRIC_BASTION_SSH_CONFIG_FILE"],
+        "Slice Keys": ["FABRIC_SLICE_PRIVATE_KEY_FILE", "FABRIC_SLICE_PUBLIC_KEY_FILE"],
+        "Hosts": ["FABRIC_CREDMGR_HOST", "FABRIC_ORCHESTRATOR_HOST",
+                   "FABRIC_CORE_API_HOST", "FABRIC_AM_HOST"],
+        "Logging": ["FABRIC_LOG_LEVEL", "FABRIC_LOG_FILE"],
+        "Other": ["FABRIC_AVOID", "FABRIC_SSH_COMMAND_LINE", "FABRIC_AI_API_KEY"],
+    }
+
+    lines = ["FABRIC Configuration:", ""]
+    shown = set()
+    for group_name, keys in groups.items():
+        group_lines = []
+        for k in keys:
+            if k in settings:
+                val = settings[k]
+                # Mask sensitive values
+                if k == "FABRIC_AI_API_KEY" and val:
+                    val = val[:8] + "..." + val[-4:]
+                group_lines.append(f"  {k} = {val}")
+                shown.add(k)
+        if group_lines:
+            lines.append(f"[{group_name}]")
+            lines.extend(group_lines)
+            lines.append("")
+
+    # Any remaining settings
+    remaining = [k for k in settings if k not in shown]
+    if remaining:
+        lines.append("[Other]")
+        for k in remaining:
+            lines.append(f"  {k} = {settings[k]}")
+        lines.append("")
+
+    return "\n".join(lines)
+
+
+def tool_fabric_set_config(key: str, value: str) -> str:
+    """Set a FABRIC config value."""
+    # Validate key prefix
+    if not key.startswith("FABRIC_"):
+        return f"Error: Key must start with FABRIC_ (got '{key}')"
+
+    settings = _read_rc()
+    old_value = settings.get(key)
+    settings[key] = value
+    _write_rc(settings)
+    _apply_settings({key: value})
+
+    if old_value:
+        return f"Updated {key}: {old_value} -> {value}"
+    return f"Set {key} = {value}"
+
+
+def tool_fabric_load_rc(path: str) -> str:
+    """Load settings from a fabric_rc file."""
+    if not os.path.isfile(path):
+        return f"Error: File not found: {path}"
+
+    new_settings: dict[str, str] = {}
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if line.startswith("export ") and "=" in line:
+                kv = line[len("export "):]
+                key, _, value = kv.partition("=")
+                new_settings[key.strip()] = value.strip()
+
+    if not new_settings:
+        return f"No 'export KEY=VALUE' lines found in {path}"
+
+    # Merge with existing settings
+    current = _read_rc()
+    changed = []
+    for k, v in new_settings.items():
+        if current.get(k) != v:
+            changed.append(k)
+        current[k] = v
+
+    _write_rc(current)
+    _apply_settings(new_settings)
+
+    lines = [f"Loaded {len(new_settings)} settings from {path}"]
+    if changed:
+        lines.append(f"Changed: {', '.join(changed)}")
+    else:
+        lines.append("No values changed (all settings already matched).")
+    return "\n".join(lines)
+
+
+def tool_fabric_list_projects() -> str:
+    """List user's FABRIC projects."""
+    projects = _decode_token_projects()
+    current_project = os.environ.get("FABRIC_PROJECT_ID", _read_rc().get("FABRIC_PROJECT_ID", ""))
+
+    if not projects:
+        if current_project:
+            return f"Could not decode projects from token.\nCurrent project: {current_project}"
+        return "No projects found. Token may be missing or expired."
+
+    lines = [f"FABRIC Projects ({len(projects)}):", ""]
+    for p in projects:
+        pid = p.get("uuid", "")
+        pname = p.get("name", "")
+        active = " (active)" if pid == current_project else ""
+        lines.append(f"  {pname:40s}  {pid}{active}")
+    lines.append("")
+    lines.append("Use fabric_set_project to change the active project.")
+    return "\n".join(lines)
+
+
+def tool_fabric_set_project(project: str) -> str:
+    """Set the active FABRIC project."""
+    # Check if it's a UUID or a name
+    projects = _decode_token_projects()
+    resolved_id = project
+
+    # Try to match by name first
+    if projects:
+        for p in projects:
+            if p.get("name", "").lower() == project.lower():
+                resolved_id = p["uuid"]
+                break
+            if p.get("uuid", "") == project:
+                resolved_id = project
+                break
+
+    settings = _read_rc()
+    old_project = settings.get("FABRIC_PROJECT_ID", "(not set)")
+    settings["FABRIC_PROJECT_ID"] = resolved_id
+    _write_rc(settings)
+    _apply_settings({"FABRIC_PROJECT_ID": resolved_id})
+
+    return f"Active project changed: {old_project} -> {resolved_id}"
+
+
 # ── Dispatcher ───────────────────────────────────────────────────────────────
 
 _HANDLERS: dict[str, Any] = {
@@ -601,6 +876,11 @@ _HANDLERS: dict[str, Any] = {
     "fabric_renew_slice": lambda a: tool_fabric_renew_slice(
         a["slice_name"], a.get("days", 7),
     ),
+    "fabric_get_config": lambda a: tool_fabric_get_config(),
+    "fabric_set_config": lambda a: tool_fabric_set_config(a["key"], a["value"]),
+    "fabric_load_rc": lambda a: tool_fabric_load_rc(a["path"]),
+    "fabric_list_projects": lambda a: tool_fabric_list_projects(),
+    "fabric_set_project": lambda a: tool_fabric_set_project(a["project"]),
 }
 
 

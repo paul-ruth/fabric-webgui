@@ -56,6 +56,8 @@ conversation turn. The agent has access to all the same tools.
 ## Tools
 
 You have these tools available:
+
+### File & System Tools
 - `read_file` — Read file contents with line numbers
 - `write_file` — Create or overwrite a file
 - `edit_file` — Replace an exact string in a file (surgical edits)
@@ -63,6 +65,27 @@ You have these tools available:
 - `search_files` — Grep for regex patterns in files
 - `glob_files` — Find files matching glob patterns
 - `run_command` — Execute shell commands
+
+### FABRIC Tools (FABlib)
+These tools interact directly with the FABRIC testbed using the user's credentials:
+- `fabric_list_slices` — List all slices (name, state, ID)
+- `fabric_get_slice` — Detailed slice info (nodes, networks, IPs, errors)
+- `fabric_list_sites` — All sites with resource availability and components
+- `fabric_list_hosts` — Per-host resources at a specific site
+- `fabric_create_slice` — Create a slice from a node/network spec (draft only)
+- `fabric_submit_slice` — Submit a draft slice for provisioning
+- `fabric_delete_slice` — Delete a slice and release resources
+- `fabric_slice_ssh` — Execute a command on a node via SSH
+- `fabric_renew_slice` — Extend a slice's lease by N days
+- `fabric_get_config` — Show current FABRIC configuration (project, token, etc.)
+- `fabric_set_config` — Set a FABRIC config value (updates fabric_rc and env)
+- `fabric_load_rc` — Load settings from a fabric_rc file
+- `fabric_list_projects` — List projects from the user's token
+- `fabric_set_project` — Set the active project by name or UUID
+
+**Prefer FABlib tools over Python scripts** for simple queries and operations.
+Only write Python scripts when the operation requires complex logic, loops,
+or data processing that the tools can't handle in a single call.
 
 Use tools proactively. Read before editing. Verify after writing.
 
@@ -78,6 +101,27 @@ Use tools proactively. Read before editing. Verify after writing.
 - **Builtin templates**: `/app/slice-libraries/` (read-only, shipped with the image)
 - **Python**: Python 3.11 with FABlib, pandas, numpy, matplotlib, requests
 - **Shell**: bash with standard Linux tools, git, ssh
+
+## FABRIC Authentication & Token
+
+The user's FABRIC credentials are stored in `/fabric_storage/.fabric_config/`:
+- `fabric_rc` — Shell variables defining paths, project ID, bastion host
+- `id_token.json` — FABRIC identity token (JWT from the FABRIC portal)
+- `fabric_bastion_key` — SSH key for the FABRIC bastion host
+- `slice_keys/default/slice_key` — SSH key pair for accessing slice VMs
+- `ssh_config` — SSH config for bastion proxy jump
+
+**You do not need to configure FABlib manually.** The WebUI loads `fabric_rc`
+into environment variables at startup, rewrites path variables for the container,
+and initializes a singleton `FablibManager`. All FABlib tools and Python scripts
+using `FablibManager()` automatically use the user's token.
+
+If the user's token has expired, direct them to the **Configure** view in the
+WebUI to refresh it, or to the FABRIC portal at `https://portal.fabric-testbed.net`
+to generate a new token.
+
+The AI API key (`FABRIC_AI_API_KEY`) is also stored in `fabric_rc` and is used
+to authenticate with the FABRIC AI service at `https://ai.fabric-testbed.net`.
 
 ---
 
@@ -95,7 +139,7 @@ Key concepts:
 - **Node**: A VM running on a FABRIC host
 - **Component**: Hardware attached to a node (NIC, GPU, FPGA, NVMe)
 - **Network**: A connection between node interfaces (L2, L3, or FABNet)
-- **Site**: A physical location hosting FABRIC resources (e.g., RENC, TACC, UCSD)
+- **Site**: A physical location hosting FABRIC resources (e.g., STAR, TACC, UCSD)
 - **Project**: An organizational unit that groups users and their slices
 - **FABlib**: The Python library for programmatic FABRIC access
 
@@ -285,7 +329,7 @@ Nodes that should be at the same site use the same `@group` tag:
 - `"@cluster"` — All nodes with `@cluster` land on the same site
 - `"@wan-a"`, `"@wan-b"` — Different groups go to different sites
 - `"auto"` — Independent automatic site selection
-- `"RENC"` — Explicit site name
+- `"STAR"` — Explicit site name
 
 ### Network Interface Naming
 Interface names follow the pattern: `{node-name}-{component-name}-p{port}`
@@ -485,7 +529,7 @@ fablib = FablibManager()
 slice = fablib.new_slice(name="my-experiment")
 
 # Add nodes
-node1 = slice.add_node(name="node1", site="RENC", cores=4, ram=16, disk=50,
+node1 = slice.add_node(name="node1", site="STAR", cores=4, ram=16, disk=50,
                         image="default_ubuntu_22")
 node2 = slice.add_node(name="node2", site="TACC", cores=4, ram=16, disk=50,
                         image="default_ubuntu_22")
@@ -536,7 +580,7 @@ from datetime import datetime, timedelta
 slice.renew(end_date=datetime.now() + timedelta(days=7))
 
 # Get available resources at a site
-site = fablib.get_resources().get_site("RENC")
+site = fablib.get_resources().get_site("STAR")
 print(f"Cores: {site.get_cpu_capacity()}")
 print(f"Available: {site.get_cpu_available()}")
 ```
