@@ -192,6 +192,32 @@ FABLIB_TOOLS = [
             "project": {"type": "string", "description": "Project UUID or name"},
         }, "required": ["project"]},
     }},
+    {"type": "function", "function": {
+        "name": "fabric_list_templates",
+        "description": (
+            "List available slice templates (both built-in and user-created). "
+            "Shows template name, description, node/network counts."
+        ),
+        "parameters": {"type": "object", "properties": {}, "required": []},
+    }},
+    {"type": "function", "function": {
+        "name": "fabric_create_from_template",
+        "description": (
+            "Create a draft FABRIC slice from a slice template. "
+            "Reads the template definition and builds the slice with FABlib. "
+            "Does NOT submit — use fabric_submit_slice to provision."
+        ),
+        "parameters": {"type": "object", "properties": {
+            "template_name": {
+                "type": "string",
+                "description": "Template directory name (from fabric_list_templates)",
+            },
+            "slice_name": {
+                "type": "string",
+                "description": "Name for the new slice (optional, defaults to template name)",
+            },
+        }, "required": ["template_name"]},
+    }},
 ]
 
 
@@ -856,6 +882,155 @@ def tool_fabric_set_project(project: str) -> str:
     return f"Active project changed: {old_project} -> {resolved_id}"
 
 
+# ── Template tools ────────────────────────────────────────────────────────────
+
+def _templates_dirs() -> list[str]:
+    """Return template directories (user + builtin)."""
+    storage = os.environ.get("FABRIC_STORAGE_DIR", "/fabric_storage")
+    dirs = [os.path.join(storage, ".slice_templates")]
+    builtin = "/app/slice-libraries/slice_templates"
+    if os.path.isdir(builtin):
+        dirs.append(builtin)
+    return dirs
+
+
+def tool_fabric_list_templates() -> str:
+    """List available slice templates."""
+    templates = []
+    seen = set()
+    for tdir in _templates_dirs():
+        if not os.path.isdir(tdir):
+            continue
+        for entry in sorted(os.listdir(tdir)):
+            if entry in seen:
+                continue
+            entry_dir = os.path.join(tdir, entry)
+            if not os.path.isdir(entry_dir):
+                continue
+            meta_path = os.path.join(entry_dir, "metadata.json")
+            tmpl_path = os.path.join(entry_dir, "template.fabric.json")
+            if not os.path.isfile(tmpl_path):
+                continue
+
+            name = entry
+            description = ""
+            node_count = "?"
+            net_count = "?"
+            builtin = "builtin" if "slice-libraries" in tdir else "user"
+
+            if os.path.isfile(meta_path):
+                try:
+                    with open(meta_path) as f:
+                        meta = json.load(f)
+                    name = meta.get("name", entry)
+                    description = meta.get("description", "")
+                    node_count = str(meta.get("node_count", "?"))
+                    net_count = str(meta.get("network_count", "?"))
+                except Exception:
+                    pass
+
+            templates.append({
+                "dir_name": entry,
+                "name": name,
+                "description": description,
+                "nodes": node_count,
+                "networks": net_count,
+                "source": builtin,
+            })
+            seen.add(entry)
+
+    if not templates:
+        return "No slice templates found."
+
+    lines = [f"Slice Templates ({len(templates)}):", ""]
+    for t in templates:
+        line = f"  {t['dir_name']:35s}  {t['nodes']}N/{t['networks']}Net  [{t['source']}]"
+        if t["name"] != t["dir_name"]:
+            line += f"  \"{t['name']}\""
+        lines.append(line)
+        if t["description"]:
+            lines.append(f"    {t['description'][:80]}")
+    lines.append("")
+    lines.append("Use fabric_create_from_template(template_name=<dir_name>) to create a draft slice.")
+    return "\n".join(lines)
+
+
+def tool_fabric_create_from_template(template_name: str, slice_name: str = "") -> str:
+    """Create a draft slice from a template."""
+    # Find the template
+    tmpl_path = None
+    for tdir in _templates_dirs():
+        candidate = os.path.join(tdir, template_name, "template.fabric.json")
+        if os.path.isfile(candidate):
+            tmpl_path = candidate
+            break
+
+    if not tmpl_path:
+        return f"Template '{template_name}' not found. Use fabric_list_templates to see available templates."
+
+    try:
+        with open(tmpl_path) as f:
+            model = json.load(f)
+    except Exception as e:
+        return f"Error reading template: {e}"
+
+    if not slice_name:
+        slice_name = model.get("name", template_name)
+
+    nodes = model.get("nodes", [])
+    networks = model.get("networks", [])
+
+    if not nodes:
+        return f"Template '{template_name}' has no nodes defined."
+
+    # Convert template format to fabric_create_slice format
+    node_specs = []
+    for node_def in nodes:
+        spec: dict[str, Any] = {
+            "name": node_def["name"],
+            "site": node_def.get("site", "auto"),
+            "cores": node_def.get("cores", 2),
+            "ram": node_def.get("ram", 8),
+            "disk": node_def.get("disk", 10),
+            "image": node_def.get("image", "default_ubuntu_22"),
+        }
+        # Extract NIC model from components
+        for comp in node_def.get("components", []):
+            cmodel = comp.get("model", "")
+            if "NIC" in cmodel:
+                spec["nic_model"] = cmodel
+            elif "GPU" in cmodel:
+                spec["gpu_model"] = cmodel
+        node_specs.append(spec)
+
+    # Convert network interfaces from template format (node-nic-p1) to node names
+    net_specs = []
+    for net_def in networks:
+        ifaces_raw = net_def.get("interfaces", [])
+        # Extract node names from interface strings like "node1-nic1-p1"
+        node_names = []
+        for iface_str in ifaces_raw:
+            # Interface format: {node-name}-{component-name}-p{port}
+            # Node name is everything before the last two dash-separated segments
+            parts = iface_str.rsplit("-", 2)
+            if len(parts) >= 2:
+                node_names.append(parts[0])
+            else:
+                node_names.append(iface_str)
+        net_specs.append({
+            "name": net_def["name"],
+            "type": net_def.get("type", "L2Bridge"),
+            "interfaces": node_names,
+        })
+
+    # Create the slice using the existing tool
+    result = tool_fabric_create_slice(slice_name, node_specs, net_specs if net_specs else None)
+
+    # Append template info
+    result += f"\n\nCreated from template: {template_name}"
+    return result
+
+
 # ── Dispatcher ───────────────────────────────────────────────────────────────
 
 _HANDLERS: dict[str, Any] = {
@@ -881,6 +1056,10 @@ _HANDLERS: dict[str, Any] = {
     "fabric_load_rc": lambda a: tool_fabric_load_rc(a["path"]),
     "fabric_list_projects": lambda a: tool_fabric_list_projects(),
     "fabric_set_project": lambda a: tool_fabric_set_project(a["project"]),
+    "fabric_list_templates": lambda a: tool_fabric_list_templates(),
+    "fabric_create_from_template": lambda a: tool_fabric_create_from_template(
+        a["template_name"], a.get("slice_name", ""),
+    ),
 }
 
 

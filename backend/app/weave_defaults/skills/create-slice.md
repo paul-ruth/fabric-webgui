@@ -1,29 +1,53 @@
 name: create-slice
-description: Create a new FABRIC slice template from a description
+description: Create a new FABRIC slice — from a template or custom specification
 ---
-Create a new slice template based on the user's description. Follow these steps:
+Create a new FABRIC slice. There are two approaches:
 
-1. **Understand the request**: What kind of experiment? How many nodes? What topology?
-   What software/services need to be installed?
+## Option 1: From a Template
 
-2. **Design the topology**: Choose appropriate:
-   - Node count and sizing (cores, RAM, disk)
-   - Site placement (@group tags or auto)
-   - Network type (L2Bridge, L2STS, FABNetv4, etc.)
-   - Components (NICs, GPUs, NVMe as needed)
+If the user mentions a template or wants a pre-built topology:
 
-3. **Create the template directory** at `/fabric_storage/.slice_templates/<DirName>/`:
+1. Call `fabric_list_templates` to show available templates
+2. Call `fabric_create_from_template(template_name, slice_name)` to create the draft
+3. Show what was created (nodes, sites, networks)
+4. If the user wants to submit/deploy, call `fabric_submit_slice(slice_name)`
+
+## Option 2: Custom Specification
+
+If the user describes a custom topology:
+
+1. **Understand the request**: How many nodes? What topology? What resources?
+
+2. **Check resources**: Call `fabric_list_sites` to find sites with availability
+
+3. **Create the draft**: Call `fabric_create_slice(slice_name, nodes, networks)` with:
+   - Node specs: name, site (or "auto"), cores, ram, disk, image, nic_model, gpu_model
+   - Network specs: name, type (L2Bridge/L2STS/FABNetv4/etc.), interfaces (node names)
+
+4. **Report**: Show what was created. If the user wants to deploy, use
+   `fabric_submit_slice(slice_name)` to provision.
+
+## Option 3: Create a Reusable Template
+
+If the user wants to save the design as a reusable template (not deploy it now):
+
+1. Create the template directory at `/fabric_storage/.slice_templates/<DirName>/`:
    - `metadata.json` — name, description, node_count, network_count, builtin: false
    - `template.fabric.json` — the full topology definition
    - `tools/deploy.sh` — if software needs to be installed (with ### PROGRESS markers)
 
-4. **Verify**: Read back the created files to confirm they're correct.
+2. Verify by reading back the created files.
 
-Directory naming: Use the template name with spaces replaced by underscores.
-Example: "GPU Compute Cluster" -> "GPU_Compute_Cluster"
+## Submitting / Deploying
 
-Interface naming: `{node-name}-{component-name}-p{port}` (e.g., `node1-nic1-p1`)
+After creating a draft (Options 1 or 2), the user may want to submit it:
+- Call `fabric_submit_slice(slice_name, wait=false)` to provision
+- For small slices (1-2 nodes), `wait=true` is OK
+- Always confirm with the user before submitting — it allocates real resources
 
-Use `default_ubuntu_22` as the default image unless the user specifies otherwise.
-Use `NIC_Basic` unless high-performance networking is needed.
-Use `@group` tags for co-located nodes, different tags for distributed nodes.
+## Defaults
+
+- Image: `default_ubuntu_22`
+- NIC: `NIC_Basic` (unless high-performance needed)
+- Site: `auto` (picks best available) or `@group` tags for co-location
+- Interface naming: `{node-name}-{component-name}-p{port}`
