@@ -337,15 +337,13 @@ export default function FileBrowser({ mode, sliceName, nodeName, sliceData, onPr
             Download to Local
           </button>
         )}
-        {mode === 'container' && (
-          <button
-            className={showHidden ? 'fb-toggle-active' : ''}
-            onClick={() => setShowHidden((v) => !v)}
-            title={showHidden ? 'Hide hidden files' : 'Show hidden files'}
-          >
-            .hidden
-          </button>
-        )}
+        <button
+          className={showHidden ? 'fb-toggle-active' : ''}
+          onClick={() => setShowHidden((v) => !v)}
+          title={showHidden ? 'Hide hidden files' : 'Show hidden files'}
+        >
+          .hidden
+        </button>
         <button onClick={refresh} disabled={loading} title="Refresh">↻</button>
       </div>
 

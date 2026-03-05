@@ -35,11 +35,10 @@ const VIEWS: Array<{ key: 'topology' | 'sliver' | 'map' | 'files' | 'libraries' 
   { key: 'topology', label: 'Topology', icon: '\u25A6' },
   { key: 'sliver', label: 'Table', icon: '\u2261' },
   { key: 'map', label: 'Map', icon: '\u25C9' },
-  { key: 'files', label: 'Files', icon: '\u2630' },
+  { key: 'files', label: 'Storage', icon: '\u2630' },
   { key: 'libraries', label: 'Artifacts', icon: '\u29C9' },
   { key: 'monitoring', label: 'Monitoring', icon: '\u25CE' },
-  { key: 'client', label: 'Client', icon: '\u25B6' },
-  { key: 'ai', label: 'AI Companion', icon: '\u2726' },
+  { key: 'client', label: 'My Web Apps', icon: '\u25B6' },
 ];
 
 export default function TitleBar({ dark, currentView, onToggleDark, onViewChange, onOpenSettings, onOpenHelp, projectName, projects, onProjectChange, aiTools, selectedAiTool, onLaunchAiTool }: TitleBarProps) {
@@ -54,11 +53,9 @@ export default function TitleBar({ dark, currentView, onToggleDark, onViewChange
   const projRef = useRef<HTMLDivElement>(null);
   const updateRef = useRef<HTMLDivElement>(null);
 
-  const [aiSubOpen, setAiSubOpen] = useState(false);
-
   // Show the selected AI tool name in the pill when an AI view is active
   const activeAiTool = aiTools?.find((t) => t.id === selectedAiTool);
-  const activeView = VIEWS.find((v) => v.key === currentView) ?? VIEWS[0];
+  const activeView = VIEWS.find((v) => v.key === currentView);
 
   // Check for updates on mount
   useEffect(() => {
@@ -190,63 +187,44 @@ export default function TitleBar({ dark, currentView, onToggleDark, onViewChange
       <div className="title-right">
         {/* View selector pill */}
         <div className="title-pill-wrapper" ref={viewRef} data-help-id="titlebar.view">
-          <button className="title-pill" onClick={() => { setViewOpen(!viewOpen); setProjOpen(false); setAiSubOpen(false); }}>
+          <button className="title-pill" onClick={() => { setViewOpen(!viewOpen); setProjOpen(false); }}>
             <span className="title-pill-label">View</span>
             <span className="title-pill-value">
-              {activeView.icon} {currentView === 'ai' && activeAiTool ? activeAiTool.name : activeView.label}
+              {currentView === 'ai' && activeAiTool
+                ? <>{activeAiTool.icon} {activeAiTool.name}</>
+                : <>{activeView?.icon} {activeView?.label}</>}
             </span>
             <span className="title-pill-arrow">{viewOpen ? '\u25B4' : '\u25BE'}</span>
           </button>
           {viewOpen && (
             <div className="title-pill-dropdown">
-              {VIEWS.map((v) => {
-                // AI Companion entry with sub-menu
-                if (v.key === 'ai' && aiTools && aiTools.length > 0) {
-                  return (
-                    <div
-                      key={v.key}
-                      className="title-pill-submenu-wrapper"
-                      onMouseEnter={() => setAiSubOpen(true)}
-                      onMouseLeave={() => setAiSubOpen(false)}
+              {VIEWS.map((v) => (
+                <button
+                  key={v.key}
+                  className={`title-pill-option ${currentView === v.key ? 'active' : ''}`}
+                  onClick={() => { onViewChange(v.key); setViewOpen(false); }}
+                >
+                  <span className="title-pill-option-icon">{v.icon}</span>
+                  {v.label}
+                  {currentView === v.key && <span className="title-pill-check">{'\u2713'}</span>}
+                </button>
+              ))}
+              {aiTools && aiTools.length > 0 && (
+                <>
+                  <div className="title-pill-section-header">AI Tools</div>
+                  {aiTools.map((tool) => (
+                    <button
+                      key={tool.id}
+                      className={`title-pill-option ${currentView === 'ai' && selectedAiTool === tool.id ? 'active' : ''}`}
+                      onClick={() => { onLaunchAiTool?.(tool.id); setViewOpen(false); }}
                     >
-                      <button
-                        className={`title-pill-option ${currentView === v.key ? 'active' : ''}`}
-                        onClick={() => setAiSubOpen(!aiSubOpen)}
-                      >
-                        <span className="title-pill-option-icon">{v.icon}</span>
-                        {v.label}
-                        <span className="title-pill-submenu-arrow">{'\u203A'}</span>
-                      </button>
-                      {aiSubOpen && (
-                        <div className="title-pill-submenu">
-                          {aiTools.map((tool) => (
-                            <button
-                              key={tool.id}
-                              className={`title-pill-option ${currentView === 'ai' && selectedAiTool === tool.id ? 'active' : ''}`}
-                              onClick={() => { onLaunchAiTool?.(tool.id); setViewOpen(false); setAiSubOpen(false); }}
-                            >
-                              <span className="title-pill-option-icon">{tool.icon}</span>
-                              {tool.name}
-                              {currentView === 'ai' && selectedAiTool === tool.id && <span className="title-pill-check">{'\u2713'}</span>}
-                            </button>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  );
-                }
-                return (
-                  <button
-                    key={v.key}
-                    className={`title-pill-option ${currentView === v.key ? 'active' : ''}`}
-                    onClick={() => { onViewChange(v.key); setViewOpen(false); }}
-                  >
-                    <span className="title-pill-option-icon">{v.icon}</span>
-                    {v.label}
-                    {currentView === v.key && <span className="title-pill-check">{'\u2713'}</span>}
-                  </button>
-                );
-              })}
+                      <span className="title-pill-option-icon">{tool.icon}</span>
+                      {tool.name}
+                      {currentView === 'ai' && selectedAiTool === tool.id && <span className="title-pill-check">{'\u2713'}</span>}
+                    </button>
+                  ))}
+                </>
+              )}
             </div>
           )}
         </div>

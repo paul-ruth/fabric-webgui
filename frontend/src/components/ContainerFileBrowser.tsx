@@ -57,6 +57,7 @@ export default function ContainerFileBrowser() {
   const [dragOver, setDragOver] = useState(false);
   const [editingFile, setEditingFile] = useState<string | null>(null);
   const [confirmOpen, setConfirmOpen] = useState<string | null>(null);
+  const [showHidden, setShowHidden] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const refresh = useCallback(async () => {
@@ -208,11 +209,12 @@ export default function ContainerFileBrowser() {
   const isDark = typeof document !== 'undefined' && document.documentElement.getAttribute('data-theme') === 'dark';
   const pathParts = path.split('/').filter(Boolean);
   const showGoUp = path !== '';
+  const visibleEntries = showHidden ? entries : entries.filter((e) => !e.name.startsWith('.'));
 
   const editableFile = (() => {
     if (selected.size !== 1) return null;
     const name = Array.from(selected)[0];
-    const entry = entries.find((e) => e.name === name);
+    const entry = visibleEntries.find((e) => e.name === name);
     if (!entry || entry.type !== 'file') return null;
     return path ? `${path}/${name}` : name;
   })();
@@ -253,13 +255,20 @@ export default function ContainerFileBrowser() {
             <button onClick={handleDownload} disabled={selected.size === 0}>Download</button>
             <button onClick={handleDelete} disabled={selected.size === 0}>Delete</button>
             <button onClick={() => editableFile && editableName && tryOpenFile(editableFile, editableName)} disabled={!editableFile}>Edit</button>
+            <button
+              className={showHidden ? 'fb-toggle-active' : ''}
+              onClick={() => setShowHidden((v) => !v)}
+              title={showHidden ? 'Hide hidden files' : 'Show hidden files'}
+            >
+              .hidden
+            </button>
             <button onClick={refresh} disabled={loading} title="Refresh">{'\u21BB'}</button>
           </div>
           {error && <div className="fb-error">{error}</div>}
           <div className="fb-table-wrap">
             {loading ? (
               <div className="fb-loading">Loading...</div>
-            ) : entries.length === 0 && !showGoUp ? (
+            ) : visibleEntries.length === 0 && !showGoUp ? (
               <div className="fb-empty">Empty directory. Upload files or create a folder.</div>
             ) : (
               <table className="fb-table">
@@ -278,7 +287,7 @@ export default function ContainerFileBrowser() {
                       <td></td>
                     </tr>
                   )}
-                  {entries.map((entry) => (
+                  {visibleEntries.map((entry) => (
                     <tr
                       key={entry.name}
                       className={`fb-row ${selected.has(entry.name) ? 'selected' : ''}`}
