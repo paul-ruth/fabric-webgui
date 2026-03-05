@@ -10,7 +10,7 @@ import EditorPanel from './components/EditorPanel';
 import LibrariesPanel from './components/LibrariesPanel';
 import MonitoringView from './components/MonitoringView';
 import LibrariesView from './components/LibrariesView';
-import DetailPanel from './components/DetailPanel';
+import WeaveMiniChat from './components/WeaveMiniChat';
 import GeoView from './components/GeoView';
 import BottomPanel from './components/BottomPanel';
 import type { TerminalTab, RecipeConsoleLine, BootConsoleLine } from './components/BottomPanel';
@@ -44,6 +44,8 @@ export default function App() {
   const [sliceBootRunning, setSliceBootRunning] = useState<Record<string, boolean>>({});
   const [sliceBootNodeStatus, setSliceBootNodeStatus] = useState<Record<string, Record<string, 'pending' | 'running' | 'done' | 'error'>>>({});
   const [currentView, setCurrentView] = useState<'topology' | 'sliver' | 'map' | 'files' | 'libraries' | 'monitoring' | 'client' | 'ai'>('topology');
+  const [selectedAiTool, setSelectedAiTool] = useState<string | null>(null);
+  const [enabledAiTools, setEnabledAiTools] = useState<Record<string, boolean>>({});
   const [clientTarget, setClientTarget] = useState<ClientTarget | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [isConfigured, setIsConfigured] = useState<boolean | null>(null);
@@ -56,8 +58,8 @@ export default function App() {
   type PanelLayoutEntry = { side: 'left' | 'right'; collapsed: boolean; width: number; order: number };
   type PanelLayoutMap = Record<PanelId, PanelLayoutEntry>;
 
-  const PANEL_ICONS: Record<PanelId, string> = { editor: '\u270E', template: '\u29C9', detail: '\u2139' };
-  const PANEL_LABELS: Record<PanelId, string> = { editor: 'Editor', template: 'Libraries', detail: 'Details' };
+  const PANEL_ICONS: Record<PanelId, string> = { editor: '\u270E', template: '\u29C9', detail: '\u2726' };
+  const PANEL_LABELS: Record<PanelId, string> = { editor: 'Editor', template: 'Artifacts', detail: 'Weave' };
   const PANEL_IDS: PanelId[] = ['editor', 'template', 'detail'];
   const DEFAULT_PANEL_WIDTH = 280;
   const MIN_PANEL_WIDTH = 180;
@@ -245,6 +247,7 @@ export default function App() {
     api.listImages().then(setImages).catch(() => {});
     api.listComponentModels().then(setComponentModels).catch(() => {});
     api.listVmTemplates().then(setVmTemplates).catch(() => {});
+    api.getAiTools().then(setEnabledAiTools).catch(() => {});
   }, []);
 
   const refreshVmTemplates = useCallback(() => {
@@ -1465,17 +1468,9 @@ export default function App() {
         );
       case 'detail':
         return (
-          <DetailPanel
+          <WeaveMiniChat
             key="detail"
-            sliceData={sliceData}
-            selectedElement={selectedElement}
             onCollapse={() => toggleCollapse('detail')}
-            siteMetricsCache={siteMetricsCache}
-            linkMetricsCache={linkMetricsCache}
-            metricsRefreshRate={metricsRefreshRate}
-            onMetricsRefreshRateChange={setMetricsRefreshRate}
-            onRefreshMetrics={refreshMetrics}
-            metricsLoading={metricsLoading}
             dragHandleProps={dragProps}
             panelIcon={icon}
           />
@@ -1571,6 +1566,14 @@ export default function App() {
   const leftCollapsed = sortByOrder(PANEL_IDS.filter(id => panelLayout[id].side === 'left' && panelLayout[id].collapsed));
   const rightCollapsed = sortByOrder(PANEL_IDS.filter(id => panelLayout[id].side === 'right' && panelLayout[id].collapsed));
 
+  const AI_TOOL_INFO = [
+    { id: 'weave', name: 'Weave', icon: 'W' },
+    { id: 'aider', name: 'Aider', icon: 'Ai' },
+    { id: 'opencode', name: 'OpenCode', icon: 'OC' },
+    { id: 'claude', name: 'Claude Code', icon: 'CC' },
+  ];
+  const visibleAiTools = AI_TOOL_INFO.filter((t) => enabledAiTools[t.id] !== false);
+
   return (
     <>
       <TitleBar
@@ -1583,9 +1586,12 @@ export default function App() {
         projectName={projectName}
         projects={projects}
         onProjectChange={handleProjectChange}
+        aiTools={visibleAiTools}
+        selectedAiTool={selectedAiTool}
+        onLaunchAiTool={(toolId) => { setSelectedAiTool(toolId); setCurrentView('ai'); }}
       />
 
-      <Toolbar
+      {currentView !== 'ai' && currentView !== 'client' && currentView !== 'libraries' && currentView !== 'sliver' && <Toolbar
         slices={slices}
         selectedSlice={selectedSliceName}
         sliceState={sliceData?.state ?? ''}
@@ -1630,7 +1636,7 @@ export default function App() {
         hasErrors={sliceData?.error_messages != null && sliceData.error_messages.length > 0}
         autoRefresh={autoRefresh}
         onToggleAutoRefresh={toggleAutoRefresh}
-      />
+      />}
 
       <HelpContextMenu onOpenHelp={handleOpenHelp} />
 
@@ -1754,7 +1760,7 @@ export default function App() {
 
           {/* AI Companion — always mounted for chat persistence, hidden when not active */}
           <div style={{ display: currentView === 'ai' ? 'contents' : 'none' }}>
-            <AICompanionView />
+            <AICompanionView selectedTool={selectedAiTool} onToolChange={setSelectedAiTool} />
           </div>
 
           {/* View content */}

@@ -7,6 +7,7 @@ import { buildWsUrl } from '../utils/wsUrl';
 import { getConfig, getAiTools } from '../api/client';
 import ContainerFileBrowser from './ContainerFileBrowser';
 import WeaveChat from './WeaveChat';
+import TerminalCompanionView from './TerminalCompanionView';
 import '../styles/ai-companion.css';
 
 const TERM_THEME = {
@@ -84,7 +85,12 @@ interface TabState {
   label: string;
 }
 
-export default function AICompanionView() {
+interface AICompanionViewProps {
+  selectedTool?: string | null;
+  onToolChange?: (toolId: string | null) => void;
+}
+
+export default function AICompanionView({ selectedTool, onToolChange }: AICompanionViewProps) {
   const [hasKey, setHasKey] = useState<boolean | null>(null);
   const [enabledTools, setEnabledTools] = useState<Record<string, boolean>>({});
   const [tabs, setTabs] = useState<TabState[]>([]);
@@ -150,7 +156,15 @@ export default function AICompanionView() {
     document.addEventListener('mouseup', onMouseUp);
   }, []);
 
-  const showCards = tabs.length === 0;
+  const showCards = tabs.length === 0 && !selectedTool;
+
+  // When a tool is directly selected (from the View dropdown sub-menu),
+  // render it full-screen without the card launcher or split pane
+  const renderDirectTool = () => {
+    if (!selectedTool) return null;
+    if (selectedTool === 'weave') return <WeaveChat />;
+    return <TerminalCompanionView toolId={selectedTool} />;
+  };
 
   return (
     <div className="ai-companion">
@@ -169,7 +183,9 @@ export default function AICompanionView() {
         </div>
       )}
 
-      {showCards ? (
+      {selectedTool ? (
+        renderDirectTool()
+      ) : showCards ? (
         <div className="ai-cards">
           {visibleTools.map((tool) => {
             const ready = tool.needsKey ? hasKey : true;
@@ -180,7 +196,7 @@ export default function AICompanionView() {
                 : { cls: 'key-required', text: 'Key Required' };
 
             return (
-              <div className="ai-card" key={tool.id}>
+              <div className="ai-card" key={tool.id} onClick={() => onToolChange?.(tool.id)}>
                 <div className="ai-card-header">
                   <div className={`ai-card-icon ${tool.iconClass}`}>{tool.icon}</div>
                   <div className="ai-card-name">{tool.name}</div>
@@ -191,7 +207,7 @@ export default function AICompanionView() {
                   <button
                     className="ai-launch-btn"
                     disabled={tool.needsKey && !ready}
-                    onClick={() => handleLaunch(tool)}
+                    onClick={(e) => { e.stopPropagation(); onToolChange?.(tool.id); }}
                   >
                     Launch
                   </button>

@@ -210,7 +210,7 @@ export const helpSections: HelpSection[] = [
   { id: 'sliver', title: 'Sliver View', entries: entries.filter(e => e.section === 'sliver') },
   { id: 'detail', title: 'Detail Panel', entries: entries.filter(e => e.section === 'detail') },
   { id: 'map', title: 'Map View', entries: entries.filter(e => e.section === 'map') },
-  { id: 'templates', title: 'Slice Libraries', entries: entries.filter(e => e.section === 'templates') },
+  { id: 'templates', title: 'Slice Artifacts', entries: entries.filter(e => e.section === 'templates') },
   { id: 'vm-templates', title: 'VM Templates', entries: entries.filter(e => e.section === 'vm-templates') },
   { id: 'project', title: 'Project View', entries: entries.filter(e => e.section === 'project') },
   { id: 'files', title: 'Files View', entries: entries.filter(e => e.section === 'files') },

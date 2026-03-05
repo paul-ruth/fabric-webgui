@@ -460,7 +460,7 @@ export default function TemplatesView({ onLoadSlice }: TemplatesViewProps) {
   return (
     <div className="tv-root">
       <div className="tv-header">
-        <h1 className="tv-title">Slice Libraries</h1>
+        <h1 className="tv-title">Slice Artifacts</h1>
         <button className="tv-reload-btn" onClick={handleReload} disabled={reloading}>
           {reloading ? 'Reloading...' : 'Reload'}
         </button>

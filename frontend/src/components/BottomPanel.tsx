@@ -996,7 +996,7 @@ function RecipeConsoleView({ lines, running, onClear, endRef }: { lines: RecipeC
   if (lines.length === 0) {
     return (
       <div className="bp-validation-container">
-        <div className="bp-validation-empty">No recipe output. Apply a recipe from the Libraries panel to see execution output here.</div>
+        <div className="bp-validation-empty">No recipe output. Apply a recipe from the Artifacts panel to see execution output here.</div>
       </div>
     );
   }

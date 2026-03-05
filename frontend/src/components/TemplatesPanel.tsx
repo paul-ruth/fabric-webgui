@@ -195,7 +195,7 @@ export default function TemplatesPanel({
         <Tooltip text="Browse and load slice templates, VM templates, or recipes">
           <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
             <span className="panel-drag-handle">{'\u283F'}</span>
-            Libraries
+            Artifacts
           </span>
         </Tooltip>
         <button className="collapse-btn" onClick={(e) => { e.stopPropagation(); onCollapse(); }} title="Collapse">

@@ -32,7 +32,7 @@ interface LibrariesPanelProps {
   panelIcon?: string;
 }
 
-type TabId = 'slice' | 'vm' | 'recipes';
+type TabId = 'slice' | 'vm' | 'recipes' | 'experiments';
 
 export default function LibrariesPanel({
   onSliceImported, onVmTemplatesChanged, sliceName, sliceData, onNodeAdded,
@@ -278,7 +278,7 @@ export default function LibrariesPanel({
         <Tooltip text="Browse and load slice templates, VM templates, or recipes">
           <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
             <span className="panel-drag-handle">{'\u283F'}</span>
-            Libraries
+            Artifacts
           </span>
         </Tooltip>
         <button
@@ -318,6 +318,12 @@ export default function LibrariesPanel({
           onClick={() => setActiveTab('recipes')}
         >
           Recipes
+        </button>
+        <button
+          className={`templates-tab${activeTab === 'experiments' ? ' active' : ''}`}
+          onClick={() => setActiveTab('experiments')}
+        >
+          Exp
         </button>
       </div>
 
@@ -648,6 +654,17 @@ export default function LibrariesPanel({
             ))}
           </div>
 
+        </div>
+      )}
+
+      {/* ─── Experiments Tab ─── */}
+      {activeTab === 'experiments' && (
+        <div className="vmt-body">
+          <div className="vmt-empty" style={{ padding: '16px 12px', fontSize: 12, lineHeight: 1.6, textAlign: 'center' }}>
+            Experiments are complete reproducible bundles: slice template + scripts + documentation.
+            <br /><br />
+            Switch to the <strong>Artifacts</strong> view for full experiment management.
+          </div>
         </div>
       )}
     </div>

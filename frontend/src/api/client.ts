@@ -1067,6 +1067,79 @@ export async function executeRecipeStream(
   }
 }
 
+// -- Experiments -----------------------------------------------------------
+
+export interface ExperimentSummary {
+  name: string;
+  description: string;
+  author: string;
+  tags: string[];
+  builtin: boolean;
+  dir_name: string;
+  script_count: number;
+  has_template: boolean;
+  has_readme: boolean;
+  created?: string;
+}
+
+export interface ExperimentDetail extends ExperimentSummary {
+  readme: string;
+  scripts: Array<{ filename: string }>;
+  node_count?: number;
+  network_count?: number;
+}
+
+export function listExperiments(): Promise<ExperimentSummary[]> {
+  return fetchJson('/experiments');
+}
+
+export function getExperiment(name: string): Promise<ExperimentDetail> {
+  return fetchJson(`/experiments/${encodeURIComponent(name)}`);
+}
+
+export function createExperiment(body: { name: string; description?: string; author?: string; tags?: string[]; slice_name?: string }): Promise<ExperimentSummary> {
+  return fetchJson('/experiments', { method: 'POST', body: JSON.stringify(body) });
+}
+
+export function deleteExperiment(name: string): Promise<{ status: string }> {
+  return fetchJson(`/experiments/${encodeURIComponent(name)}`, { method: 'DELETE' });
+}
+
+export function loadExperiment(name: string, sliceName?: string): Promise<SliceData> {
+  return fetchJson(`/experiments/${encodeURIComponent(name)}/load`, {
+    method: 'POST',
+    body: JSON.stringify({ slice_name: sliceName || '' }),
+  });
+}
+
+export function getExperimentReadme(name: string): Promise<{ content: string }> {
+  return fetchJson(`/experiments/${encodeURIComponent(name)}/readme`);
+}
+
+export function updateExperimentReadme(name: string, content: string): Promise<{ status: string }> {
+  return fetchJson(`/experiments/${encodeURIComponent(name)}/readme`, {
+    method: 'PUT',
+    body: JSON.stringify({ content }),
+  });
+}
+
+export function getExperimentScript(name: string, filename: string): Promise<{ filename: string; content: string }> {
+  return fetchJson(`/experiments/${encodeURIComponent(name)}/scripts/${encodeURIComponent(filename)}`);
+}
+
+export function saveExperimentScript(name: string, filename: string, content: string): Promise<{ status: string }> {
+  return fetchJson(`/experiments/${encodeURIComponent(name)}/scripts/${encodeURIComponent(filename)}`, {
+    method: 'PUT',
+    body: JSON.stringify({ content }),
+  });
+}
+
+export function deleteExperimentScript(name: string, filename: string): Promise<{ status: string }> {
+  return fetchJson(`/experiments/${encodeURIComponent(name)}/scripts/${encodeURIComponent(filename)}`, {
+    method: 'DELETE',
+  });
+}
+
 // -- Tunnels ---------------------------------------------------------------
 
 export interface TunnelInfo {

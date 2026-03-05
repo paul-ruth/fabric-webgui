@@ -171,6 +171,38 @@
   color: var(--fabric-primary, #5798bc);
 }
 
+/* ── Sub-menu (AI Companion) ── */
+.title-pill-submenu-wrapper {
+  position: relative;
+}
+
+.title-pill-submenu-arrow {
+  margin-left: auto;
+  font-size: 16px;
+  opacity: 0.5;
+  line-height: 1;
+}
+
+.title-pill-submenu {
+  position: absolute;
+  left: calc(100% + 4px);
+  top: -4px;
+  min-width: 160px;
+  background: var(--fabric-white);
+  border: 1px solid var(--fabric-border-solid);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  z-index: 10000;
+  padding: 4px;
+  animation: titlePillFadeIn 0.12s ease-out;
+}
+
+[data-theme="dark"] .title-pill-submenu {
+  background: #1a2540;
+  border-color: #2a3a5a;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6);
+}
+
 /* ── Icon buttons (settings, theme toggle) ── */
 .title-icon-btn {
   background: rgba(255, 255, 255, 0.1);

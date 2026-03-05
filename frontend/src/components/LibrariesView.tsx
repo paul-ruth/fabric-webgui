@@ -1,7 +1,7 @@
 'use client';
 import { useState, useEffect, useCallback } from 'react';
 import type { SliceData, VMTemplateSummary, RecipeSummary } from '../types/fabric';
-import type { TemplateSummary } from '../api/client';
+import type { TemplateSummary, ExperimentSummary } from '../api/client';
 import * as api from '../api/client';
 import '../styles/libraries-view.css';
 
@@ -9,7 +9,7 @@ interface LibrariesViewProps {
   onLoadSlice: (data: SliceData) => void;
 }
 
-type TabId = 'slice' | 'vm' | 'recipes';
+type TabId = 'slice' | 'vm' | 'recipes' | 'experiments';
 
 interface ToolEntry {
   filename: string;
@@ -33,6 +33,10 @@ export default function LibrariesView({ onLoadSlice }: LibrariesViewProps) {
   // Recipes
   const [recipes, setRecipes] = useState<RecipeSummary[]>([]);
   const [recipesLoading, setRecipesLoading] = useState(false);
+
+  // Experiments
+  const [experiments, setExperiments] = useState<ExperimentSummary[]>([]);
+  const [experimentsLoading, setExperimentsLoading] = useState(false);
 
   // Loading a template
   const [loadingName, setLoadingName] = useState<string | null>(null);
@@ -96,11 +100,25 @@ export default function LibrariesView({ onLoadSlice }: LibrariesViewProps) {
     }
   }, []);
 
+  // Fetch experiments
+  const fetchExperiments = useCallback(async () => {
+    setExperimentsLoading(true);
+    try {
+      const list = await api.listExperiments();
+      setExperiments(list);
+    } catch {
+      // ignore
+    } finally {
+      setExperimentsLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     fetchSliceTemplates();
     fetchVmTemplates();
     fetchRecipes();
-  }, [fetchSliceTemplates, fetchVmTemplates, fetchRecipes]);
+    fetchExperiments();
+  }, [fetchSliceTemplates, fetchVmTemplates, fetchRecipes, fetchExperiments]);
 
   // Reload (resync)
   const handleReload = async () => {
@@ -112,9 +130,10 @@ export default function LibrariesView({ onLoadSlice }: LibrariesViewProps) {
       ]);
       setSliceTemplates(st);
       setVmTemplates(vm);
+      await fetchExperiments();
     } catch (e: any) {
       // fallback: just refresh
-      await Promise.all([fetchSliceTemplates(), fetchVmTemplates()]);
+      await Promise.all([fetchSliceTemplates(), fetchVmTemplates(), fetchExperiments()]);
     } finally {
       setReloading(false);
     }
@@ -286,6 +305,11 @@ export default function LibrariesView({ onLoadSlice }: LibrariesViewProps) {
   const filteredRecipes = recipes.filter(r =>
     !search || r.name.toLowerCase().includes(search.toLowerCase()) ||
     (r.description || '').toLowerCase().includes(search.toLowerCase())
+  );
+
+  const filteredExperiments = experiments.filter(e =>
+    !search || e.name.toLowerCase().includes(search.toLowerCase()) ||
+    (e.description || '').toLowerCase().includes(search.toLowerCase())
   );
 
   const renderSliceCard = (t: TemplateSummary) => {
@@ -465,7 +489,7 @@ export default function LibrariesView({ onLoadSlice }: LibrariesViewProps) {
   return (
     <div className="tv-root">
       <div className="tv-header">
-        <h1 className="tv-title">Slice Libraries</h1>
+        <h1 className="tv-title">Slice Artifacts</h1>
         <button className="tv-reload-btn" onClick={handleReload} disabled={reloading}>
           {reloading ? 'Reloading...' : 'Reload'}
         </button>
@@ -481,12 +505,15 @@ export default function LibrariesView({ onLoadSlice }: LibrariesViewProps) {
         <button className={`tv-tab ${tab === 'recipes' ? 'active' : ''}`} onClick={() => setTab('recipes')}>
           Recipes ({recipes.length})
         </button>
+        <button className={`tv-tab ${tab === 'experiments' ? 'active' : ''}`} onClick={() => setTab('experiments')}>
+          Experiments ({experiments.length})
+        </button>
       </div>
 
       <div className="tv-search">
         <input
           className="tv-search-input"
-          placeholder={tab === 'recipes' ? 'Search recipes...' : 'Search templates...'}
+          placeholder={tab === 'experiments' ? 'Search experiments...' : tab === 'recipes' ? 'Search recipes...' : 'Search templates...'}
           value={search}
           onChange={e => setSearch(e.target.value)}
         />
@@ -512,7 +539,7 @@ export default function LibrariesView({ onLoadSlice }: LibrariesViewProps) {
           {!vmLoading && !filteredVm.length && <div className="tv-empty">No VM templates found.</div>}
           {editingType === 'vm' && renderEditDrawer()}
         </>
-      ) : (
+      ) : tab === 'recipes' ? (
         <>
           {recipesLoading && !recipes.length && <div className="tv-loading">Loading recipes...</div>}
           <div className="tv-grid">
@@ -534,6 +561,65 @@ export default function LibrariesView({ onLoadSlice }: LibrariesViewProps) {
             ))}
           </div>
           {!recipesLoading && !filteredRecipes.length && <div className="tv-empty">No recipes found.</div>}
+        </>
+      ) : (
+        <>
+          {experimentsLoading && !experiments.length && <div className="tv-loading">Loading experiments...</div>}
+          <div className="tv-grid">
+            {filteredExperiments.map(e => (
+              <div key={e.dir_name} className="tv-card">
+                <div className="tv-card-header">
+                  <span className="tv-card-name">{e.name}</span>
+                  {e.builtin ? (
+                    <span className="tv-badge tv-badge-builtin">Built-in</span>
+                  ) : (
+                    <span className="tv-badge tv-badge-user">User</span>
+                  )}
+                </div>
+                {e.description && <div className="tv-card-desc">{e.description}</div>}
+                <div className="tv-card-meta">
+                  {e.has_template && <span>Template</span>}
+                  {e.script_count > 0 && <span>{e.script_count} script{e.script_count !== 1 ? 's' : ''}</span>}
+                  {e.has_readme && <span>README</span>}
+                  {e.tags && e.tags.length > 0 && <span>{e.tags.join(', ')}</span>}
+                </div>
+                <div className="tv-card-actions">
+                  {e.has_template && (
+                    <button
+                      className="tv-card-btn"
+                      disabled={!!loadingName}
+                      onClick={async () => {
+                        setLoadingName(e.dir_name);
+                        try {
+                          const data = await api.loadExperiment(e.dir_name);
+                          onLoadSlice(data);
+                        } catch (err: any) {
+                          setSliceError(err.message);
+                        } finally {
+                          setLoadingName(null);
+                        }
+                      }}
+                    >
+                      {loadingName === e.dir_name ? 'Loading...' : 'Load'}
+                    </button>
+                  )}
+                  {!e.builtin && (
+                    <button
+                      className="tv-card-btn tv-card-btn-danger"
+                      onClick={async () => {
+                        if (!confirm(`Delete experiment "${e.name}"?`)) return;
+                        await api.deleteExperiment(e.dir_name);
+                        fetchExperiments();
+                      }}
+                    >
+                      Delete
+                    </button>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+          {!experimentsLoading && !filteredExperiments.length && <div className="tv-empty">No experiments found.</div>}
         </>
       )}
     </div>

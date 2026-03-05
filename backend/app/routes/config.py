@@ -716,6 +716,9 @@ def save_config(req: ConfigSaveRequest):
     _migrate_legacy_keys(d)
     priv_path, pub_path = get_default_slice_key_path(d)
 
+    # Preserve existing AI API key if the field is empty (user didn't change it)
+    ai_key = req.litellm_api_key or _get_ai_api_key()
+
     fabric_rc = f"""export FABRIC_CREDMGR_HOST={req.credmgr_host}
 export FABRIC_ORCHESTRATOR_HOST={req.orchestrator_host}
 export FABRIC_CORE_API_HOST={req.core_api_host}
@@ -732,7 +735,7 @@ export FABRIC_LOG_LEVEL={req.log_level}
 export FABRIC_LOG_FILE={req.log_file}
 export FABRIC_AVOID={req.avoid}
 export FABRIC_SSH_COMMAND_LINE="{ssh_cmd}"
-export FABRIC_AI_API_KEY={req.litellm_api_key}
+export FABRIC_AI_API_KEY={ai_key}
 """
 
     rc_path = os.path.join(d, "fabric_rc")
