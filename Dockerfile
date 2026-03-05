@@ -25,7 +25,11 @@ COPY backend/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy backend code
+COPY backend/scripts/ scripts/
 COPY backend/app/ app/
+
+# Install Weave CLI as a command-line tool
+RUN pip install --no-cache-dir scripts/
 
 # Copy version file for update checks (read by backend)
 COPY frontend/src/version.ts /app/VERSION

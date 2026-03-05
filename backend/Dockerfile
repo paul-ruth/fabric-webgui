@@ -24,6 +24,9 @@ RUN npm install -g opencode-ai 2>/dev/null || true
 
 COPY scripts/ scripts/
 COPY app/ app/
+
+# Install Weave CLI as a command-line tool
+RUN pip install --no-cache-dir scripts/
 COPY VERSION /app/VERSION
 COPY WEAVE.md /app/WEAVE.md
 

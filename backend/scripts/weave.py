@@ -23,10 +23,43 @@ API_BASE = (
     os.environ.get("OPENAI_BASE_URL")
     or os.environ.get("OPENAI_API_BASE", "https://ai.fabric-testbed.net/v1")
 )
-API_KEY = os.environ.get("OPENAI_API_KEY", "")
 MODEL = os.environ.get("WEAVE_MODEL", "qwen3-coder-30b")
 MAX_OUTPUT = 12_000
 CMD_TIMEOUT = 30
+
+
+def _detect_api_key() -> str:
+    """Get API key from env or auto-detect from fabric_rc."""
+    key = os.environ.get("OPENAI_API_KEY", "")
+    if key:
+        return key
+    # Try to read from fabric_rc (same logic as the backend)
+    config_dir = os.environ.get("FABRIC_CONFIG_DIR", "/fabric_config")
+    for rc_path in [
+        os.path.join(config_dir, "fabric_rc"),
+        os.path.join(config_dir, ".fabric_config", "fabric_rc"),
+    ]:
+        try:
+            with open(rc_path) as f:
+                for line in f:
+                    line = line.strip()
+                    if line.startswith("export FABRIC_AI_API_KEY="):
+                        return line.split("=", 1)[1]
+        except OSError:
+            continue
+    # Also try /fabric_storage/.fabric_config/fabric_rc
+    try:
+        with open("/fabric_storage/.fabric_config/fabric_rc") as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith("export FABRIC_AI_API_KEY="):
+                    return line.split("=", 1)[1]
+    except OSError:
+        pass
+    return ""
+
+
+API_KEY = _detect_api_key()
 
 # ─── ANSI Colors (FABRIC brand) ──────────────────────────────────────────────
 
@@ -47,30 +80,120 @@ C_RED    = "\033[91m"
 
 # ─── System Prompt ────────────────────────────────────────────────────────────
 
-SYSTEM_PROMPT = """\
-You are Weave, a FABRIC testbed AI coding assistant. You help users write \
-code, manage files, run commands, and work with the FABRIC research \
-infrastructure.
+_FALLBACK_PROMPT = (
+    "You are Weave, a FABRIC testbed AI coding assistant. "
+    "You help users write code, manage files, run commands, and work with FABRIC."
+)
 
-You have tools to read files, edit files, create files, search code, list \
-directories, and run shell commands. Use them proactively:
-- Read files before editing them
-- Verify changes after making them
-- Use search to find relevant code
+_WEAVE_MD_PATHS = [
+    Path("/app/WEAVE.md"),
+    Path(__file__).parent.parent / "WEAVE.md",
+    Path(__file__).parent.parent.parent / "WEAVE.md",
+]
 
-Be concise and direct. Lead with actions, not explanations. When editing \
-files, briefly explain what you changed and why.
+# Skills/agents directories (mirrors the WebSocket version)
+_WEAVE_DIR: Path | None = None
+_DEFAULTS_DIR = Path(__file__).parent.parent / "app" / "weave_defaults"
 
-When the user asks about FABRIC, you know:
-- FABRIC is a nationwide research infrastructure for networking and \
-distributed computing
-- Users create "slices" containing VMs, networks, and specialized hardware \
-(GPUs, FPGAs, SmartNICs)
-- FABlib is the Python library for programmatic access
-- Sites include RENC, TACC, UCSD, UTAH, MASS, STAR, and many more
 
-Working directory: {cwd}
-"""
+def _get_weave_dir() -> Path:
+    global _WEAVE_DIR
+    if _WEAVE_DIR is None:
+        base = Path(os.environ.get("FABRIC_STORAGE_DIR", "/fabric_storage"))
+        if not base.is_dir():
+            base = Path.cwd()
+        _WEAVE_DIR = base / ".weave"
+    return _WEAVE_DIR
+
+
+def _seed_defaults() -> None:
+    weave_dir = _get_weave_dir()
+    for subdir in ("skills", "agents"):
+        src = _DEFAULTS_DIR / subdir
+        dst = weave_dir / subdir
+        if not src.is_dir():
+            continue
+        dst.mkdir(parents=True, exist_ok=True)
+        import shutil
+        for f in src.glob("*.md"):
+            target = dst / f.name
+            if not target.exists():
+                shutil.copy2(f, target)
+
+
+def _parse_skill_file(path: Path) -> dict | None:
+    try:
+        text = path.read_text()
+    except Exception:
+        return None
+    if "---" not in text:
+        return None
+    header, _, prompt = text.partition("---")
+    info: dict[str, str] = {}
+    for line in header.strip().splitlines():
+        if ":" in line:
+            key, _, val = line.partition(":")
+            info[key.strip().lower()] = val.strip()
+    return {
+        "name": info.get("name", path.stem),
+        "description": info.get("description", ""),
+        "prompt": prompt.strip(),
+    }
+
+
+def _load_skills() -> dict[str, dict]:
+    _seed_defaults()
+    skills_dir = _get_weave_dir() / "skills"
+    skills: dict[str, dict] = {}
+    if skills_dir.is_dir():
+        for f in skills_dir.glob("*.md"):
+            info = _parse_skill_file(f)
+            if info:
+                skills[info["name"]] = info
+    return skills
+
+
+def _load_agents() -> dict[str, dict]:
+    _seed_defaults()
+    agents_dir = _get_weave_dir() / "agents"
+    agents: dict[str, dict] = {}
+    if agents_dir.is_dir():
+        for f in agents_dir.glob("*.md"):
+            info = _parse_skill_file(f)
+            if info:
+                agents[info["name"]] = info
+    return agents
+
+
+def _load_weave_md() -> str:
+    for p in _WEAVE_MD_PATHS:
+        if p.is_file():
+            return p.read_text()
+    return _FALLBACK_PROMPT
+
+
+def _build_system_prompt(cwd: str) -> str:
+    base = _load_weave_md()
+    skills = _load_skills()
+    agents = _load_agents()
+
+    parts = [base, "", f"Working directory: {cwd}", ""]
+
+    if skills:
+        parts.append("## Currently Available Skills")
+        parts.append("")
+        for name, info in sorted(skills.items()):
+            parts.append(f"- `/{name}` -- {info['description']}")
+        parts.append("")
+
+    if agents:
+        parts.append("## Currently Available Agents")
+        parts.append("")
+        for name, info in sorted(agents.items()):
+            parts.append(f"- `@{name}` -- {info['description']}")
+        parts.append("")
+
+    return "\n".join(parts)
 
 # ─── Tool Definitions (OpenAI function calling format) ────────────────────────
 
@@ -226,6 +349,24 @@ TOOLS = [
         },
     },
 ]
+
+# ─── FABlib Tools (optional — available when running in the container) ────────
+
+_fablib_tools_available = False
+try:
+    import sys
+    # Ensure /app is on path so we can import the app package
+    if "/app" not in sys.path:
+        sys.path.insert(0, "/app")
+    from app.weave_fablib_tools import FABLIB_TOOLS, exec_fablib_tool, is_fablib_tool
+    TOOLS += FABLIB_TOOLS
+    _fablib_tools_available = True
+except ImportError:
+    def is_fablib_tool(name: str) -> bool:
+        return False
+    def exec_fablib_tool(name: str, args: dict) -> str:
+        return "FABlib tools not available (not running in FABRIC container)."
+
 
 # ─── Tool Handlers ────────────────────────────────────────────────────────────
 
@@ -401,6 +542,8 @@ _HANDLERS = {
 def execute_tool(name: str, args: dict) -> str:
     handler = _HANDLERS.get(name)
     if not handler:
+        if is_fablib_tool(name):
+            return exec_fablib_tool(name, args)
         return f"Error: Unknown tool: {name}"
     try:
         return handler(args)
@@ -412,11 +555,12 @@ def execute_tool(name: str, args: dict) -> str:
 
 
 class WeaveAgent:
-    def __init__(self) -> None:
+    def __init__(self, model: str = MODEL) -> None:
+        self.model = model
         self.messages: list[dict] = [
             {
                 "role": "system",
-                "content": SYSTEM_PROMPT.format(cwd=os.getcwd()),
+                "content": _build_system_prompt(os.getcwd()),
             }
         ]
         self.client = OpenAI(api_key=API_KEY, base_url=API_BASE)
@@ -481,7 +625,7 @@ class WeaveAgent:
     def _stream(self) -> tuple[str, list[dict]]:
         try:
             stream = self.client.chat.completions.create(
-                model=MODEL,
+                model=self.model,
                 messages=self.messages,
                 tools=TOOLS,
                 stream=True,
@@ -559,7 +703,7 @@ class WeaveAgent:
         """Fallback: stream without tool calling."""
         try:
             stream = self.client.chat.completions.create(
-                model=MODEL,
+                model=self.model,
                 messages=self.messages,
                 stream=True,
             )
@@ -640,14 +784,15 @@ def _print_tool_result(name: str, result: str) -> None:
 
 # ─── Banner & Help ────────────────────────────────────────────────────────────
 
-BANNER = f"""\
+def _banner(model: str) -> str:
+    return f"""\
 
   {F_PRIMARY}{BOLD}\u2584\u2584\u2584\u2584\u2584\u2584\u2584\u2584\u2584\u2584\u2584\u2584\u2584\u2584\u2584\u2584\u2584\u2584\u2584\u2584\u2584\u2584\u2584\u2584\u2584\u2584\u2584\u2584\u2584\u2584\u2584\u2584\u2584\u2584\u2584\u2584\u2584\u2584\u2584\u2584{RST}
   {F_PRIMARY}{BOLD}\u2588                                        \u2588{RST}
   {F_PRIMARY}{BOLD}\u2588{RST}  {F_PRIMARY}{BOLD}W E A V E{RST}                            {F_PRIMARY}{BOLD}\u2588{RST}
   {F_PRIMARY}{BOLD}\u2588{RST}  {C_GRAY}FABRIC AI Coding Assistant{RST}            {F_PRIMARY}{BOLD}\u2588{RST}
   {F_PRIMARY}{BOLD}\u2588{RST}                                        {F_PRIMARY}{BOLD}\u2588{RST}
-  {F_PRIMARY}{BOLD}\u2588{RST}  {C_GRAY}Model   {F_TEAL}{MODEL}{RST}
+  {F_PRIMARY}{BOLD}\u2588{RST}  {C_GRAY}Model   {F_TEAL}{model}{RST}
   {F_PRIMARY}{BOLD}\u2588{RST}  {C_GRAY}Server  {F_TEAL}{API_BASE}{RST}
   {F_PRIMARY}{BOLD}\u2588{RST}                                        {F_PRIMARY}{BOLD}\u2588{RST}
   {F_PRIMARY}{BOLD}\u2588{RST}  {C_GRAY}/help for commands \u2022 Ctrl+D to exit{RST}    {F_PRIMARY}{BOLD}\u2588{RST}
@@ -665,7 +810,12 @@ def _print_help() -> None:
   {F_TEAL}/compact{RST}    Trim conversation history
   {F_TEAL}/model{RST}      Show current model info
   {F_TEAL}/msgs{RST}       Show message count
+  {F_TEAL}/skills{RST}     List available skills
+  {F_TEAL}/agents{RST}     List available agents
   {F_TEAL}/quit{RST}       Exit Weave
+
+  {C_GRAY}Use /<skill> <args> to invoke a skill{RST}
+  {C_GRAY}Use @<agent> <args> to activate an agent{RST}
 """)
 
 
@@ -676,6 +826,7 @@ def _handle_command(cmd: str, agent: WeaveAgent) -> bool:
     """Handle a slash command. Returns False to exit."""
     parts = cmd.strip().split(None, 1)
     command = parts[0].lower()
+    user_args = parts[1] if len(parts) > 1 else ""
 
     if command in ("/quit", "/exit", "/q"):
         return False
@@ -690,8 +841,39 @@ def _handle_command(cmd: str, agent: WeaveAgent) -> bool:
         print(f"  {C_GRAY}Server: {RST}{F_TEAL}{API_BASE}{RST}")
     elif command == "/msgs":
         print(f"  {C_GRAY}Messages: {RST}{len(agent.messages)}")
+    elif command == "/skills":
+        skills = _load_skills()
+        if skills:
+            print(f"\n  {F_PRIMARY}{BOLD}Available Skills{RST}")
+            for name, info in sorted(skills.items()):
+                print(f"  {F_TEAL}/{name}{RST}  {C_GRAY}{info['description']}{RST}")
+            print()
+        else:
+            _info("No skills found.")
+    elif command == "/agents":
+        agents = _load_agents()
+        if agents:
+            print(f"\n  {F_PRIMARY}{BOLD}Available Agents{RST}")
+            for name, info in sorted(agents.items()):
+                print(f"  {F_TEAL}@{name}{RST}  {C_GRAY}{info['description']}{RST}")
+            print()
+        else:
+            _info("No agents found.")
     else:
-        print(f"  {C_GRAY}Unknown command: {command}. Type /help{RST}")
+        # Check if it's a skill
+        skill_name = command[1:]  # strip leading /
+        skills = _load_skills()
+        if skill_name in skills:
+            skill = skills[skill_name]
+            _info(f"Invoking skill: {skill_name}")
+            injected = (
+                f"[Skill: /{skill['name']}]\n\n"
+                f"{skill['prompt']}\n\n"
+                f"User request: {user_args}"
+            )
+            agent.chat(injected)
+        else:
+            print(f"  {C_GRAY}Unknown command: {command}. Type /help{RST}")
     return True
 
 
@@ -699,13 +881,41 @@ def _handle_command(cmd: str, agent: WeaveAgent) -> bool:
 
 
 def main() -> None:
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Weave — FABRIC AI Coding Assistant",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument(
+        "-c", "--command",
+        help="Run a single prompt and exit (non-interactive mode)",
+    )
+    parser.add_argument(
+        "-m", "--model",
+        help=f"Model to use (default: {MODEL})",
+    )
+    parser.add_argument(
+        "--version", action="version", version="weave 0.1.0",
+    )
+    args = parser.parse_args()
+
+    # Allow --model to override the default
+    model = args.model or MODEL
+
     if not API_KEY:
-        print(f"{F_CORAL}Error: OPENAI_API_KEY not set.{RST}")
+        print(f"{F_CORAL}Error: No API key found.{RST}")
+        print(f"{C_GRAY}Set OPENAI_API_KEY or configure the AI API key in the WebUI Settings.{RST}")
         sys.exit(1)
 
-    print(BANNER)
+    agent = WeaveAgent(model=model)
 
-    agent = WeaveAgent()
+    # Non-interactive: run one command and exit
+    if args.command:
+        agent.chat(args.command)
+        return
+
+    print(_banner(model))
 
     # Readline history
     histfile = os.path.join(
@@ -735,6 +945,24 @@ def main() -> None:
                 if not _handle_command(text, agent):
                     break
                 continue
+
+            # @agent invocation
+            if text.startswith("@"):
+                parts = text.split(None, 1)
+                agent_name = parts[0][1:]
+                user_args = parts[1] if len(parts) > 1 else ""
+                agents = _load_agents()
+                if agent_name in agents:
+                    ag = agents[agent_name]
+                    _info(f"Activating agent: {agent_name}")
+                    injected = (
+                        f"[Agent: {ag['name']}]\n\n"
+                        f"{ag['prompt']}\n\n"
+                        f"User request: {user_args}"
+                    )
+                    agent.chat(injected)
+                    continue
+                # Not a known agent, send as regular message
 
             agent.chat(text)
     except EOFError:

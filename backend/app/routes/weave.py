@@ -272,6 +272,8 @@ def _messages_to_items(messages: list[dict]) -> list[dict]:
 
 # ── Tool schemas ─────────────────────────────────────────────────────────────
 
+from app.weave_fablib_tools import FABLIB_TOOLS, exec_fablib_tool, is_fablib_tool
+
 TOOLS = [
     {"type": "function", "function": {
         "name": "read_file",
@@ -330,7 +332,7 @@ TOOLS = [
             "timeout": {"type": "integer", "description": "Timeout in seconds (default 30, max 120)"},
         }, "required": ["command"]},
     }},
-]
+] + FABLIB_TOOLS
 
 # ── Tool handlers (per-session CWD) ─────────────────────────────────────────
 
@@ -449,6 +451,9 @@ def _exec_tool(name: str, args: dict, cwd: str) -> str:
     }
     h = handlers.get(name)
     if not h:
+        # Check FABlib tools
+        if is_fablib_tool(name):
+            return exec_fablib_tool(name, args)
         return f"Unknown tool: {name}"
     try:
         return h(args)
