@@ -3,29 +3,26 @@ services:
     image: tailscale/tailscale:latest
     hostname: fabric-webui
     environment:
-      - TS_AUTHKEY=${TS_KEY}
       - TS_STATE_DIR=/var/lib/tailscale
       - TS_USERSPACE=true
-      - TS_SERVE_CONFIG=/config/serve.json
     volumes:
       - ${PWD}/tailscale/ts-config:/config
       - ${PWD}/tailscale/ts-state:/var/lib/tailscale
     dns:
       - 100.100.100.100
+      - 8.8.8.8
     restart: unless-stopped
 
   fabric-webui-app:
-    container_name: fabric-webui-app
     image: pruth/fabric-webui:latest
-    restart: unless-stopped
     network_mode: service:fabric-webui-ts
     volumes:
-      - fabric_config:/fabric_config
       - fabric_storage:/fabric_storage
     environment:
-      - FABRIC_CONFIG_DIR=/fabric_config
+      - FABRIC_CONFIG_DIR=/fabric_storage/.fabric_config
       - FABRIC_STORAGE_DIR=/fabric_storage
+      - HOME=/tmp
+    restart: unless-stopped
 
 volumes:
-  fabric_config:
   fabric_storage:

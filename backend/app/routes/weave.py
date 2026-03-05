@@ -9,6 +9,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import time
@@ -30,6 +31,23 @@ DEFAULT_MODEL = "qwen3-coder-30b"
 DEFAULT_CWD = "/fabric_storage" if os.path.isdir("/fabric_storage") else os.path.expanduser("~")
 MAX_OUTPUT = 12_000
 CMD_TIMEOUT = 30
+
+# Tool calling mode:
+#   "native"  = OpenAI function-calling API (requires vLLM --enable-auto-tool-choice)
+#   "prompt"  = tools embedded in system prompt, model outputs <tool_call> XML (any model)
+#   "auto"    = use native for models in NATIVE_TOOL_MODELS, prompt for everything else
+TOOL_MODE = os.environ.get("WEAVE_TOOL_MODE", "auto")
+
+# Comma-separated list of model names that support native tool calling.
+# Only used when TOOL_MODE="auto". Models not in this list get prompt-based mode.
+# Example: WEAVE_NATIVE_TOOL_MODELS=qwen3-coder-30b,qwen3-coder-480b
+NATIVE_TOOL_MODELS: set[str] = set(
+    m.strip() for m in os.environ.get("WEAVE_NATIVE_TOOL_MODELS", "").split(",") if m.strip()
+)
+
+# Regex for extracting tool calls and results from prompt-based mode
+_TOOL_CALL_RE = re.compile(r'<tool_call>\s*(.*?)\s*</tool_call>', re.DOTALL)
+_TOOL_RESULT_RE = re.compile(r'<tool_result\s+name="([^"]*)">\s*(.*?)\s*</tool_result>', re.DOTALL)
 
 # Models cache
 _models_cache: list[dict] | None = None
@@ -66,12 +84,62 @@ def _load_weave_md() -> str:
     return _FALLBACK_PROMPT
 
 
-def _build_system_prompt(cwd: str = DEFAULT_CWD) -> str:
+def _build_tools_prompt() -> str:
+    """Build compact tool reference for prompt-based tool calling."""
+    lines = [
+        "## Tool Calling",
+        "",
+        "To use a tool, output exactly this format (including the XML tags):",
+        "",
+        "<tool_call>",
+        '{"name": "tool_name", "arguments": {"param": "value"}}',
+        "</tool_call>",
+        "",
+        "Rules:",
+        "- Call ONE tool at a time and wait for the <tool_result> before calling another",
+        "- Always use valid JSON inside the tool_call tags",
+        "- The arguments field must be an object (not positional args)",
+        "- Do NOT wrap tool calls in markdown code blocks",
+        "",
+        "### Tool Reference",
+        "",
+    ]
+
+    for tool in TOOLS:
+        fn = tool["function"]
+        name = fn["name"]
+        desc = fn["description"]
+        if len(desc) > 100:
+            desc = desc[:97] + "..."
+
+        props = fn.get("parameters", {}).get("properties", {})
+        required = set(fn.get("parameters", {}).get("required", []))
+
+        params = []
+        for k in props:
+            suffix = "" if k in required else "?"
+            params.append(f"{k}{suffix}")
+
+        sig = ", ".join(params) if params else ""
+        lines.append(f"- `{name}({sig})` — {desc}")
+
+    return "\n".join(lines)
+
+
+def _build_system_prompt(cwd: str = DEFAULT_CWD, model: str = DEFAULT_MODEL) -> str:
     base = _load_weave_md()
     skills = _load_skills()
     agents = _load_agents()
 
-    parts = [base, "", f"Working directory: {cwd}", ""]
+    parts = [base, ""]
+
+    # Add tool-calling instructions when NOT using native mode for this model
+    if not _use_native_tools(model):
+        parts.append(_build_tools_prompt())
+        parts.append("")
+
+    parts.append(f"Working directory: {cwd}")
+    parts.append("")
 
     if skills:
         parts.append("## Currently Available Skills")
@@ -219,7 +287,11 @@ def _tool_summary_py(name: str, args: dict) -> str:
 
 
 def _messages_to_items(messages: list[dict]) -> list[dict]:
-    """Convert stored OpenAI messages to frontend ChatItem format."""
+    """Convert stored OpenAI messages to frontend ChatItem format.
+
+    Handles both native tool-calling format (tool_calls array + role:tool)
+    and prompt-based format (<tool_call> in text + <tool_result> in user msg).
+    """
     items: list[dict] = []
     turn_id = 0
     tool_call_map: dict[str, int] = {}
@@ -230,8 +302,21 @@ def _messages_to_items(messages: list[dict]) -> list[dict]:
             continue
 
         if role == "user":
-            turn_id += 1
             text = msg.get("content", "")
+            # Skip tool result messages (prompt-based mode)
+            if text.lstrip().startswith("<tool_result"):
+                # Attach results to matching tool items
+                for m in _TOOL_RESULT_RE.finditer(text):
+                    rname, rtext = m.group(1), m.group(2)
+                    for i in reversed(range(len(items))):
+                        if (items[i].get("kind") == "tool"
+                                and items[i].get("name") == rname
+                                and "result" not in items[i]):
+                            items[i]["result"] = rtext
+                            break
+                continue
+
+            turn_id += 1
             # Strip skill/agent injected prompts — show original user text
             if text.startswith("[Skill:") or text.startswith("[Agent:"):
                 idx = text.find("User request:")
@@ -240,9 +325,39 @@ def _messages_to_items(messages: list[dict]) -> list[dict]:
             items.append({"kind": "user", "text": text, "turnId": turn_id})
 
         elif role == "assistant":
-            content = msg.get("content")
-            if content:
-                items.append({"kind": "assistant", "text": content, "turnId": turn_id})
+            content = msg.get("content", "")
+
+            # Prompt-based: extract <tool_call> blocks from content
+            if content and "<tool_call>" in content:
+                display = _TOOL_CALL_RE.sub("", content).strip()
+                # Also strip think blocks from display
+                display = re.sub(r'<think>.*?</think>', '', display, flags=re.DOTALL).strip()
+                if display:
+                    items.append({"kind": "assistant", "text": display, "turnId": turn_id})
+                for m in _TOOL_CALL_RE.finditer(content):
+                    try:
+                        data = json.loads(m.group(1))
+                        name = data.get("name", "")
+                        args = data.get("arguments", {})
+                        items.append({
+                            "kind": "tool",
+                            "name": name,
+                            "args": args,
+                            "summary": _tool_summary_py(name, args),
+                            "expanded": False,
+                            "turnId": turn_id,
+                        })
+                    except (json.JSONDecodeError, TypeError):
+                        continue
+            else:
+                # Regular text or native format
+                display = content
+                if display:
+                    display = re.sub(r'<think>.*?</think>', '', display, flags=re.DOTALL).strip()
+                if display:
+                    items.append({"kind": "assistant", "text": display, "turnId": turn_id})
+
+            # Native tool calls (tool_calls array in the message)
             for tc in msg.get("tool_calls", []):
                 fn = tc.get("function", {})
                 name = fn.get("name", "")
@@ -638,13 +753,14 @@ async def weave_ws(websocket: WebSocket):
     messages: list[dict] = []
     current_model = DEFAULT_MODEL
     current_cwd = DEFAULT_CWD
+    cancel_event = asyncio.Event()
 
     def _init_session(sess: dict) -> None:
         nonlocal session, messages, current_model, current_cwd
         session = sess
         current_cwd = sess.get("folder", DEFAULT_CWD)
         current_model = sess.get("model", DEFAULT_MODEL)
-        system_prompt = _build_system_prompt(current_cwd)
+        system_prompt = _build_system_prompt(current_cwd, current_model)
         messages.clear()
         messages.append({"role": "system", "content": system_prompt})
         # Restore stored messages
@@ -724,7 +840,7 @@ async def weave_ws(websocket: WebSocket):
                 action, processed = _handle_slash_command(user_text)
 
                 if action == "clear":
-                    system_prompt = _build_system_prompt(current_cwd)
+                    system_prompt = _build_system_prompt(current_cwd, current_model)
                     messages.clear()
                     messages.append({"role": "system", "content": system_prompt})
                     if session:
@@ -741,11 +857,44 @@ async def weave_ws(websocket: WebSocket):
                     continue
 
                 messages.append({"role": "user", "content": processed})
-                await _agent_turn(websocket, client, messages, current_model, current_cwd)
+                cancel_event.clear()
+
+                # Run agent turn concurrently so we can receive stop messages
+                agent_task = asyncio.create_task(
+                    _agent_turn(websocket, client, messages, current_model, current_cwd, cancel_event)
+                )
+                # Listen for stop messages while the agent is working
+                try:
+                    while not agent_task.done():
+                        receive_task = asyncio.create_task(websocket.receive_text())
+                        done, _ = await asyncio.wait(
+                            {agent_task, receive_task},
+                            return_when=asyncio.FIRST_COMPLETED,
+                        )
+                        if receive_task in done:
+                            try:
+                                raw2 = receive_task.result()
+                                data2 = json.loads(raw2)
+                                if data2.get("type") == "stop":
+                                    cancel_event.set()
+                            except Exception:
+                                pass
+                        else:
+                            receive_task.cancel()
+                            try:
+                                await receive_task
+                            except (asyncio.CancelledError, Exception):
+                                pass
+                    # Re-raise any exception from the agent task
+                    await agent_task
+                except WebSocketDisconnect:
+                    agent_task.cancel()
+                    raise
+
                 _save_current()
 
             elif msg_type == "clear":
-                system_prompt = _build_system_prompt(current_cwd)
+                system_prompt = _build_system_prompt(current_cwd, current_model)
                 messages.clear()
                 messages.append({"role": "system", "content": system_prompt})
                 if session:
@@ -772,12 +921,50 @@ async def weave_ws(websocket: WebSocket):
             pass
 
 
+def _extract_tool_calls(text: str) -> list[dict]:
+    """Extract tool calls from assistant text (prompt-based mode)."""
+    calls = []
+    for m in _TOOL_CALL_RE.finditer(text):
+        try:
+            data = json.loads(m.group(1))
+            if "name" in data:
+                calls.append(data)
+        except json.JSONDecodeError:
+            continue
+    return calls
+
+
+def _use_native_tools(model: str) -> bool:
+    """Decide whether to use native tool calling for a given model."""
+    if TOOL_MODE == "native":
+        return True
+    if TOOL_MODE == "prompt":
+        return False
+    # auto mode: use native only for explicitly listed models
+    return model in NATIVE_TOOL_MODELS
+
+
 async def _agent_turn(ws: WebSocket, client: Any, messages: list[dict],
-                      model: str = DEFAULT_MODEL, cwd: str = DEFAULT_CWD) -> None:
+                      model: str = DEFAULT_MODEL, cwd: str = DEFAULT_CWD,
+                      cancel: asyncio.Event | None = None) -> None:
+    """Dispatch to native or prompt-based tool calling."""
+    if _use_native_tools(model):
+        return await _agent_turn_native(ws, client, messages, model, cwd, cancel)
+    return await _agent_turn_prompt(ws, client, messages, model, cwd, cancel)
+
+
+async def _agent_turn_native(ws: WebSocket, client: Any, messages: list[dict],
+                              model: str = DEFAULT_MODEL, cwd: str = DEFAULT_CWD,
+                              cancel: asyncio.Event | None = None) -> None:
+    """Agent turn using OpenAI native function calling (requires server support)."""
     loop = asyncio.get_event_loop()
     iteration = 0
 
     while True:
+        if cancel and cancel.is_set():
+            await ws.send_json({"type": "stopped"})
+            return
+
         if iteration == 0:
             await ws.send_json({"type": "status", "message": "Thinking..."})
         else:
@@ -802,6 +989,12 @@ async def _agent_turn(ws: WebSocket, client: Any, messages: list[dict],
 
         try:
             for chunk in response:
+                if cancel and cancel.is_set():
+                    try:
+                        response.close()
+                    except Exception:
+                        pass
+                    break
                 if not chunk.choices:
                     continue
                 delta = chunk.choices[0].delta
@@ -836,6 +1029,13 @@ async def _agent_turn(ws: WebSocket, client: Any, messages: list[dict],
             await ws.send_json({"type": "error", "content": f"Stream error: {e}"})
             return
 
+        if cancel and cancel.is_set():
+            await ws.send_json({"type": "text_done"})
+            if content:
+                messages.append({"role": "assistant", "content": content})
+            await ws.send_json({"type": "stopped"})
+            return
+
         await ws.send_json({"type": "text_done"})
 
         msg: dict = {"role": "assistant"}
@@ -856,6 +1056,10 @@ async def _agent_turn(ws: WebSocket, client: Any, messages: list[dict],
 
         await ws.send_json({"type": "status", "message": "Executing tools..."})
         for i, tc in enumerate(tc_list):
+            if cancel and cancel.is_set():
+                await ws.send_json({"type": "stopped"})
+                return
+
             tc_id = tc["id"] or f"call_{i}"
             name = tc["name"]
             try:
@@ -871,3 +1075,130 @@ async def _agent_turn(ws: WebSocket, client: Any, messages: list[dict],
 
             await ws.send_json({"type": "tool_result", "name": name, "result": result})
             messages.append({"role": "tool", "tool_call_id": tc_id, "content": result})
+
+
+async def _agent_turn_prompt(ws: WebSocket, client: Any, messages: list[dict],
+                              model: str = DEFAULT_MODEL, cwd: str = DEFAULT_CWD,
+                              cancel: asyncio.Event | None = None) -> None:
+    """Agent turn using prompt-based tool calling (works with any model).
+
+    Tools are described in the system prompt. The model outputs <tool_call> tags
+    in its text, which we parse, execute, and feed back as <tool_result> blocks.
+    """
+    loop = asyncio.get_event_loop()
+    max_iters = 15
+
+    for iteration in range(max_iters):
+        if cancel and cancel.is_set():
+            await ws.send_json({"type": "stopped"})
+            return
+
+        if iteration == 0:
+            await ws.send_json({"type": "status", "message": "Thinking..."})
+        else:
+            await ws.send_json({"type": "status", "message": "Analyzing results..."})
+
+        await ws.send_json({"type": "assistant_start"})
+
+        try:
+            response = await loop.run_in_executor(
+                None, lambda: client.chat.completions.create(
+                    model=model, messages=messages, stream=True,
+                )
+            )
+        except Exception as e:
+            await ws.send_json({"type": "error", "content": f"API error: {e}"})
+            return
+
+        full_text = ""
+        in_think = False
+        in_tool = False
+
+        try:
+            for chunk in response:
+                if cancel and cancel.is_set():
+                    try:
+                        response.close()
+                    except Exception:
+                        pass
+                    break
+                if not chunk.choices:
+                    continue
+                delta = chunk.choices[0].delta
+                if not delta.content:
+                    continue
+
+                piece = delta.content
+                full_text += piece
+
+                # Display filtering — hide <think> and <tool_call> blocks
+                display = piece
+
+                if "<think>" in display:
+                    in_think = True
+                    display = display.split("<think>")[0]
+                if "</think>" in display:
+                    in_think = False
+                    display = display.split("</think>", 1)[-1]
+                if in_think:
+                    display = ""
+
+                if "<tool_call>" in display:
+                    in_tool = True
+                    display = display.split("<tool_call>")[0]
+                if "</tool_call>" in display:
+                    in_tool = False
+                    display = display.split("</tool_call>", 1)[-1]
+                if in_tool:
+                    display = ""
+
+                if display:
+                    await ws.send_json({"type": "text", "content": display})
+        except Exception as e:
+            await ws.send_json({"type": "error", "content": f"Stream error: {e}"})
+            return
+
+        if cancel and cancel.is_set():
+            await ws.send_json({"type": "text_done"})
+            if full_text:
+                messages.append({"role": "assistant", "content": full_text})
+            await ws.send_json({"type": "stopped"})
+            return
+
+        await ws.send_json({"type": "text_done"})
+
+        # Store full assistant message (including tool_call tags for session replay)
+        messages.append({"role": "assistant", "content": full_text})
+
+        # Extract tool calls from the full response text
+        tool_calls = _extract_tool_calls(full_text)
+
+        if not tool_calls:
+            await ws.send_json({"type": "turn_done"})
+            return
+
+        # Execute tool calls
+        await ws.send_json({"type": "status", "message": "Executing tools..."})
+        result_parts = []
+        for tc in tool_calls:
+            if cancel and cancel.is_set():
+                await ws.send_json({"type": "stopped"})
+                return
+
+            name = tc.get("name", "unknown")
+            args = tc.get("arguments", {})
+
+            label = name.replace("_", " ")
+            await ws.send_json({"type": "status", "message": f"Running {label}..."})
+            await ws.send_json({"type": "tool_call", "name": name, "args": args})
+
+            result = await loop.run_in_executor(None, _exec_tool, name, args, cwd)
+
+            await ws.send_json({"type": "tool_result", "name": name, "result": result})
+            result_parts.append(f'<tool_result name="{name}">\n{result}\n</tool_result>')
+
+        # Feed results back as a user message
+        messages.append({"role": "user", "content": "\n\n".join(result_parts)})
+
+    # Safety: max iterations reached
+    await ws.send_json({"type": "turn_done"})

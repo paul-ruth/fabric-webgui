@@ -2,16 +2,19 @@ services:
   fabric-webui:
     image: pruth/fabric-webui:latest
     ports:
-      - "3000:3000"
-      - "8000:8000"
+      - "3000:3000"        # Web UI (nginx)
+      - "8000:8000"        # Backend API (direct access)
+      - "9100-9199:9100-9199"  # SSH tunnels for My Web Apps
     volumes:
-      - fabric_config:/fabric_config
       - fabric_storage:/fabric_storage
     environment:
-      - FABRIC_CONFIG_DIR=/fabric_config
+      - FABRIC_CONFIG_DIR=/fabric_storage/.fabric_config
       - FABRIC_STORAGE_DIR=/fabric_storage
+      - HOME=/tmp
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
     restart: unless-stopped
 
 volumes:
-  fabric_config:
   fabric_storage:

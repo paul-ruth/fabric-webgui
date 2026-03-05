@@ -118,6 +118,12 @@ const ArrowUpIcon = () => (
   </svg>
 );
 
+const StopIcon = () => (
+  <svg viewBox="0 0 24 24" fill="currentColor">
+    <rect x="6" y="6" width="12" height="12" rx="2" />
+  </svg>
+);
+
 const PlusIcon = () => (
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
     <line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" />
@@ -316,6 +322,12 @@ export default function WeaveChat() {
           refreshChatList();
           break;
 
+        case 'stopped':
+          setStreaming(false);
+          setStatus('');
+          currentAssistantRef.current = '';
+          break;
+
         case 'error':
           setStreaming(false);
           setStatus('');
@@ -381,6 +393,12 @@ export default function WeaveChat() {
     setShowAutocomplete(false);
     if (textareaRef.current) textareaRef.current.style.height = 'auto';
   }, [input, selectedModel]);
+
+  const stopGeneration = useCallback(() => {
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    ws.send(JSON.stringify({ type: 'stop' }));
+  }, []);
 
   const clearChat = useCallback(() => {
     const ws = wsRef.current;
@@ -670,14 +688,24 @@ export default function WeaveChat() {
                   {'\u{1F5D1}'}
                 </button>
               )}
-              <button
-                className="weave-send-btn"
-                onClick={sendMessage}
-                disabled={!connected || streaming || !input.trim()}
-                title="Send message"
-              >
-                <ArrowUpIcon />
-              </button>
+              {streaming ? (
+                <button
+                  className="weave-stop-btn"
+                  onClick={stopGeneration}
+                  title="Stop generation"
+                >
+                  <StopIcon />
+                </button>
+              ) : (
+                <button
+                  className="weave-send-btn"
+                  onClick={sendMessage}
+                  disabled={!connected || !input.trim()}
+                  title="Send message"
+                >
+                  <ArrowUpIcon />
+                </button>
+              )}
             </div>
           </div>
         </div>

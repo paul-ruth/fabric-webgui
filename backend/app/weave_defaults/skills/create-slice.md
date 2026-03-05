@@ -1,53 +1,95 @@
 name: create-slice
-description: Create a new FABRIC slice — from a template or custom specification
+description: Create a new FABRIC slice — from template, custom spec, or saved topology
 ---
-Create a new FABRIC slice. There are two approaches:
+Create a new FABRIC slice. There are multiple approaches:
 
 ## Option 1: From a Template
 
-If the user mentions a template or wants a pre-built topology:
+If the user wants a pre-built topology:
 
-1. Call `fabric_list_templates` to show available templates
-2. Call `fabric_create_from_template(template_name, slice_name)` to create the draft
-3. Show what was created (nodes, sites, networks)
-4. If the user wants to submit/deploy, call `fabric_submit_slice(slice_name)`
+1. `fabric_list_templates` — show available templates
+2. `fabric_create_from_template(template_name, slice_name)` — create the draft
+3. Show the preview (nodes, sites, resources, networks)
+4. Confirm with user, then `fabric_submit_slice(slice_name)` to deploy
 
 ## Option 2: Custom Specification
 
 If the user describes a custom topology:
 
-1. **Understand the request**: How many nodes? What topology? What resources?
+1. **Understand the request**: How many nodes? What topology? Resources? GPUs? Networks?
 
-2. **Check resources**: Call `fabric_list_sites` to find sites with availability
+2. **Check resources**: `fabric_find_sites` to find sites with required hardware,
+   or `fabric_list_sites` for a full overview.
 
-3. **Create the draft**: Call `fabric_create_slice(slice_name, nodes, networks)` with:
-   - Node specs: name, site (or "auto"), cores, ram, disk, image, nic_model, gpu_model
-   - Network specs: name, type (L2Bridge/L2STS/FABNetv4/etc.), interfaces (node names)
+3. **Create the draft**: `fabric_create_slice(slice_name, nodes, networks)` with full specs.
 
-4. **Report**: Show what was created. If the user wants to deploy, use
-   `fabric_submit_slice(slice_name)` to provision.
+4. **Confirm**: Show the user what will be created. If they approve:
+   `fabric_submit_slice(slice_name, wait=true)` for small slices (1-3 nodes),
+   `wait=false` for larger ones.
 
-## Option 3: Create a Reusable Template
+5. **Verify**: `fabric_get_slice` or `fabric_wait_slice` to confirm provisioning.
 
-If the user wants to save the design as a reusable template (not deploy it now):
+## Option 3: Easy L3 Networking with fabnet
 
-1. Create the template directory at `/fabric_storage/.slice_templates/<DirName>/`:
-   - `metadata.json` — name, description, node_count, network_count, builtin: false
-   - `template.fabric.json` — the full topology definition
-   - `tools/deploy.sh` — if software needs to be installed (with ### PROGRESS markers)
+For simple cross-site IP connectivity, use the `fabnet` shorthand on each node:
 
-2. Verify by reading back the created files.
+```
+fabric_create_slice(
+  slice_name="my-l3-slice",
+  nodes=[
+    {name: "node1", site: "STAR", fabnet: "v4"},
+    {name: "node2", site: "TACC", fabnet: "v4"}
+  ]
+)
+```
 
-## Submitting / Deploying
+This auto-assigns IPv4 addresses and routes. No manual network definition needed.
 
-After creating a draft (Options 1 or 2), the user may want to submit it:
-- Call `fabric_submit_slice(slice_name, wait=false)` to provision
-- For small slices (1-2 nodes), `wait=true` is OK
+## Node Spec Fields
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| name | required | Unique node name |
+| site | "auto" | Site name or "auto" for best available |
+| cores | 2 | CPU cores (1-128) |
+| ram | 8 | RAM in GB (2-512) |
+| disk | 10 | Disk in GB (10-500) |
+| image | default_ubuntu_22 | VM image (use `fabric_list_images` for full list) |
+| nic_model | NIC_Basic | NIC type for network connections |
+| components | [] | Extra hardware: `[{model: "GPU_A40", name: "gpu1"}]` |
+| fabnet | (none) | "v4", "v6", or "both" for auto L3 networking |
+| post_boot_commands | [] | Shell commands to run after boot |
+
+## Network Spec Fields
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| name | required | Network name |
+| type | L2Bridge | L2Bridge, L2STS, L2PTP, FABNetv4, FABNetv6, FABNetv4Ext, FABNetv6Ext |
+| interfaces | required | List of node names to connect |
+| subnet | (auto) | Optional CIDR for L2 networks (e.g. "192.168.1.0/24") |
+
+## Component Models
+
+**NICs:** NIC_Basic, NIC_ConnectX_5, NIC_ConnectX_6, NIC_ConnectX_7_100, NIC_ConnectX_7_400, NIC_BlueField_2_ConnectX_6
+**GPUs:** GPU_RTX6000, GPU_TeslaT4, GPU_A30, GPU_A40
+**FPGAs:** FPGA_Xilinx_U280, FPGA_Xilinx_SN1022
+**Storage:** NVME_P4510
+
+## Draft Storage
+
+Drafts created by `fabric_create_slice` or `fabric_create_from_template` are
+automatically saved to `/fabric_storage/.drafts/` and registered in the web UI.
+They appear as "Draft" state in the slice selector and slice table after the
+next refresh. Users can review, edit, or submit them from the web UI.
+
+## Tips
+
+- Use "auto" for sites unless the user specifies — picks the best available
+- Use FABNetv4 or `fabnet: "v4"` for cross-site IP connectivity (simplest)
+- Use L2Bridge for same-site Layer 2
+- Use L2STS for cross-site Layer 2
+- L2PTP is for exactly 2 interfaces (point-to-point)
+- Minimum practical node: 2 cores, 4GB RAM, 10GB disk
+- For GPU nodes: check availability first with `fabric_find_sites(component="GPU_A40")`
 - Always confirm with the user before submitting — it allocates real resources
-
-## Defaults
-
-- Image: `default_ubuntu_22`
-- NIC: `NIC_Basic` (unless high-performance needed)
-- Site: `auto` (picks best available) or `@group` tags for co-location
-- Interface naming: `{node-name}-{component-name}-p{port}`

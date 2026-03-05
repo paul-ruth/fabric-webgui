@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import readline
 import subprocess
 import sys
@@ -26,6 +27,38 @@ API_BASE = (
 MODEL = os.environ.get("WEAVE_MODEL", "qwen3-coder-30b")
 MAX_OUTPUT = 12_000
 CMD_TIMEOUT = 30
+
+# Tool calling mode (same as WebSocket version):
+#   "native"  = OpenAI function-calling API (requires vLLM --enable-auto-tool-choice)
+#   "prompt"  = tools embedded in system prompt, model outputs <tool_call> XML
+#   "auto"    = native for models in NATIVE_TOOL_MODELS, prompt for everything else
+TOOL_MODE = os.environ.get("WEAVE_TOOL_MODE", "auto")
+NATIVE_TOOL_MODELS: set[str] = set(
+    m.strip() for m in os.environ.get("WEAVE_NATIVE_TOOL_MODELS", "").split(",") if m.strip()
+)
+
+_TOOL_CALL_RE = re.compile(r'<tool_call>\s*(.*?)\s*</tool_call>', re.DOTALL)
+
+
+def _use_native_tools(model: str) -> bool:
+    if TOOL_MODE == "native":
+        return True
+    if TOOL_MODE == "prompt":
+        return False
+    return model in NATIVE_TOOL_MODELS
+
+
+def _extract_tool_calls(text: str) -> list[dict]:
+    """Extract tool calls from assistant text (prompt-based mode)."""
+    calls = []
+    for m in _TOOL_CALL_RE.finditer(text):
+        try:
+            data = json.loads(m.group(1))
+            if "name" in data:
+                calls.append(data)
+        except json.JSONDecodeError:
+            continue
+    return calls
 
 
 def _detect_api_key() -> str:
@@ -60,6 +93,21 @@ def _detect_api_key() -> str:
 
 
 API_KEY = _detect_api_key()
+
+
+def _fetch_models() -> list[str]:
+    """Fetch available model IDs from the AI server."""
+    try:
+        import urllib.request
+        req = urllib.request.Request(
+            f"{API_BASE}/models",
+            headers={"Authorization": f"Bearer {API_KEY}"},
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read())
+            return sorted(m["id"] for m in data.get("data", []))
+    except Exception:
+        return []
 
 # ─── ANSI Colors (FABRIC brand) ──────────────────────────────────────────────
 
@@ -172,12 +220,57 @@ def _load_weave_md() -> str:
     return _FALLBACK_PROMPT
 
 
-def _build_system_prompt(cwd: str) -> str:
+def _build_tools_prompt() -> str:
+    """Build compact tool reference for prompt-based tool calling."""
+    lines = [
+        "## Tool Calling",
+        "",
+        "To use a tool, output exactly this format (including the XML tags):",
+        "",
+        "<tool_call>",
+        '{"name": "tool_name", "arguments": {"param": "value"}}',
+        "</tool_call>",
+        "",
+        "Rules:",
+        "- Call ONE tool at a time and wait for the <tool_result> before calling another",
+        "- Always use valid JSON inside the tool_call tags",
+        "- The arguments field must be an object (not positional args)",
+        "- Do NOT wrap tool calls in markdown code blocks",
+        "",
+        "### Tool Reference",
+        "",
+    ]
+    for tool in TOOLS:
+        fn = tool["function"]
+        name = fn["name"]
+        desc = fn["description"]
+        if len(desc) > 100:
+            desc = desc[:97] + "..."
+        props = fn.get("parameters", {}).get("properties", {})
+        required = set(fn.get("parameters", {}).get("required", []))
+        params = []
+        for k in props:
+            suffix = "" if k in required else "?"
+            params.append(f"{k}{suffix}")
+        sig = ", ".join(params) if params else ""
+        lines.append(f"- `{name}({sig})` — {desc}")
+    return "\n".join(lines)
+
+
+def _build_system_prompt(cwd: str, model: str = MODEL) -> str:
     base = _load_weave_md()
     skills = _load_skills()
     agents = _load_agents()
 
-    parts = [base, "", f"Working directory: {cwd}", ""]
+    parts = [base, ""]
+
+    # Add tool-calling instructions when NOT using native mode
+    if not _use_native_tools(model):
+        parts.append(_build_tools_prompt())
+        parts.append("")
+
+    parts.append(f"Working directory: {cwd}")
+    parts.append("")
 
     if _fablib_tools_available:
         parts.append("## FABRIC Authentication")
@@ -569,7 +662,7 @@ class WeaveAgent:
         self.messages: list[dict] = [
             {
                 "role": "system",
-                "content": _build_system_prompt(os.getcwd()),
+                "content": _build_system_prompt(os.getcwd(), model),
             }
         ]
         self.client = OpenAI(api_key=API_KEY, base_url=API_BASE)
@@ -579,10 +672,16 @@ class WeaveAgent:
     def chat(self, user_msg: str) -> None:
         self.messages.append({"role": "user", "content": user_msg})
 
-        while True:
-            content, tool_calls = self._stream()
+        if _use_native_tools(self.model):
+            self._chat_native()
+        else:
+            self._chat_prompt()
 
-            # Build assistant message
+    def _chat_native(self) -> None:
+        """Native OpenAI function-calling loop."""
+        while True:
+            content, tool_calls = self._stream_native()
+
             msg: dict = {"role": "assistant"}
             if content:
                 msg["content"] = content
@@ -616,6 +715,28 @@ class WeaveAgent:
                     {"role": "tool", "tool_call_id": tc_id, "content": result}
                 )
 
+    def _chat_prompt(self) -> None:
+        """Prompt-based tool calling — tools in system prompt, <tool_call> XML in output."""
+        max_iters = 15
+        for _ in range(max_iters):
+            full_text = self._stream_prompt()
+            self.messages.append({"role": "assistant", "content": full_text})
+
+            tool_calls = _extract_tool_calls(full_text)
+            if not tool_calls:
+                break
+
+            result_parts = []
+            for tc in tool_calls:
+                name = tc.get("name", "unknown")
+                args = tc.get("arguments", {})
+                _print_tool_call(name, json.dumps(args))
+                result = execute_tool(name, args)
+                _print_tool_result(name, result)
+                result_parts.append(f'<tool_result name="{name}">\n{result}\n</tool_result>')
+
+            self.messages.append({"role": "user", "content": "\n\n".join(result_parts)})
+
     def compact(self) -> None:
         if len(self.messages) <= 3:
             _info("Nothing to compact.")
@@ -631,7 +752,8 @@ class WeaveAgent:
 
     # ── Streaming ──
 
-    def _stream(self) -> tuple[str, list[dict]]:
+    def _stream_native(self) -> tuple[str, list[dict]]:
+        """Stream with native OpenAI function calling."""
         try:
             stream = self.client.chat.completions.create(
                 model=self.model,
@@ -640,9 +762,6 @@ class WeaveAgent:
                 stream=True,
             )
         except Exception as e:
-            err = str(e).lower()
-            if "tool" in err or "function" in err:
-                return self._stream_plain()
             _error(f"API error: {e}")
             return "", []
 
@@ -657,11 +776,8 @@ class WeaveAgent:
                     continue
                 delta = chunk.choices[0].delta
 
-                # ── Text ──
                 if delta.content:
                     text = delta.content
-
-                    # Strip <think>…</think> blocks (Qwen thinking mode)
                     if "<think>" in text:
                         in_think = True
                         text = text.split("<think>")[0]
@@ -670,7 +786,6 @@ class WeaveAgent:
                         text = text.split("</think>", 1)[-1]
                     if in_think:
                         continue
-
                     if text:
                         if not started:
                             sys.stdout.write(f"\n{F_PRIMARY}")
@@ -679,16 +794,11 @@ class WeaveAgent:
                         sys.stdout.flush()
                         content += text
 
-                # ── Tool calls ──
                 if delta.tool_calls:
                     for tc in delta.tool_calls:
                         idx = tc.index
                         if idx not in tool_calls:
-                            tool_calls[idx] = {
-                                "id": "",
-                                "name": "",
-                                "arguments": "",
-                            }
+                            tool_calls[idx] = {"id": "", "name": "", "arguments": ""}
                         if tc.id:
                             tool_calls[idx]["id"] = tc.id
                         if tc.function:
@@ -708,33 +818,68 @@ class WeaveAgent:
 
         return content, list(tool_calls.values())
 
-    def _stream_plain(self) -> tuple[str, list[dict]]:
-        """Fallback: stream without tool calling."""
+    def _stream_prompt(self) -> str:
+        """Stream without tools param — parse <tool_call> tags from text."""
         try:
             stream = self.client.chat.completions.create(
                 model=self.model,
                 messages=self.messages,
                 stream=True,
             )
-            content = ""
-            started = False
+        except Exception as e:
+            _error(f"API error: {e}")
+            return ""
+
+        full_text = ""
+        in_think = False
+        in_tool = False
+        started = False
+
+        try:
             for chunk in stream:
                 if not chunk.choices:
                     continue
                 text = chunk.choices[0].delta.content or ""
-                if text:
+                if not text:
+                    continue
+
+                full_text += text
+                display = text
+
+                if "<think>" in display:
+                    in_think = True
+                    display = display.split("<think>")[0]
+                if "</think>" in display:
+                    in_think = False
+                    display = display.split("</think>", 1)[-1]
+                if in_think:
+                    display = ""
+
+                if "<tool_call>" in display:
+                    in_tool = True
+                    display = display.split("<tool_call>")[0]
+                if "</tool_call>" in display:
+                    in_tool = False
+                    display = display.split("</tool_call>", 1)[-1]
+                if in_tool:
+                    display = ""
+
+                if display:
                     if not started:
                         sys.stdout.write(f"\n{F_PRIMARY}")
                         started = True
-                    sys.stdout.write(text)
+                    sys.stdout.write(display)
                     sys.stdout.flush()
-                    content += text
-            if started:
-                sys.stdout.write(f"{RST}\n")
-            return content, []
         except Exception as e:
-            _error(f"API error: {e}")
-            return "", []
+            if started:
+                sys.stdout.write(RST)
+            _error(f"Stream error: {e}")
+
+        if started:
+            sys.stdout.write(f"{RST}\n")
+            sys.stdout.flush()
+
+        return full_text
 
 
 # ─── UI Helpers ───────────────────────────────────────────────────────────────
@@ -814,14 +959,16 @@ def _print_help() -> None:
     print(f"""
   {F_PRIMARY}{BOLD}Weave Commands{RST}
   {C_GRAY}\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500{RST}
-  {F_TEAL}/help{RST}       Show this help
-  {F_TEAL}/clear{RST}      Clear conversation
-  {F_TEAL}/compact{RST}    Trim conversation history
-  {F_TEAL}/model{RST}      Show current model info
-  {F_TEAL}/msgs{RST}       Show message count
-  {F_TEAL}/skills{RST}     List available skills
-  {F_TEAL}/agents{RST}     List available agents
-  {F_TEAL}/quit{RST}       Exit Weave
+  {F_TEAL}/help{RST}           Show this help
+  {F_TEAL}/clear{RST}          Clear conversation
+  {F_TEAL}/compact{RST}        Trim conversation history
+  {F_TEAL}/model{RST}          Show current model
+  {F_TEAL}/model <name>{RST}   Switch to a different model
+  {F_TEAL}/models{RST}         List available models from the AI server
+  {F_TEAL}/msgs{RST}           Show message count
+  {F_TEAL}/skills{RST}         List available skills
+  {F_TEAL}/agents{RST}         List available agents
+  {F_TEAL}/quit{RST}           Exit Weave
 
   {C_GRAY}Use /<skill> <args> to invoke a skill{RST}
   {C_GRAY}Use @<agent> <args> to activate an agent{RST}
@@ -846,8 +993,28 @@ def _handle_command(cmd: str, agent: WeaveAgent) -> bool:
     elif command == "/compact":
         agent.compact()
     elif command == "/model":
-        print(f"  {C_GRAY}Model:  {RST}{F_TEAL}{MODEL}{RST}")
-        print(f"  {C_GRAY}Server: {RST}{F_TEAL}{API_BASE}{RST}")
+        if user_args:
+            new_model = user_args.strip()
+            available = _fetch_models()
+            if available and new_model not in available:
+                print(f"  {F_CORAL}Model '{new_model}' not found on server.{RST}")
+                print(f"  {C_GRAY}Available: {', '.join(available)}{RST}")
+            else:
+                agent.model = new_model
+                _info(f"Switched to model: {new_model}")
+        else:
+            print(f"  {C_GRAY}Model:  {RST}{F_TEAL}{agent.model}{RST}")
+            print(f"  {C_GRAY}Server: {RST}{F_TEAL}{API_BASE}{RST}")
+    elif command == "/models":
+        available = _fetch_models()
+        if available:
+            print(f"\n  {F_PRIMARY}{BOLD}Available Models{RST}")
+            for m in available:
+                marker = f" {F_TEAL}\u25c0 current{RST}" if m == agent.model else ""
+                print(f"  {C_GRAY}\u2022{RST} {m}{marker}")
+            print(f"\n  {C_GRAY}Use /model <name> to switch{RST}\n")
+        else:
+            _info(f"Could not fetch models from {API_BASE}")
     elif command == "/msgs":
         print(f"  {C_GRAY}Messages: {RST}{len(agent.messages)}")
     elif command == "/skills":

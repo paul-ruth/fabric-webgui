@@ -142,7 +142,7 @@ def _delete_persistent_draft(name: str) -> None:
 
 
 def _load_persistent_drafts() -> None:
-    """Load all persisted drafts from disk into memory on startup."""
+    """Scan .drafts/ and load any new drafts not yet in memory."""
     try:
         fablib = get_fablib()
     except Exception:
@@ -406,8 +406,6 @@ class ResolveSitesRequest(BaseModel):
 # Heavy FABlib calls use async + asyncio.to_thread() so they don't block
 # the event loop or exhaust the default threadpool for other requests.
 
-_persistent_drafts_loaded = False
-
 @router.get("/slices")
 async def list_slices() -> list[dict[str, Any]]:
     """List all slices visible to the current user.
@@ -418,16 +416,14 @@ async def list_slices() -> list[dict[str, Any]]:
        fast results, individually query by UUID to get its current state and
        ``has_errors``.  This catches slices that transitioned to terminal
        states (Dead, Closing, StableError) since the last list.
-    4. Append new (never-submitted) draft slices.
+    4. Scan .drafts/ on disk for new drafts (e.g. created by Weave).
+    5. Append new (never-submitted) draft slices.
     """
-    # Lazy-load persistent drafts on first list call
-    global _persistent_drafts_loaded
-    if not _persistent_drafts_loaded:
-        _persistent_drafts_loaded = True
-        try:
-            await asyncio.to_thread(_load_persistent_drafts)
-        except Exception:
-            logger.warning("Failed to load persistent drafts", exc_info=True)
+    # Scan .drafts/ for any new drafts not yet in memory
+    try:
+        await asyncio.to_thread(_load_persistent_drafts)
+    except Exception:
+        logger.warning("Failed to load persistent drafts", exc_info=True)
 
     current_pid = os.environ.get("FABRIC_PROJECT_ID", "")
 

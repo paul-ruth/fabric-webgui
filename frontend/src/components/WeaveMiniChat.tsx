@@ -72,6 +72,12 @@ const ArrowUpIcon = () => (
   </svg>
 );
 
+const StopIcon = () => (
+  <svg viewBox="0 0 24 24" fill="currentColor">
+    <rect x="6" y="6" width="12" height="12" rx="2" />
+  </svg>
+);
+
 /* ── Props ───────────────────────────────────────────────────────────────── */
 
 interface DragHandleProps {
@@ -193,6 +199,12 @@ export default function WeaveMiniChat({ onCollapse, dragHandleProps, panelIcon }
           currentAssistantRef.current = '';
           break;
 
+        case 'stopped':
+          setStreaming(false);
+          setStatus('');
+          currentAssistantRef.current = '';
+          break;
+
         case 'error':
           setStreaming(false);
           setStatus('');
@@ -226,6 +238,12 @@ export default function WeaveMiniChat({ onCollapse, dragHandleProps, panelIcon }
     setInput('');
     if (textareaRef.current) textareaRef.current.style.height = 'auto';
   }, [input, selectedModel]);
+
+  const stopGeneration = useCallback(() => {
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    ws.send(JSON.stringify({ type: 'stop' }));
+  }, []);
 
   const clearChat = useCallback(() => {
     const ws = wsRef.current;
@@ -345,14 +363,24 @@ export default function WeaveMiniChat({ onCollapse, dragHandleProps, panelIcon }
             rows={1}
             disabled={!connected || streaming}
           />
-          <button
-            className="wm-send-btn"
-            onClick={sendMessage}
-            disabled={!input.trim() || !connected || streaming}
-            title="Send"
-          >
-            <ArrowUpIcon />
-          </button>
+          {streaming ? (
+            <button
+              className="wm-stop-btn"
+              onClick={stopGeneration}
+              title="Stop generation"
+            >
+              <StopIcon />
+            </button>
+          ) : (
+            <button
+              className="wm-send-btn"
+              onClick={sendMessage}
+              disabled={!input.trim() || !connected}
+              title="Send"
+            >
+              <ArrowUpIcon />
+            </button>
+          )}
         </div>
         {models.length > 1 && (
           <select

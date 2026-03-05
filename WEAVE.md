@@ -68,24 +68,45 @@ You have these tools available:
 
 ### FABRIC Tools (FABlib)
 These tools interact directly with the FABRIC testbed using the user's credentials:
-- `fabric_list_slices` — List all slices (name, state, ID)
-- `fabric_get_slice` — Detailed slice info (nodes, networks, IPs, errors)
-- `fabric_list_sites` — All sites with resource availability and components
-- `fabric_list_hosts` — Per-host resources at a specific site
-- `fabric_create_slice` — Create a slice from a node/network spec (draft only)
-- `fabric_submit_slice` — Submit a draft slice for provisioning
-- `fabric_delete_slice` — Delete a slice and release resources
-- `fabric_slice_ssh` — Execute a command on a node via SSH
-- `fabric_renew_slice` — Extend a slice's lease by N days
-- `fabric_get_config` — Show current FABRIC configuration (project, token, etc.)
-- `fabric_set_config` — Set a FABRIC config value (updates fabric_rc and env)
-- `fabric_load_rc` — Load settings from a fabric_rc file
-- `fabric_list_projects` — List projects from the user's token
-- `fabric_set_project` — Set the active project by name or UUID
 
-**Prefer FABlib tools over Python scripts** for simple queries and operations.
-Only write Python scripts when the operation requires complex logic, loops,
-or data processing that the tools can't handle in a single call.
+**Slice Lifecycle:**
+- `fabric_list_slices` — List all slices (name, state, lease end, ID)
+- `fabric_get_slice(slice_name)` — Detailed info: nodes, networks, IPs, components, errors
+- `fabric_create_slice(slice_name, nodes, networks)` — Create a draft (not submitted)
+- `fabric_submit_slice(slice_name, wait)` — Submit draft for provisioning
+- `fabric_modify_slice(slice_name, add_nodes, remove_nodes, ...)` — Modify a running slice
+- `fabric_delete_slice(slice_name)` — Delete a slice (always confirm with user!)
+- `fabric_renew_slice(slice_name, days)` — Extend lease
+- `fabric_wait_slice(slice_name, timeout)` — Wait for provisioning + SSH readiness
+
+**SSH & File Transfer:**
+- `fabric_slice_ssh(slice_name, node_name, command)` — Execute command on a node
+- `fabric_upload_file(slice_name, node_name, local_path, remote_path)` — Upload to node
+- `fabric_download_file(slice_name, node_name, remote_path, local_path)` — Download from node
+- `fabric_node_info(slice_name, node_name)` — Detailed node info (SSH cmd, IPs, components)
+
+**Resource Queries:**
+- `fabric_list_sites(site_name?)` — Sites with resource availability and components
+- `fabric_list_hosts(site_name)` — Per-host resources at a site
+- `fabric_list_images` — All available VM images with default usernames
+- `fabric_list_components` — All NIC, GPU, FPGA, NVMe models
+- `fabric_find_sites(min_cores, min_ram, min_disk, component)` — Find sites with hardware
+
+**Configuration:**
+- `fabric_get_config` — Show fabric_rc settings
+- `fabric_set_config(key, value)` — Update a config value
+- `fabric_load_rc(path)` — Load from a fabric_rc file
+- `fabric_list_projects` — List user's projects
+- `fabric_set_project(project)` — Switch active project
+
+**Templates:**
+- `fabric_list_templates` — List slice templates
+- `fabric_create_from_template(template_name, slice_name?)` — Create draft from template
+
+**Prefer FABlib tools over Python scripts** for standard operations.
+Only write Python scripts for: sub-interfaces, port mirroring, VLAN tagging,
+CPU pinning, NUMA tuning, persistent storage (CephFS), batch operations,
+or complex data analysis with pandas/matplotlib.
 
 Use tools proactively. Read before editing. Verify after writing.
 
@@ -182,52 +203,78 @@ Key concepts:
 
 ## Available VM Images
 
-- `default_ubuntu_20` — Ubuntu 20.04 LTS
-- `default_ubuntu_22` — Ubuntu 22.04 LTS (recommended default)
-- `default_ubuntu_24` — Ubuntu 24.04 LTS
-- `default_centos_8` — CentOS 8 Stream
-- `default_centos_9` — CentOS Stream 9
-- `default_rocky_8` — Rocky Linux 8
-- `default_rocky_9` — Rocky Linux 9
-- `default_debian_11` — Debian 11 (Bullseye)
-- `default_debian_12` — Debian 12 (Bookworm)
+Use `fabric_list_images` to see all, or specify in `fabric_create_slice` nodes:
+
+| Image | User | Description |
+|-------|------|-------------|
+| default_ubuntu_22 | ubuntu | Ubuntu 22.04 LTS (recommended default) |
+| default_ubuntu_24 | ubuntu | Ubuntu 24.04 LTS |
+| default_ubuntu_20 | ubuntu | Ubuntu 20.04 LTS |
+| default_rocky_9 | rocky | Rocky Linux 9 |
+| default_rocky_8 | rocky | Rocky Linux 8 |
+| default_centos9_stream | cloud-user | CentOS 9 Stream |
+| default_centos10_stream | cloud-user | CentOS 10 Stream |
+| default_debian_12 | debian | Debian 12 Bookworm |
+| default_debian_11 | debian | Debian 11 Bullseye |
+| default_fedora_40 | fedora | Fedora 40 |
+| default_fedora_39 | fedora | Fedora 39 |
+| default_kali | kali | Kali Linux (pen testing) |
+| default_freebsd_14_zfs | freebsd | FreeBSD 14 with ZFS |
+| default_openbsd_7 | openbsd | OpenBSD 7 |
+| docker_ubuntu_22 | ubuntu | Ubuntu 22.04 with Docker |
+| docker_ubuntu_20 | ubuntu | Ubuntu 20.04 with Docker |
+| docker_rocky_9 | rocky | Rocky 9 with Docker |
+| docker_rocky_8 | rocky | Rocky 8 with Docker |
 
 ## Component Models
 
+These are the model names used with `node.add_component(model=...)` or
+in `fabric_create_slice` nodes' `components` or `nic_model` fields.
+
 ### NICs
-- `NIC_Basic` — 1 port, shared, works at any site (most common)
-- `NIC_ConnectX_5` — 2 ports, dedicated 25Gbps Mellanox
-- `NIC_ConnectX_6` — 2 ports, dedicated 100Gbps Mellanox
+- `NIC_Basic` — 1 port, shared 25Gbps ConnectX-6 (default, works at all sites)
+- `NIC_ConnectX_5` — 2 ports, dedicated 25Gbps SmartNIC (DPDK, RDMA capable)
+- `NIC_ConnectX_6` — 2 ports, dedicated 100Gbps SmartNIC (DPDK, RDMA capable)
+- `NIC_ConnectX_7_100` — 2 ports, dedicated 100Gbps ConnectX-7
+- `NIC_ConnectX_7_400` — 2 ports, dedicated 400Gbps ConnectX-7 (highest bandwidth)
+- `NIC_BlueField_2_ConnectX_6` — BlueField-2 DPU SmartNIC with ARM cores
 
 ### GPUs
-- `GPU_RTX6000` — NVIDIA RTX 6000 (24GB VRAM)
-- `GPU_TeslaT4` — NVIDIA Tesla T4 (16GB VRAM)
-- `GPU_A30` — NVIDIA A30 (24GB VRAM)
-- `GPU_A40` — NVIDIA A40 (48GB VRAM)
+- `GPU_RTX6000` — NVIDIA RTX 6000 (24GB VRAM, 4608 CUDA cores)
+- `GPU_TeslaT4` — NVIDIA Tesla T4 (16GB VRAM, inference-optimized)
+- `GPU_A30` — NVIDIA A30 (24GB HBM2, multi-instance GPU)
+- `GPU_A40` — NVIDIA A40 (48GB VRAM, visualization + compute)
+
+### FPGAs
+- `FPGA_Xilinx_U280` — Xilinx Alveo U280 (8GB HBM2, network processing)
+- `FPGA_Xilinx_SN1022` — Xilinx SN1022 SmartNIC FPGA
 
 ### Storage
-- `NVME_P4510` — 1TB NVMe SSD
-
-### Programmable Hardware
-- `FPGA_Xilinx_U280` — Xilinx Alveo U280
-- `SmartNIC_ConnectX_6` — Programmable Mellanox CX-6
-- `SmartNIC_ConnectX_5` — Programmable Mellanox CX-5
-- `SharedNIC_ConnectX_6` — Shared programmable CX-6
+- `NVME_P4510` — Intel P4510 NVMe SSD (1TB, high IOPS local storage)
 
 ## Network Types
 
-- **L2Bridge** — Layer 2 bridge, all nodes at the same site
-- **L2STS** — Layer 2 site-to-site, nodes at different sites
-- **L2PTP** — Layer 2 point-to-point, exactly 2 nodes
-- **L3VPN** — Layer 3 VPN across sites (IP routing included)
-- **FABNetv4** — FABRIC-managed IPv4 network (auto-assigned 10.128.0.0/10 addresses)
-- **FABNetv6** — FABRIC-managed IPv6 network (auto-assigned 2602:FCFB::/40 addresses)
-- **PortMirror** — Mirror traffic from a port
+| Type | Description | Cross-site? | IPs |
+|------|-------------|-------------|-----|
+| L2Bridge | Layer 2 switched network | Same site | Manual or subnet auto |
+| L2STS | Layer 2 site-to-site tunnel | Yes | Manual or subnet auto |
+| L2PTP | Point-to-point Layer 2 | Yes (exactly 2) | Manual |
+| FABNetv4 | Routed IPv4 (FABRIC backbone) | Yes | Auto (10.128.0.0/10) |
+| FABNetv6 | Routed IPv6 (FABRIC backbone) | Yes | Auto (2602:fcfb::/40) |
+| FABNetv4Ext | Publicly routable IPv4 | Yes | Auto (23.134.232.0/22) |
+| FABNetv6Ext | Publicly routable IPv6 | Yes | Auto |
+| PortMirror | Traffic mirror/capture | N/A | N/A |
 
 ### Network IP Configuration
 - `auto` — FABRIC assigns IP addresses automatically
 - `config` — User specifies IPs in the template
 - `none` — No IP configuration (manual boot config)
+
+### FABlib Network Shortcuts
+- `node.add_fabnet(net_type="IPv4")` — Easiest cross-site L3 (auto IPs + routes)
+- `node.add_route(subnet, next_hop)` — Add custom routing
+- `fablib.FABNETV4_SUBNET` = `10.128.0.0/10` — FABRIC IPv4 backbone
+- `fablib.FABNETV6_SUBNET` = `2602:fcfb::/40` — FABRIC IPv6 backbone
 
 ---
 
@@ -590,15 +637,87 @@ print(f"Available: {site.get_cpu_available()}")
 ```python
 # GPU
 gpu = node.add_component(model="GPU_RTX6000", name="gpu1")
+gpu = node.add_component(model="GPU_A40", name="gpu1")
 
 # NVMe storage
 nvme = node.add_component(model="NVME_P4510", name="nvme1")
 
-# SmartNIC
-smartnic = node.add_component(model="SmartNIC_ConnectX_6", name="snic1")
+# SmartNIC (dedicated, 2 ports)
+smartnic = node.add_component(model="NIC_ConnectX_6", name="snic1")
 
 # FPGA
 fpga = node.add_component(model="FPGA_Xilinx_U280", name="fpga1")
+
+# DPU (BlueField-2 with ARM cores)
+bf2 = node.add_component(model="NIC_BlueField_2_ConnectX_6", name="bf2")
+```
+
+## Easy L3 Networking (add_fabnet)
+
+```python
+# Simplest cross-site connectivity — auto-configures IPs and routes
+node1 = slice.add_node(name="n1", site="STAR")
+node1.add_fabnet(net_type="IPv4")  # or "IPv6" or both
+
+node2 = slice.add_node(name="n2", site="TACC")
+node2.add_fabnet(net_type="IPv4")
+
+slice.submit()
+
+# After submit, get IPs:
+n2_ip = node2.get_interface(network_name=f"FABNET_IPv4_{node2.get_site()}").get_ip_addr()
+node1.execute(f"ping -c 3 {n2_ip}")
+```
+
+## Sub-Interfaces (VLAN Tagging)
+
+```python
+# Multiple logical networks on one physical NIC
+nic = node.add_component(model="NIC_ConnectX_6", name="nic1")
+iface = nic.get_interfaces()[0]
+
+child1 = iface.add_sub_interface("vlan100", vlan="100")
+child1.set_mode('auto')
+net1.add_interface(child1)
+
+child2 = iface.add_sub_interface("vlan200", vlan="200")
+child2.set_mode('auto')
+net2.add_interface(child2)
+```
+
+## Modifying a Running Slice
+
+```python
+# Always get latest topology first
+slice = fablib.get_slice("my-slice")
+
+# Add new node and network
+new_node = slice.add_node(name="n3", site="UCSD")
+new_nic = new_node.add_component(model="NIC_Basic", name="nic1")
+
+# Add NIC to existing node
+existing = slice.get_node("n1")
+new_nic2 = existing.add_component(model="NIC_Basic", name="nic2")
+
+net = slice.add_l2network(name="new-net",
+    interfaces=[new_nic.get_interfaces()[0], new_nic2.get_interfaces()[0]])
+
+# Remove a node
+old_node = slice.get_node("n2")
+old_node.delete()
+
+# Submit the modification
+slice.submit()
+```
+
+## Post-Boot Tasks
+
+```python
+node = slice.add_node(name="n1", site="STAR")
+# Queue tasks that run after boot
+node.add_post_boot_upload_directory('tools/', '.')
+node.add_post_boot_execute('chmod +x tools/setup.sh && ./tools/setup.sh')
+slice.submit()  # Tasks run automatically after provisioning
 ```
 
 ## Network Types

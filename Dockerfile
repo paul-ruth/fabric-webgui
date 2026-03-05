@@ -106,13 +106,13 @@ stderr_logfile=/dev/stderr
 stderr_logfile_maxbytes=0
 CONF
 
-# Create fabric config and storage directories
-RUN mkdir -p /fabric_config && chmod 700 /fabric_config
+# Create storage directory (config lives inside storage at .fabric_config)
 RUN mkdir -p /fabric_storage && chmod 755 /fabric_storage
-ENV FABRIC_CONFIG_DIR=/fabric_config
+ENV FABRIC_CONFIG_DIR=/fabric_storage/.fabric_config
 ENV FABRIC_STORAGE_DIR=/fabric_storage
+ENV HOME=/tmp
 
-# Frontend on 3000, backend on 8000
-EXPOSE 3000 8000
+# Frontend on 3000, backend on 8000, 9100-9199 for SSH tunnel proxies
+EXPOSE 3000 8000 9100-9199
 
 CMD ["supervisord", "-c", "/etc/supervisor/supervisord.conf"]
