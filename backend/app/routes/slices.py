@@ -703,11 +703,20 @@ async def get_slice(slice_name: str) -> dict[str, Any]:
     are served from the in-memory store.
     """
     def _do():
-        # New drafts (never submitted) — serve from memory
+        # New drafts (never submitted) — serve from memory.
+        # Safety net: if the registry already has a UUID for this name, the
+        # draft was submitted externally (e.g. by Weave) — skip the draft
+        # and fall through to the FABRIC lookup below.
         if _is_new_draft(slice_name):
-            slice_obj = _get_draft(slice_name)
-            if slice_obj is not None:
-                return _serialize(slice_obj)
+            existing_uuid = get_slice_uuid(slice_name)
+            if not existing_uuid:
+                slice_obj = _get_draft(slice_name)
+                if slice_obj is not None:
+                    return _serialize(slice_obj)
+            else:
+                # Draft was submitted externally — clean up
+                _pop_draft(slice_name)
+                _delete_persistent_draft(slice_name)
 
         # Submitted slices — always pull fresh from FABRIC by UUID
         fablib = get_fablib()

@@ -1610,6 +1610,14 @@ export default function App() {
             setStatusMessage('Loading slice...');
             api.getSlice(name).then(data => {
               setSliceData(data);
+              // Update the slice list entry if the state changed (e.g. Weave submitted a draft)
+              if (data.state) {
+                setSlices(prev => prev.map(s =>
+                  s.name === name && s.state !== data.state
+                    ? { ...s, state: data.state, id: data.id || s.id }
+                    : s
+                ));
+              }
               runValidation(name);
             }).catch(e => {
               addError(e.message);

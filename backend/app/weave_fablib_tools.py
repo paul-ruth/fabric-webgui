@@ -897,6 +897,19 @@ def tool_fabric_submit_slice(slice_name: str, wait: bool = False) -> str:
         s.submit(wait=wait, wait_timeout=600 if wait else 60)
 
         new_state = str(s.get_state()) if s.get_state() else "Submitted"
+
+        # Clean up the GUI draft store and persistent draft so the web UI
+        # fetches fresh data from FABRIC on next selection / refresh.
+        try:
+            from app.routes.slices import _pop_draft, _delete_persistent_draft
+            from app.slice_registry import update_slice_state
+            _pop_draft(slice_name)
+            _delete_persistent_draft(slice_name)
+            sid = str(s.get_slice_id()) if hasattr(s, 'get_slice_id') else ""
+            update_slice_state(slice_name, new_state, uuid=sid)
+        except Exception:
+            logger.warning("Could not clean up draft '%s' after submit", slice_name, exc_info=True)
+
         result = f"Slice '{slice_name}' submitted. State: {new_state}"
 
         if wait and new_state == "StableOK":
