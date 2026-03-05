@@ -1,98 +1,436 @@
-/* Weave Chat — FABRIC AI coding assistant chat UI */
+/* Weave Chat — Claude Code-inspired FABRIC AI assistant */
 
-.weave-chat {
+/* ── Layout ──────────────────────────────────────────────────────────────── */
+
+.weave-layout {
   display: flex;
-  flex-direction: column;
   height: 100%;
-  background: var(--bg-primary);
-  color: var(--text-primary);
+  width: 100%;
+  overflow: hidden;
+  background: var(--fabric-light);
+  color: var(--fabric-text);
 }
 
-/* --- Message list --- */
+[data-theme="dark"] .weave-layout {
+  background: #1a1a2e;
+}
+
+/* ── Sidebar ─────────────────────────────────────────────────────────────── */
+
+.weave-sidebar {
+  width: 260px;
+  min-width: 260px;
+  display: flex;
+  flex-direction: column;
+  background: var(--fabric-white);
+  border-right: 1px solid var(--fabric-border-solid);
+  transition: width 0.2s, min-width 0.2s, opacity 0.2s;
+  overflow: hidden;
+}
+
+[data-theme="dark"] .weave-sidebar {
+  background: #12121e;
+  border-color: rgba(255,255,255,0.06);
+}
+
+.weave-sidebar.collapsed {
+  width: 0;
+  min-width: 0;
+  border-right: none;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.weave-sidebar-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 12px 12px 8px;
+  flex-shrink: 0;
+}
+
+.weave-new-chat-btn {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border: 1px solid var(--fabric-border-solid);
+  border-radius: 10px;
+  background: transparent;
+  color: var(--fabric-text);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.weave-new-chat-btn svg {
+  width: 16px;
+  height: 16px;
+}
+
+.weave-new-chat-btn:hover {
+  background: var(--fabric-bg-tint);
+}
+
+[data-theme="dark"] .weave-new-chat-btn {
+  border-color: rgba(255,255,255,0.1);
+}
+
+[data-theme="dark"] .weave-new-chat-btn:hover {
+  background: rgba(255,255,255,0.05);
+}
+
+.weave-sidebar-toggle {
+  width: 34px;
+  height: 34px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--fabric-text-muted);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  flex-shrink: 0;
+  transition: background 0.15s;
+}
+
+.weave-sidebar-toggle svg {
+  width: 18px;
+  height: 18px;
+}
+
+.weave-sidebar-toggle:hover {
+  background: var(--fabric-bg-tint);
+}
+
+[data-theme="dark"] .weave-sidebar-toggle:hover {
+  background: rgba(255,255,255,0.06);
+}
+
+/* Sidebar open button (when collapsed) */
+.weave-sidebar-open {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 5;
+  width: 34px;
+  height: 34px;
+  border: 1px solid var(--fabric-border-solid);
+  border-radius: 8px;
+  background: var(--fabric-white);
+  color: var(--fabric-text-muted);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+  transition: background 0.15s;
+}
+
+.weave-sidebar-open svg {
+  width: 16px;
+  height: 16px;
+}
+
+.weave-sidebar-open:hover {
+  background: var(--fabric-bg-tint);
+}
+
+[data-theme="dark"] .weave-sidebar-open {
+  background: #16213e;
+  border-color: rgba(255,255,255,0.1);
+}
+
+/* ── Folder selector ─────────────────────────────────────────────────────── */
+
+.weave-sidebar-folder {
+  padding: 0 12px 8px;
+  flex-shrink: 0;
+}
+
+.weave-folder-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--fabric-text-muted);
+  margin-bottom: 4px;
+  padding: 0 2px;
+}
+
+.weave-folder-label svg {
+  width: 13px;
+  height: 13px;
+  flex-shrink: 0;
+}
+
+.weave-folder-label span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.weave-folder-select {
+  width: 100%;
+  font-size: 12px;
+  padding: 5px 8px;
+  border: 1px solid var(--fabric-border-solid);
+  border-radius: 6px;
+  background: var(--fabric-light);
+  color: var(--fabric-text);
+  cursor: pointer;
+}
+
+[data-theme="dark"] .weave-folder-select {
+  background: #1a1a2e;
+  border-color: rgba(255,255,255,0.08);
+  color: var(--fabric-text);
+}
+
+.weave-folder-input-row {
+  display: flex;
+  gap: 4px;
+}
+
+.weave-folder-input {
+  flex: 1;
+  font-size: 12px;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  padding: 5px 8px;
+  border: 1px solid var(--fabric-primary);
+  border-radius: 6px;
+  background: var(--fabric-white);
+  color: var(--fabric-text);
+  outline: none;
+}
+
+[data-theme="dark"] .weave-folder-input {
+  background: #1a1a2e;
+}
+
+.weave-folder-go {
+  padding: 4px 10px;
+  border: none;
+  border-radius: 6px;
+  background: var(--fabric-primary);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+/* ── Chat list ───────────────────────────────────────────────────────────── */
+
+.weave-chat-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px 8px 8px;
+}
+
+.weave-chat-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 8px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.1s;
+  position: relative;
+}
+
+.weave-chat-item:hover {
+  background: var(--fabric-bg-tint);
+}
+
+[data-theme="dark"] .weave-chat-item:hover {
+  background: rgba(255,255,255,0.04);
+}
+
+.weave-chat-item.active {
+  background: rgba(87, 152, 188, 0.1);
+}
+
+[data-theme="dark"] .weave-chat-item.active {
+  background: rgba(87, 152, 188, 0.12);
+}
+
+.weave-chat-item-icon {
+  width: 18px;
+  height: 18px;
+  color: var(--fabric-text-muted);
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.weave-chat-item-icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+.weave-chat-item-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.weave-chat-item-title {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--fabric-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.weave-chat-item-meta {
+  display: flex;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--fabric-text-muted);
+  margin-top: 2px;
+}
+
+.weave-chat-item-meta span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.weave-chat-item-delete {
+  width: 24px;
+  height: 24px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--fabric-text-muted);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  opacity: 0;
+  transition: opacity 0.15s, color 0.15s, background 0.15s;
+  flex-shrink: 0;
+}
+
+.weave-chat-item-delete svg {
+  width: 14px;
+  height: 14px;
+}
+
+.weave-chat-item:hover .weave-chat-item-delete {
+  opacity: 1;
+}
+
+.weave-chat-item-delete:hover {
+  color: #e25241;
+  background: rgba(226, 82, 65, 0.08);
+}
+
+.weave-chat-list-empty {
+  text-align: center;
+  font-size: 12px;
+  color: var(--fabric-text-muted);
+  padding: 24px 8px;
+}
+
+/* ── Main chat area ──────────────────────────────────────────────────────── */
+
+.weave-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  position: relative;
+}
+
+/* ── Messages ────────────────────────────────────────────────────────────── */
+
 .weave-messages {
   flex: 1;
   overflow-y: auto;
-  padding: 16px;
+  padding: 24px 16px 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.weave-messages-inner {
+  width: 100%;
+  max-width: 720px;
   display: flex;
   flex-direction: column;
 }
 
-/* Default spacing between items */
-.weave-msg,
-.weave-tool-card {
-  margin-top: 4px;
-}
-
-/* First item — no top margin */
-.weave-messages > :first-child {
-  margin-top: 0;
-}
-
-/* User messages get extra spacing to separate turns */
-.weave-msg.user {
-  margin-top: 16px;
-}
-
-/* First user message */
-.weave-messages > .weave-msg.user:first-child {
-  margin-top: 0;
-}
-
-/* Continuation items within a turn — tight spacing */
-.weave-msg.continuation,
-.weave-tool-card.continuation {
-  margin-top: 3px;
-}
-
 .weave-msg {
-  max-width: 85%;
-  padding: 10px 14px;
-  border-radius: 10px;
-  font-size: 13px;
-  line-height: 1.55;
+  margin-top: 6px;
+  font-size: 14px;
+  line-height: 1.6;
   white-space: pre-wrap;
   word-break: break-word;
 }
 
 .weave-msg.user {
   align-self: flex-end;
-  background: #5798bc;
+  max-width: 80%;
+  background: var(--fabric-primary);
   color: #fff;
-  border-bottom-right-radius: 3px;
+  padding: 10px 16px;
+  border-radius: 20px 20px 6px 20px;
+  margin-top: 20px;
 }
 
 .weave-msg.assistant {
   align-self: flex-start;
-  background: var(--bg-secondary);
-  border: 1px solid var(--border);
-  border-bottom-left-radius: 3px;
+  width: 100%;
+  padding: 4px 0;
+  color: var(--fabric-text);
 }
 
 .weave-msg.error {
   align-self: flex-start;
-  background: rgba(226, 82, 65, 0.1);
-  border: 1px solid rgba(226, 82, 65, 0.3);
+  width: 100%;
+  padding: 10px 14px;
+  background: rgba(226, 82, 65, 0.08);
+  border-left: 3px solid #e25241;
+  border-radius: 4px;
   color: #e25241;
+  font-size: 13px;
 }
 
-/* Markdown-like styling inside assistant messages */
+.weave-msg.user + .weave-msg.assistant { margin-top: 16px; }
+.weave-msg.continuation, .weave-tool-card.continuation { margin-top: 2px; }
+
+/* Markdown */
 .weave-msg.assistant code {
-  background: rgba(87, 152, 188, 0.12);
-  padding: 1px 5px;
-  border-radius: 3px;
+  background: rgba(87, 152, 188, 0.1);
+  padding: 2px 6px;
+  border-radius: 4px;
   font-family: 'JetBrains Mono', 'Fira Code', monospace;
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .weave-msg.assistant pre {
-  background: #1a1a2e;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 10px 12px;
+  background: #1e1e2e;
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 8px;
+  padding: 12px 14px;
   overflow-x: auto;
-  margin: 6px 0;
-  font-size: 12px;
-  line-height: 1.45;
+  margin: 8px 0;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+[data-theme="dark"] .weave-msg.assistant pre {
+  background: #12121e;
+  border-color: rgba(255,255,255,0.06);
 }
 
 .weave-msg.assistant pre code {
@@ -100,62 +438,49 @@
   padding: 0;
 }
 
-/* --- Tool call cards --- */
+/* ── Tool cards ──────────────────────────────────────────────────────────── */
+
 .weave-tool-card {
   align-self: flex-start;
-  max-width: 85%;
-  background: var(--bg-secondary);
-  border: 1px solid var(--border);
-  border-radius: 8px;
+  width: 100%;
+  max-width: 720px;
+  background: var(--fabric-white);
+  border: 1px solid var(--fabric-border-solid);
+  border-radius: 10px;
   overflow: hidden;
-  font-size: 12px;
+  font-size: 13px;
+  margin-top: 6px;
+}
+
+[data-theme="dark"] .weave-tool-card {
+  background: #16213e;
+  border-color: rgba(255,255,255,0.08);
 }
 
 .weave-tool-header {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 5px 12px;
-  background: rgba(87, 152, 188, 0.08);
+  padding: 8px 14px;
   cursor: pointer;
   user-select: none;
+  transition: background 0.1s;
 }
 
-.weave-tool-header:hover {
-  background: rgba(87, 152, 188, 0.14);
-}
-
-.weave-tool-icon {
-  font-size: 13px;
-  color: #5798bc;
-  flex-shrink: 0;
-}
-
-.weave-tool-name {
-  font-weight: 600;
-  color: #5798bc;
-}
-
-.weave-tool-summary {
-  color: var(--text-muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  flex: 1;
-}
-
-.weave-tool-toggle {
-  color: var(--text-muted);
-  font-size: 10px;
-  flex-shrink: 0;
-}
+.weave-tool-header:hover { background: rgba(87, 152, 188, 0.06); }
+.weave-tool-icon { font-size: 14px; color: var(--fabric-primary); flex-shrink: 0; }
+.weave-tool-name { font-weight: 600; color: var(--fabric-primary); font-size: 12px; }
+.weave-tool-summary { color: var(--fabric-text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; font-size: 12px; }
+.weave-tool-toggle { color: var(--fabric-text-muted); font-size: 10px; flex-shrink: 0; }
 
 .weave-tool-body {
   max-height: 200px;
   overflow: auto;
-  padding: 8px 12px;
-  border-top: 1px solid var(--border);
+  padding: 8px 14px;
+  border-top: 1px solid var(--fabric-border-solid);
 }
+
+[data-theme="dark"] .weave-tool-body { border-color: rgba(255,255,255,0.06); }
 
 .weave-tool-body pre {
   margin: 0;
@@ -164,16 +489,18 @@
   line-height: 1.4;
   white-space: pre-wrap;
   word-break: break-all;
-  color: var(--text-muted);
+  color: var(--fabric-text-muted);
 }
 
 .weave-tool-result {
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--fabric-border-solid);
   max-height: 200px;
   overflow: auto;
-  padding: 8px 12px;
+  padding: 8px 14px;
   background: rgba(0, 142, 122, 0.04);
 }
+
+[data-theme="dark"] .weave-tool-result { border-color: rgba(255,255,255,0.06); }
 
 .weave-tool-result pre {
   margin: 0;
@@ -182,112 +509,152 @@
   line-height: 1.4;
   white-space: pre-wrap;
   word-break: break-all;
-  color: var(--text-primary);
+  color: var(--fabric-text);
 }
 
-/* --- Streaming cursor --- */
+/* ── Streaming cursor ────────────────────────────────────────────────────── */
+
 .weave-streaming {
   display: inline-block;
-  width: 6px;
-  height: 14px;
-  background: #5798bc;
+  width: 2px;
+  height: 16px;
+  background: var(--fabric-primary);
   border-radius: 1px;
-  animation: weave-blink 0.8s ease-in-out infinite;
+  animation: weave-blink 1s ease-in-out infinite;
   vertical-align: text-bottom;
   margin-left: 2px;
 }
 
 @keyframes weave-blink {
   0%, 100% { opacity: 1; }
-  50% { opacity: 0.2; }
+  50% { opacity: 0.15; }
 }
 
-/* --- Status / thinking indicator --- */
+/* ── Status spinner ──────────────────────────────────────────────────────── */
+
 .weave-status {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 8px 14px;
-  margin-top: 6px;
-  font-size: 12px;
-  color: var(--text-muted);
-  align-self: flex-start;
+  padding: 8px 0;
+  margin-top: 8px;
+  font-size: 13px;
+  color: var(--fabric-text-muted);
+  width: 100%;
+  max-width: 720px;
 }
 
 .weave-status-spinner {
-  width: 14px;
-  height: 14px;
-  border: 2px solid rgba(87, 152, 188, 0.2);
-  border-top-color: #5798bc;
+  width: 16px;
+  height: 16px;
+  border: 2px solid rgba(87, 152, 188, 0.15);
+  border-top-color: var(--fabric-primary);
   border-radius: 50%;
   animation: weave-spin 0.7s linear infinite;
   flex-shrink: 0;
 }
 
-@keyframes weave-spin {
-  to { transform: rotate(360deg); }
-}
+@keyframes weave-spin { to { transform: rotate(360deg); } }
 
-/* --- Input area --- */
+/* ── Input area ──────────────────────────────────────────────────────────── */
+
 .weave-input-area {
-  padding: 12px 16px;
-  border-top: 1px solid var(--border);
-  background: var(--bg-secondary);
+  padding: 0 16px 20px;
   display: flex;
-  gap: 8px;
-  align-items: flex-end;
+  justify-content: center;
+  position: relative;
 }
 
-.weave-input-area textarea {
+.weave-input-box {
+  width: 100%;
+  max-width: 720px;
+  background: var(--fabric-white);
+  border: 1.5px solid var(--fabric-border-solid);
+  border-radius: 24px;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.06);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.weave-input-box.focused {
+  border-color: var(--fabric-primary);
+  box-shadow: 0 2px 20px rgba(87, 152, 188, 0.18);
+}
+
+[data-theme="dark"] .weave-input-box {
+  background: #16213e;
+  border-color: rgba(255,255,255,0.1);
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.2);
+}
+
+[data-theme="dark"] .weave-input-box.focused {
+  border-color: var(--fabric-primary);
+  box-shadow: 0 2px 20px rgba(87, 152, 188, 0.2);
+}
+
+.weave-input-box textarea {
   flex: 1;
   resize: none;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 8px 12px;
-  font-size: 13px;
-  font-family: inherit;
-  background: var(--bg-primary);
-  color: var(--text-primary);
-  line-height: 1.4;
-  max-height: 120px;
-  outline: none;
-  transition: border-color 0.15s;
-}
-
-.weave-input-area textarea:focus {
-  border-color: #5798bc;
-}
-
-.weave-input-area textarea::placeholder {
-  color: var(--text-muted);
-}
-
-.weave-send-btn {
-  width: 36px;
-  height: 36px;
   border: none;
-  border-radius: 8px;
-  background: #5798bc;
-  color: #fff;
-  font-size: 16px;
-  cursor: pointer;
+  padding: 14px 18px 4px;
+  font-size: 14px;
+  font-family: inherit;
+  background: transparent;
+  color: var(--fabric-text);
+  line-height: 1.5;
+  max-height: 160px;
+  outline: none;
+}
+
+.weave-input-box textarea::placeholder {
+  color: var(--fabric-text-muted);
+}
+
+.weave-input-footer {
   display: flex;
   align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  transition: background 0.15s;
+  padding: 6px 10px 10px 14px;
+  gap: 8px;
 }
 
-.weave-send-btn:hover { background: #1f6a8c; }
-.weave-send-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.weave-model-select {
+  font-size: 12px;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  padding: 4px 24px 4px 8px;
+  border: 1px solid var(--fabric-border-solid);
+  border-radius: 8px;
+  background: var(--fabric-light);
+  color: var(--fabric-text-muted);
+  cursor: pointer;
+  outline: none;
+  max-width: 200px;
+  transition: border-color 0.15s;
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%23838385' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 8px center;
+}
+
+[data-theme="dark"] .weave-model-select {
+  background-color: #12121e;
+  border-color: rgba(255,255,255,0.1);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%238888aa' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
+}
+
+.weave-model-select:hover { border-color: var(--fabric-primary); }
+
+.weave-input-spacer { flex: 1; }
 
 .weave-clear-btn {
-  width: 36px;
-  height: 36px;
-  border: 1px solid var(--border);
+  width: 32px;
+  height: 32px;
+  border: none;
   border-radius: 8px;
   background: transparent;
-  color: var(--text-muted);
+  color: var(--fabric-text-muted);
   font-size: 14px;
   cursor: pointer;
   display: flex;
@@ -295,46 +662,193 @@
   justify-content: center;
   flex-shrink: 0;
   transition: background 0.15s, color 0.15s;
+  padding: 0;
 }
 
-.weave-clear-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
+.weave-clear-btn:hover {
+  background: rgba(226, 82, 65, 0.08);
+  color: #e25241;
+}
 
-/* --- Welcome screen --- */
+.weave-send-btn {
+  width: 38px;
+  height: 38px;
+  border: none;
+  border-radius: 50%;
+  background: var(--fabric-primary);
+  color: #fff;
+  font-size: 18px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: background 0.15s, transform 0.1s;
+  padding: 0;
+  box-shadow: 0 1px 4px rgba(87, 152, 188, 0.3);
+}
+
+.weave-send-btn:hover:not(:disabled) {
+  background: var(--fabric-primary-dark);
+  transform: scale(1.06);
+}
+
+.weave-send-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+.weave-send-btn svg {
+  width: 18px;
+  height: 18px;
+}
+
+/* ── Autocomplete ────────────────────────────────────────────────────────── */
+
+.weave-autocomplete {
+  position: absolute;
+  bottom: calc(100% + 4px);
+  left: 50%;
+  transform: translateX(-50%);
+  width: 100%;
+  max-width: 720px;
+  background: var(--fabric-white);
+  border: 1px solid var(--fabric-border-solid);
+  border-radius: 12px;
+  box-shadow: 0 -4px 20px rgba(0,0,0,0.1);
+  max-height: 260px;
+  overflow-y: auto;
+  z-index: 10;
+  padding: 4px;
+}
+
+[data-theme="dark"] .weave-autocomplete {
+  background: #16213e;
+  border-color: rgba(255,255,255,0.1);
+  box-shadow: 0 -4px 20px rgba(0,0,0,0.3);
+}
+
+.weave-autocomplete-item {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 8px 12px;
+  cursor: pointer;
+  font-size: 13px;
+  border-radius: 8px;
+  transition: background 0.1s;
+}
+
+.weave-autocomplete-item:hover,
+.weave-autocomplete-item.selected {
+  background: rgba(87, 152, 188, 0.1);
+}
+
+.weave-ac-trigger {
+  font-weight: 600;
+  color: var(--fabric-primary);
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  flex-shrink: 0;
+  min-width: 120px;
+}
+
+.weave-ac-desc {
+  color: var(--fabric-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── Welcome screen ──────────────────────────────────────────────────────── */
+
 .weave-welcome {
   flex: 1;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 12px;
-  color: var(--text-muted);
-  padding: 24px;
+  gap: 16px;
+  color: var(--fabric-text-muted);
+  padding: 32px 24px;
   text-align: center;
 }
 
 .weave-welcome-icon {
-  width: 56px;
-  height: 56px;
-  border-radius: 14px;
+  width: 64px;
+  height: 64px;
+  border-radius: 18px;
   background: linear-gradient(135deg, #5798bc, #008e7a);
   color: #fff;
-  font-size: 28px;
+  font-size: 32px;
   font-weight: bold;
   font-style: italic;
   display: flex;
   align-items: center;
   justify-content: center;
+  box-shadow: 0 4px 16px rgba(87, 152, 188, 0.25);
 }
 
 .weave-welcome h3 {
   margin: 0;
-  font-size: 18px;
-  color: var(--text-primary);
+  font-size: 22px;
+  font-weight: 600;
+  color: var(--fabric-text);
 }
 
 .weave-welcome p {
   margin: 0;
-  font-size: 13px;
-  max-width: 400px;
-  line-height: 1.5;
+  font-size: 14px;
+  max-width: 440px;
+  line-height: 1.6;
+}
+
+.weave-welcome-commands {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
+  margin-top: 8px;
+}
+
+.weave-cmd-hint {
+  font-size: 12px;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  padding: 5px 14px;
+  border-radius: 20px;
+  background: rgba(87, 152, 188, 0.08);
+  color: var(--fabric-primary);
+  border: 1px solid rgba(87, 152, 188, 0.15);
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.weave-cmd-hint:hover {
+  background: rgba(87, 152, 188, 0.15);
+  border-color: rgba(87, 152, 188, 0.3);
+}
+
+/* ── Connection indicator ────────────────────────────────────────────────── */
+
+.weave-connection {
+  position: absolute;
+  top: 10px;
+  right: 14px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--fabric-text-muted);
+  z-index: 5;
+}
+
+.weave-connection-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #ccc;
+}
+
+.weave-connection-dot.connected {
+  background: var(--fabric-success);
 }

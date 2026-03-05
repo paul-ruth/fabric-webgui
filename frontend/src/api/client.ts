@@ -463,6 +463,59 @@ export function getConfig(): Promise<ConfigStatus> {
   return fetchJson('/config');
 }
 
+export function getAiTools(): Promise<Record<string, boolean>> {
+  return fetchJson('/config/ai-tools');
+}
+
+// --- Weave Skills & Agents ---
+
+export interface WeaveSkill {
+  name: string;
+  description: string;
+}
+
+export function listWeaveSkills(): Promise<WeaveSkill[]> {
+  return fetchJson('/weave/skills');
+}
+
+export function listWeaveAgents(): Promise<WeaveSkill[]> {
+  return fetchJson('/weave/agents');
+}
+
+export interface WeaveModel {
+  id: string;
+  name: string;
+}
+
+export function listWeaveModels(): Promise<{ models: WeaveModel[]; default: string }> {
+  return fetchJson('/weave/models');
+}
+
+export interface WeaveChat {
+  id: string;
+  title: string;
+  folder: string;
+  model: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export function listWeaveChats(): Promise<WeaveChat[]> {
+  return fetchJson('/weave/chats');
+}
+
+export function deleteWeaveChat(id: string): Promise<{ status: string }> {
+  return fetchJson(`/weave/chats/${encodeURIComponent(id)}`, { method: 'DELETE' });
+}
+
+export function listWeaveFolders(): Promise<{ folders: string[]; default: string }> {
+  return fetchJson('/weave/folders');
+}
+
+export function setAiTools(tools: Record<string, boolean>): Promise<Record<string, boolean>> {
+  return fetchJson('/config/ai-tools', { method: 'POST', body: JSON.stringify(tools) });
+}
+
 export async function uploadToken(file: File): Promise<{ status: string; message: string }> {
   const form = new FormData();
   form.append('file', file);

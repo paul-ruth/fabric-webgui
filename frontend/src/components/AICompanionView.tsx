@@ -4,7 +4,7 @@ import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
 import { buildWsUrl } from '../utils/wsUrl';
-import { getConfig } from '../api/client';
+import { getConfig, getAiTools } from '../api/client';
 import ContainerFileBrowser from './ContainerFileBrowser';
 import WeaveChat from './WeaveChat';
 import '../styles/ai-companion.css';
@@ -86,6 +86,7 @@ interface TabState {
 
 export default function AICompanionView() {
   const [hasKey, setHasKey] = useState<boolean | null>(null);
+  const [enabledTools, setEnabledTools] = useState<Record<string, boolean>>({});
   const [tabs, setTabs] = useState<TabState[]>([]);
   const [activeTab, setActiveTab] = useState<string | null>(null);
   const [showWarning, setShowWarning] = useState<ToolDef | null>(null);
@@ -97,7 +98,10 @@ export default function AICompanionView() {
 
   useEffect(() => {
     getConfig().then((s) => setHasKey(!!s.ai_api_key_set)).catch(() => setHasKey(false));
+    getAiTools().then(setEnabledTools).catch(() => {});
   }, []);
+
+  const visibleTools = TOOLS.filter((t) => enabledTools[t.id] !== false);
 
   const launchTool = useCallback((tool: ToolDef) => {
     const tabId = `${tool.id}-${Date.now()}`;
@@ -167,7 +171,7 @@ export default function AICompanionView() {
 
       {showCards ? (
         <div className="ai-cards">
-          {TOOLS.map((tool) => {
+          {visibleTools.map((tool) => {
             const ready = tool.needsKey ? hasKey : true;
             const badge = tool.id === 'claude'
               ? { cls: 'your-account', text: 'Your Account' }

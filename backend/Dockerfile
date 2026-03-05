@@ -24,6 +24,7 @@ RUN npm install -g opencode-ai 2>/dev/null || true
 
 COPY scripts/ scripts/
 COPY app/ app/
+COPY WEAVE.md /app/WEAVE.md
 
 # Copy builtin slice-libraries (slice templates, VM templates, recipes) — synced before build
 COPY slice-libraries/ slice-libraries/

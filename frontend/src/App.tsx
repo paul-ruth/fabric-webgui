@@ -1752,10 +1752,13 @@ export default function App() {
             </>
           )}
 
-          {/* View content */}
-          {currentView === 'ai' ? (
+          {/* AI Companion — always mounted for chat persistence, hidden when not active */}
+          <div style={{ display: currentView === 'ai' ? 'contents' : 'none' }}>
             <AICompanionView />
-          ) : currentView === 'client' ? (
+          </div>
+
+          {/* View content */}
+          {currentView === 'ai' ? null : currentView === 'client' ? (
             <ClientView
               slices={slices}
               selectedSliceName={selectedSliceName}

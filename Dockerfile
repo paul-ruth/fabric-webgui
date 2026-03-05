@@ -27,6 +27,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy backend code
 COPY backend/app/ app/
 
+# Copy Weave system prompt
+COPY WEAVE.md /app/WEAVE.md
+
 # Copy builtin slice-libraries (slice templates, VM templates, recipes)
 COPY slice-libraries/ slice-libraries/
 

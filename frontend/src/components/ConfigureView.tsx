@@ -41,6 +41,9 @@ export default function ConfigureView({ onConfigured, onClose }: ConfigureViewPr
     'ssh -i {{ _self_.private_ssh_key_file }} -F {config_dir}/ssh_config {{ _self_.username }}@{{ _self_.management_ip }}'
   );
   const [litellmApiKey, setLitellmApiKey] = useState('');
+  const [aiTools, setAiTools] = useState<Record<string, boolean>>({
+    weave: true, aider: false, opencode: false, claude: false,
+  });
 
   const tokenFileRef = useRef<HTMLInputElement>(null);
   const bastionKeyRef = useRef<HTMLInputElement>(null);
@@ -70,6 +73,7 @@ export default function ConfigureView({ onConfigured, onClose }: ConfigureViewPr
   useEffect(() => {
     loadStatus();
     loadKeySets();
+    api.getAiTools().then(setAiTools).catch(() => {});
   }, [loadStatus, loadKeySets]);
 
   // Load projects when token is available
@@ -246,6 +250,9 @@ export default function ConfigureView({ onConfigured, onClose }: ConfigureViewPr
     }
     setSaving(true);
     try {
+      // Save AI tool toggles
+      await api.setAiTools(aiTools).catch(() => {});
+
       const result = await api.saveConfig({
         project_id: selectedProject,
         bastion_username: bastionLogin,
@@ -588,7 +595,7 @@ export default function ConfigureView({ onConfigured, onClose }: ConfigureViewPr
 
               <p style={{ marginTop: 16, fontWeight: 600 }}>AI Companion</p>
               <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2, marginBottom: 6 }}>
-                API key for FABRIC AI services (ai.fabric-testbed.net). Used by FabChat, Aider, and OpenCode.
+                API key for FABRIC AI services (ai.fabric-testbed.net). Used by Weave, Aider, and OpenCode.
               </p>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 <input
@@ -601,6 +608,31 @@ export default function ConfigureView({ onConfigured, onClose }: ConfigureViewPr
                 {status?.ai_api_key_set && !litellmApiKey && (
                   <span style={{ fontSize: 12, color: '#008e7a', whiteSpace: 'nowrap' }}>{'\u2713'} Configured</span>
                 )}
+              </div>
+
+              <p style={{ marginTop: 12, fontWeight: 600, fontSize: 13 }}>Enabled Tools</p>
+              <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2, marginBottom: 8 }}>
+                Choose which AI tools appear in the AI Companion launcher.
+              </p>
+              <div className="ai-tool-toggles">
+                {([
+                  { id: 'weave', label: 'Weave', desc: 'FABRIC AI coding assistant (built-in)' },
+                  { id: 'aider', label: 'Aider', desc: 'AI pair programming terminal' },
+                  { id: 'opencode', label: 'OpenCode', desc: 'Terminal-based AI coding assistant' },
+                  { id: 'claude', label: 'Claude Code', desc: 'Anthropic CLI (requires your own account)' },
+                ] as const).map((tool) => (
+                  <label key={tool.id} className="ai-tool-toggle-row">
+                    <input
+                      type="checkbox"
+                      checked={aiTools[tool.id] ?? false}
+                      onChange={(e) => setAiTools((prev) => ({ ...prev, [tool.id]: e.target.checked }))}
+                    />
+                    <span className="ai-tool-toggle-info">
+                      <span className="ai-tool-toggle-name">{tool.label}</span>
+                      <span className="ai-tool-toggle-desc">{tool.desc}</span>
+                    </span>
+                  </label>
+                ))}
               </div>
             </div>
           )}

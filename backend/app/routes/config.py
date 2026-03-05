@@ -917,3 +917,50 @@ def check_update():
     _update_cache["result"] = result
     _update_cache["timestamp"] = now
     return result
+
+
+# ---------------------------------------------------------------------------
+# AI Companion tool toggles
+# ---------------------------------------------------------------------------
+
+_DEFAULT_AI_TOOLS = {"weave": True, "aider": False, "opencode": False, "claude": False}
+
+
+def _ai_tools_path() -> str:
+    storage = os.environ.get("FABRIC_STORAGE_DIR", "/fabric_storage")
+    return os.path.join(storage, ".ai_tools.json")
+
+
+def _load_ai_tools() -> dict[str, bool]:
+    path = _ai_tools_path()
+    if os.path.isfile(path):
+        try:
+            with open(path) as f:
+                data = json.load(f)
+            # Merge with defaults so new tools are always present
+            merged = dict(_DEFAULT_AI_TOOLS)
+            merged.update({k: bool(v) for k, v in data.items() if k in _DEFAULT_AI_TOOLS})
+            return merged
+        except Exception:
+            pass
+    return dict(_DEFAULT_AI_TOOLS)
+
+
+@router.get("/api/config/ai-tools")
+def get_ai_tools() -> dict[str, bool]:
+    """Return which AI companion tools are enabled."""
+    return _load_ai_tools()
+
+
+@router.post("/api/config/ai-tools")
+def set_ai_tools(body: dict[str, bool]) -> dict[str, bool]:
+    """Update AI companion tool toggles."""
+    current = _load_ai_tools()
+    for k in current:
+        if k in body:
+            current[k] = bool(body[k])
+    path = _ai_tools_path()
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as f:
+        json.dump(current, f, indent=2)
+    return current
