@@ -154,7 +154,7 @@ export default function TitleBar({ dark, currentView, onToggleDark, onViewChange
               <div className="title-update-links" style={{ marginBottom: 8 }}>
                 <a
                   className="title-update-link"
-                  href="https://raw.githubusercontent.com/fabric-testbed/fabric-webgui/main/docker-compose.hub.yml"
+                  href="https://raw.githubusercontent.com/fabric-testbed/fabric-webgui/main/docker-compose.yml"
                   download="docker-compose.yml"
                 >
                   {'\u2913'} docker-compose.yml

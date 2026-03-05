@@ -34,8 +34,23 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-# Current application version (keep in sync with frontend/src/version.ts)
-CURRENT_VERSION = "0.1.6"
+# Read version from frontend/src/version.ts (single source of truth)
+def _read_version() -> str:
+    for candidate in [
+        os.path.join(os.path.dirname(__file__), '..', '..', 'frontend', 'src', 'version.ts'),  # dev (backend/)
+        '/app/VERSION',  # Docker image
+    ]:
+        try:
+            with open(candidate) as f:
+                content = f.read()
+            m = re.search(r'[\"\'](\d+\.\d+\.\d+)', content)
+            if m:
+                return m.group(1)
+        except OSError:
+            continue
+    return "0.0.0"
+
+CURRENT_VERSION = _read_version()
 
 DOCKER_HUB_REPO = "pruth/fabric-webui"
 DOCKER_HUB_TAGS_URL = f"https://hub.docker.com/v2/repositories/{DOCKER_HUB_REPO}/tags/"

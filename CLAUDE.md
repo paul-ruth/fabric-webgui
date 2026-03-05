@@ -34,11 +34,17 @@ Agents share state via `docs/TEAM_STATUS.md`.
 # Frontend: http://localhost:3000 (Vite proxies /api/* to backend)
 ```
 
-### Docker
+### Docker (dev)
 ```bash
-docker-compose up --build
+docker compose -f docker-compose.dev.yml up --build
 # Frontend: http://localhost:3000
 # Backend API: http://localhost:8000
+```
+
+### Docker (from Docker Hub)
+```bash
+docker compose up -d
+# UI: http://localhost:3000
 ```
 
 ### Backend Only

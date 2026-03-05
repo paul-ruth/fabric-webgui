@@ -18,9 +18,9 @@ You are the infrastructure specialist for the fabric-webgui project. Your domain
 - `frontend/Dockerfile` — Standalone frontend image (multi-stage: node build + nginx)
 
 **Docker Compose files**:
-- `docker-compose.yml` — Two-container dev (backend + frontend)
+- `docker-compose.yml` — Single container from Docker Hub (user-facing default)
+- `docker-compose.dev.yml` — Two-container dev (backend + frontend)
 - `docker-compose.standalone.yml` — Two-container with named volumes
-- `docker-compose.hub.yml` — Single container from Docker Hub
 - `docker-compose.tailscale.yml` — Tailscale sidecar + app container
 
 **Build scripts** (`build/`):

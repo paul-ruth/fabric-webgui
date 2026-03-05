@@ -17,7 +17,7 @@ Usage: `/health`
      - Active project: name and UUID
 
 3. **Check Docker containers** (if using Docker)
-   - `docker compose ps 2>/dev/null` from `/mnt/scratch_nvme/work/fabric-webgui`
+   - `docker compose -f docker-compose.dev.yml ps 2>/dev/null` from `/mnt/scratch_nvme/work/fabric-webgui`
    - Report container status and ports.
 
 4. **Summary**

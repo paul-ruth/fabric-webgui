@@ -593,6 +593,22 @@ export default function ConfigureView({ onConfigured, onClose }: ConfigureViewPr
               <p>SSH Command Line</p>
               <input type="text" value={sshCommandLine} onChange={(e) => setSshCommandLine(e.target.value)} />
 
+              <p style={{ marginTop: 16, fontWeight: 600 }}>Getting Started Tour</p>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, cursor: 'pointer', marginTop: 4 }}>
+                <input
+                  type="checkbox"
+                  checked={localStorage.getItem('fabric-tour-dismissed') !== 'true'}
+                  onChange={(e) => {
+                    if (e.target.checked) {
+                      localStorage.removeItem('fabric-tour-dismissed');
+                    } else {
+                      localStorage.setItem('fabric-tour-dismissed', 'true');
+                    }
+                  }}
+                />
+                Show guided tour on next session
+              </label>
+
               <p style={{ marginTop: 16, fontWeight: 600 }}>AI Companion</p>
               <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2, marginBottom: 6 }}>
                 API key for FABRIC AI services (ai.fabric-testbed.net). Used by Weave, Aider, and OpenCode.

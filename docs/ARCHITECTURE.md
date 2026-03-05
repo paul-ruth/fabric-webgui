@@ -524,17 +524,17 @@ FABRIC_STORAGE_DIR (/fabric_storage)
 # Frontend: http://localhost:3000 (next dev, proxies /api/* to backend)
 ```
 
-### Docker Compose (two-container)
+### Docker Compose (two-container, dev)
 
 ```bash
-docker-compose up --build
+docker compose -f docker-compose.dev.yml up --build
 # frontend container (nginx:3000) → backend container (uvicorn:8000)
 ```
 
-### Combined Single Image
+### Combined Single Image (from Docker Hub)
 
 ```bash
-docker-compose -f docker-compose.hub.yml up
+docker compose up -d
 # pruth/fabric-webui:latest — nginx + uvicorn under supervisord
 ```
 

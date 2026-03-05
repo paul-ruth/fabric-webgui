@@ -270,8 +270,8 @@ export default function GuidedTour({
             {isLast ? 'Done' : 'Next'}
           </button>
           {!isLast && (
-            <button className="tour-btn skip" onClick={onClose}>
-              Skip Tour
+            <button className="tour-btn skip" onClick={onDismiss}>
+              Don{'\u2019'}t show again
             </button>
           )}
         </div>
