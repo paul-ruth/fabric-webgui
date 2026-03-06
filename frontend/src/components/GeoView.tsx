@@ -125,16 +125,16 @@ export default function GeoView({ sliceData, selectedElement, onNodeClick, sites
   }
 
   return (
-    <div className="geo-view">
+    <div className="geo-view" data-help-id="map.view">
       <div className="geo-map-container">
         <div className="geo-controls">
           <div className="geo-control-group">
             <span className="geo-group-label">Infrastructure</span>
-            <label>
+            <label title="Show/hide FABRIC infrastructure sites on the map">
               <input type="checkbox" checked={showInfraSites} onChange={(e) => setShowInfraSites(e.target.checked)} />
               Sites
             </label>
-            <label>
+            <label title="Show/hide backbone network links between sites">
               <input type="checkbox" checked={showInfraLinks} onChange={(e) => setShowInfraLinks(e.target.checked)} />
               Links
               {linksLoading && <span className="geo-loading-indicator"> (loading...)</span>}
@@ -143,11 +143,11 @@ export default function GeoView({ sliceData, selectedElement, onNodeClick, sites
           {sliceData && (
             <div className="geo-control-group">
               <span className="geo-group-label">Slice</span>
-              <label>
+              <label title="Show/hide slice node locations">
                 <input type="checkbox" checked={showSliceNodes} onChange={(e) => setShowSliceNodes(e.target.checked)} />
                 Nodes
               </label>
-              <label>
+              <label title="Show/hide slice network connections">
                 <input type="checkbox" checked={showSliceLinks} onChange={(e) => setShowSliceLinks(e.target.checked)} />
                 Links
               </label>

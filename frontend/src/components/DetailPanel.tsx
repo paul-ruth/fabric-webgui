@@ -371,6 +371,7 @@ function MetricsControls({
       <select
         value={metricsRefreshRate}
         onChange={(e) => onMetricsRefreshRateChange(Number(e.target.value))}
+        title="How often to refresh site and link metrics (seconds)"
       >
         <option value={0}>Manual</option>
         <option value={5}>5s</option>

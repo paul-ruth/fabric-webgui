@@ -255,6 +255,7 @@ export default function Toolbar(props: ToolbarProps) {
             className="toolbar-btn toolbar-btn-save-template"
             onClick={() => props.onSaveSliceTemplate?.()}
             disabled={!hasSlice || !props.sliceState || props.loading}
+            data-help-id="toolbar.save-template"
           >
             Save as Template
           </button>
@@ -266,6 +267,7 @@ export default function Toolbar(props: ToolbarProps) {
               className="toolbar-btn toolbar-btn-archive"
               onClick={() => props.onArchiveSlice?.()}
               disabled={props.loading}
+              title="Archive selected terminal slice to storage"
             >
               Archive
             </button>
@@ -278,6 +280,7 @@ export default function Toolbar(props: ToolbarProps) {
               className="toolbar-btn toolbar-btn-archive-all"
               onClick={() => props.onArchiveAllTerminal?.()}
               disabled={props.loading}
+              title="Archive all terminal slices to storage"
             >
               Archive All Terminal
             </button>
@@ -295,6 +298,7 @@ export default function Toolbar(props: ToolbarProps) {
         <button
           className={`toolbar-btn toolbar-btn-auto-refresh ${props.autoRefresh ? 'active' : ''}`}
           onClick={props.onToggleAutoRefresh}
+          data-help-id="toolbar.auto-refresh"
         >
           {props.autoRefresh ? '\u21BB Auto' : '\u21BB Auto'}
         </button>

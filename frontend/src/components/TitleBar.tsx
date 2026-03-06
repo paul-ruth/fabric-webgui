@@ -31,14 +31,14 @@ interface TitleBarProps {
   onLaunchAiTool?: (toolId: string) => void;
 }
 
-const VIEWS: Array<{ key: 'topology' | 'sliver' | 'map' | 'files' | 'libraries' | 'monitoring' | 'client' | 'ai'; label: string; icon: string }> = [
-  { key: 'topology', label: 'Topology', icon: '\u25A6' },
-  { key: 'sliver', label: 'Table', icon: '\u2261' },
-  { key: 'map', label: 'Map', icon: '\u25C9' },
-  { key: 'files', label: 'Storage', icon: '\u2630' },
-  { key: 'libraries', label: 'Artifacts', icon: '\u29C9' },
-  { key: 'monitoring', label: 'Monitoring', icon: '\u25CE' },
-  { key: 'client', label: 'My Web Apps', icon: '\u25B6' },
+const VIEWS: Array<{ key: 'topology' | 'sliver' | 'map' | 'files' | 'libraries' | 'monitoring' | 'client' | 'ai'; label: string; icon: string; desc: string }> = [
+  { key: 'topology', label: 'Topology', icon: '\u25A6', desc: 'Topology graph view — interactive node and network editor' },
+  { key: 'sliver', label: 'Table', icon: '\u2261', desc: 'Table view — tabular slice and sliver details' },
+  { key: 'map', label: 'Map', icon: '\u25C9', desc: 'Map view — geographic site locations' },
+  { key: 'files', label: 'Storage', icon: '\u2630', desc: 'Storage view — file manager for container and VM files' },
+  { key: 'libraries', label: 'Artifacts', icon: '\u29C9', desc: 'Artifacts view — slice and VM template libraries' },
+  { key: 'monitoring', label: 'Monitoring', icon: '\u25CE', desc: 'Monitoring view — resource and performance metrics' },
+  { key: 'client', label: 'My Web Apps', icon: '\u25B6', desc: 'My Web Apps view — launch and manage web applications' },
 ];
 
 export default function TitleBar({ dark, currentView, onToggleDark, onViewChange, onOpenSettings, onOpenHelp, projectName, projects, onProjectChange, aiTools, selectedAiTool, onLaunchAiTool }: TitleBarProps) {
@@ -85,7 +85,7 @@ export default function TitleBar({ dark, currentView, onToggleDark, onViewChange
   };
 
   const handleCopyRun = () => {
-    navigator.clipboard.writeText('docker compose pull\ndocker compose up -d').then(() => {
+    navigator.clipboard.writeText('docker pull pruth/fabric-webui:latest\ndocker run -d -p 3000:3000 \\\n  -v fabric_storage:/fabric_storage \\\n  pruth/fabric-webui:latest').then(() => {
       setCopiedRun(true);
       setTimeout(() => setCopiedRun(false), 2000);
     });
@@ -112,7 +112,7 @@ export default function TitleBar({ dark, currentView, onToggleDark, onViewChange
         <img src="/fabric_logo.png" alt="FABRIC" className="fabric-logo" />
         <span className="title-text">FABRIC Visualization Suite</span>
         <div className="title-version-wrapper" ref={updateRef}>
-          <button className="title-version-btn" onClick={handleVersionClick}>
+          <button className="title-version-btn" onClick={handleVersionClick} title="Version info and updates">
             <span className="title-version">v{displayVersion(VERSION)}</span>
             {updateInfo?.update_available && <span className="title-update-badge" />}
           </button>
@@ -129,13 +129,6 @@ export default function TitleBar({ dark, currentView, onToggleDark, onViewChange
                   {updateInfo.published_at && (
                     <div className="title-update-date">Published {formatDate(updateInfo.published_at)}</div>
                   )}
-                  <div className="title-update-section-label">Upgrade existing install:</div>
-                  <div className="title-update-command">
-                    <pre>docker compose pull{'\n'}docker compose up -d</pre>
-                    <button className="title-update-copy" onClick={handleCopyPull}>
-                      {copiedPull ? 'Copied!' : 'Copy'}
-                    </button>
-                  </div>
                 </>
               ) : (
                 <>
@@ -146,30 +139,22 @@ export default function TitleBar({ dark, currentView, onToggleDark, onViewChange
                 </>
               )}
               <div className="title-update-divider" />
-              <div className="title-update-section-label">Install / Run locally:</div>
-              <div className="title-update-step">
-                <span className="title-update-step-num">1</span>
-                <span>Download the compose file:</span>
-              </div>
-              <div className="title-update-links" style={{ marginBottom: 8 }}>
-                <a
-                  className="title-update-link"
-                  href="https://raw.githubusercontent.com/fabric-testbed/fabric-webgui/main/docker-compose.yml"
-                  download="docker-compose.yml"
-                >
-                  {'\u2913'} docker-compose.yml
-                </a>
-              </div>
-              <div className="title-update-step">
-                <span className="title-update-step-num">2</span>
-                <span>Pull and start the container:</span>
-              </div>
+              <div className="title-update-section-label">Update to latest:</div>
               <div className="title-update-command">
                 <pre>docker compose pull{'\n'}docker compose up -d</pre>
+                <button className="title-update-copy" onClick={handleCopyPull}>
+                  {copiedPull ? 'Copied!' : 'Copy'}
+                </button>
+              </div>
+              <div className="title-update-divider" />
+              <div className="title-update-section-label">Fresh install:</div>
+              <div className="title-update-command">
+                <pre>docker pull pruth/fabric-webui:latest{'\n'}docker run -d -p 3000:3000 \{'\n'}  -v fabric_storage:/fabric_storage \{'\n'}  pruth/fabric-webui:latest</pre>
                 <button className="title-update-copy" onClick={handleCopyRun}>
                   {copiedRun ? 'Copied!' : 'Copy'}
                 </button>
               </div>
+              <div className="title-update-divider" />
               <div className="title-update-links">
                 <a
                   className="title-update-link"
@@ -178,6 +163,14 @@ export default function TitleBar({ dark, currentView, onToggleDark, onViewChange
                   rel="noopener noreferrer"
                 >
                   View on Docker Hub {'\u2197'}
+                </a>
+                <a
+                  className="title-update-link"
+                  href="https://github.com/fabric-testbed/fabric-webgui"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  View on GitHub {'\u2197'}
                 </a>
               </div>
             </div>
@@ -203,6 +196,7 @@ export default function TitleBar({ dark, currentView, onToggleDark, onViewChange
                   key={v.key}
                   className={`title-pill-option ${currentView === v.key ? 'active' : ''}`}
                   onClick={() => { onViewChange(v.key); setViewOpen(false); }}
+                  title={v.desc}
                 >
                   <span className="title-pill-option-icon">{v.icon}</span>
                   {v.label}
@@ -220,6 +214,9 @@ export default function TitleBar({ dark, currentView, onToggleDark, onViewChange
                     >
                       <span className="title-pill-option-icon">{tool.icon}</span>
                       {tool.name}
+                      <span className={`title-pill-ai-tag ${tool.id === 'claude' ? 'paid' : 'free'}`}>
+                        {tool.id === 'claude' ? 'Paid' : 'Free*'}
+                      </span>
                       {currentView === 'ai' && selectedAiTool === tool.id && <span className="title-pill-check">{'\u2713'}</span>}
                     </button>
                   ))}

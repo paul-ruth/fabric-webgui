@@ -113,6 +113,22 @@ def _get_ai_api_key() -> str:
     return ""
 
 
+def _read_project_id_from_rc() -> str:
+    """Read FABRIC_PROJECT_ID from fabric_rc file (stable on disk).
+
+    Unlike os.environ, this is not affected by temporary env var mutations
+    in reconcile_projects.
+    """
+    rc_path = os.path.join(_config_dir(), "fabric_rc")
+    if os.path.isfile(rc_path):
+        with open(rc_path) as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith("export FABRIC_PROJECT_ID="):
+                    return line.split("=", 1)[1]
+    return os.environ.get("FABRIC_PROJECT_ID", "")
+
+
 def _storage_dir() -> str:
     return os.environ.get("FABRIC_STORAGE_DIR", "/fabric_storage")
 
@@ -610,7 +626,9 @@ def list_user_projects():
         fablib = get_fablib()
         mgr = fablib.get_manager()
         projects = mgr.get_project_info()  # returns [{name, uuid}, ...]
-        current_id = os.environ.get("FABRIC_PROJECT_ID", "")
+        # Read from fabric_rc (stable on disk) instead of os.environ which
+        # can be temporarily mutated by reconcile_projects during its scan.
+        current_id = _read_project_id_from_rc()
         return {"projects": projects, "active_project_id": current_id}
     except RuntimeError:
         raise HTTPException(status_code=400, detail="FABRIC is not configured yet.")

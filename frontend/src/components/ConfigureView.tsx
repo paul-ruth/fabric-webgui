@@ -7,9 +7,13 @@ import '../styles/configure.css';
 interface ConfigureViewProps {
   onConfigured: () => void;
   onClose?: () => void;
+  hiddenProjects?: Set<string>;
+  onHiddenProjectsChange?: (hidden: Set<string>) => void;
+  /** Full project list from Core API (more complete than JWT-only list) */
+  allProjects?: ProjectInfo[];
 }
 
-export default function ConfigureView({ onConfigured, onClose }: ConfigureViewProps) {
+export default function ConfigureView({ onConfigured, onClose, hiddenProjects, onHiddenProjectsChange, allProjects }: ConfigureViewProps) {
   const [status, setStatus] = useState<ConfigStatus | null>(null);
   const [projects, setProjects] = useState<ProjectInfo[]>([]);
   const [bastionLogin, setBastionLogin] = useState('');
@@ -353,8 +357,17 @@ export default function ConfigureView({ onConfigured, onClose }: ConfigureViewPr
               className="btn"
               onClick={() => tokenFileRef.current?.click()}
               disabled={loading}
+              title="Upload id_token.json from FABRIC Credential Manager"
             >
               Upload Token File
+            </button>
+            <button
+              className="btn"
+              onClick={handleOAuthLogin}
+              disabled={loading}
+              title="Open FABRIC Credential Manager to get a token"
+            >
+              Login via FABRIC
             </button>
           </div>
           {showTokenPaste && (
@@ -397,6 +410,7 @@ export default function ConfigureView({ onConfigured, onClose }: ConfigureViewPr
             value={selectedProject}
             onChange={(e) => setSelectedProject(e.target.value)}
             disabled={projects.length === 0}
+            data-help-id="settings.project"
           >
             <option value="">-- Select Project --</option>
             {projects.map((p) => (
@@ -409,12 +423,43 @@ export default function ConfigureView({ onConfigured, onClose }: ConfigureViewPr
             <p>Loading projects from token...</p>
           )}
 
+          {/* Project Visibility */}
+          {(allProjects || projects).length > 1 && onHiddenProjectsChange && (
+            <>
+              <p style={{ marginTop: 16 }} data-help-id="settings.project-visibility"><strong>Visible Projects</strong> — Toggle projects on or off to control which appear in the project switcher.</p>
+              <div className="project-toggle-list">
+                {(allProjects || projects).map((p) => {
+                  const isHidden = hiddenProjects?.has(p.uuid) ?? false;
+                  const isActive = p.uuid === selectedProject;
+                  return (
+                    <label key={p.uuid} className={`project-toggle-row${isHidden ? ' hidden-project' : ''}`}>
+                      <input
+                        type="checkbox"
+                        checked={!isHidden}
+                        disabled={isActive}
+                        onChange={() => {
+                          const next = new Set(hiddenProjects);
+                          if (isHidden) next.delete(p.uuid);
+                          else next.add(p.uuid);
+                          onHiddenProjectsChange(next);
+                        }}
+                      />
+                      <span className="project-toggle-name">{p.name}</span>
+                      {isActive && <span className="project-toggle-active">active</span>}
+                    </label>
+                  );
+                })}
+              </div>
+            </>
+          )}
+
           <p style={{ marginTop: 16 }}><strong>Bastion Username</strong> — Your FABRIC bastion login username (auto-detected from token when possible).</p>
           <input
             type="text"
             value={bastionLogin}
             onChange={(e) => setBastionLogin(e.target.value)}
             placeholder="e.g. user_name_0001234567"
+            title="Your FABRIC bastion login (auto-detected from token)"
           />
         </div>
 
@@ -572,7 +617,7 @@ export default function ConfigureView({ onConfigured, onClose }: ConfigureViewPr
               </select>
               <p>Log File</p>
               <input type="text" value={logFile} onChange={(e) => setLogFile(e.target.value)} />
-              <p>Sites to Avoid</p>
+              <p data-help-id="settings.avoid-sites">Sites to Avoid</p>
               <div className="site-toggle-grid">
                 {siteNames.map((site) => (
                   <button
@@ -593,7 +638,7 @@ export default function ConfigureView({ onConfigured, onClose }: ConfigureViewPr
               <p>SSH Command Line</p>
               <input type="text" value={sshCommandLine} onChange={(e) => setSshCommandLine(e.target.value)} />
 
-              <p style={{ marginTop: 16, fontWeight: 600 }}>Getting Started Tour</p>
+              <p style={{ marginTop: 16, fontWeight: 600 }} data-help-id="settings.tour">Getting Started Tour</p>
               <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, cursor: 'pointer', marginTop: 4 }}>
                 <input
                   type="checkbox"
@@ -610,7 +655,7 @@ export default function ConfigureView({ onConfigured, onClose }: ConfigureViewPr
               </label>
 
               <p style={{ marginTop: 16, fontWeight: 600 }}>AI Companion</p>
-              <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2, marginBottom: 6 }}>
+              <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2, marginBottom: 6 }} data-help-id="settings.ai-api-key">
                 API key for FABRIC AI services (ai.fabric-testbed.net). Used by Aider and OpenCode.
               </p>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -626,7 +671,7 @@ export default function ConfigureView({ onConfigured, onClose }: ConfigureViewPr
                 )}
               </div>
 
-              <p style={{ marginTop: 12, fontWeight: 600, fontSize: 13 }}>Enabled Tools</p>
+              <p style={{ marginTop: 12, fontWeight: 600, fontSize: 13 }} data-help-id="settings.ai-tools">Enabled Tools</p>
               <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2, marginBottom: 8 }}>
                 Choose which AI tools appear in the AI Companion launcher.
               </p>
@@ -676,6 +721,8 @@ export default function ConfigureView({ onConfigured, onClose }: ConfigureViewPr
                 }
               }}
               disabled={loading}
+              data-help-id="settings.rebuild-storage"
+              title="Re-initialize storage and re-import all built-in templates"
             >
               {loading ? 'Rebuilding...' : 'Rebuild Storage'}
             </button>

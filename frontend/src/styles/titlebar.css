@@ -189,6 +189,36 @@
   border-color: rgba(255, 255, 255, 0.1);
 }
 
+.title-pill-ai-tag {
+  font-size: 9px;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 6px;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  margin-left: auto;
+}
+
+.title-pill-ai-tag.free {
+  background: rgba(0, 142, 122, 0.15);
+  color: #008e7a;
+}
+
+.title-pill-ai-tag.paid {
+  background: rgba(217, 119, 6, 0.15);
+  color: #b45309;
+}
+
+[data-theme="dark"] .title-pill-ai-tag.free {
+  background: rgba(0, 142, 122, 0.2);
+  color: #26c6b0;
+}
+
+[data-theme="dark"] .title-pill-ai-tag.paid {
+  background: rgba(217, 119, 6, 0.2);
+  color: #fbbf24;
+}
+
 /* ── Icon buttons (settings, theme toggle) ── */
 .title-icon-btn {
   background: rgba(255, 255, 255, 0.1);

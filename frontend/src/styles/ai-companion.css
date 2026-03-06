@@ -85,8 +85,9 @@
 }
 
 .ai-badge.ready { background: rgba(0, 142, 122, 0.15); color: #008e7a; }
+.ai-badge.free { background: rgba(0, 142, 122, 0.15); color: #008e7a; }
 .ai-badge.key-required { background: rgba(226, 82, 65, 0.15); color: #e25241; }
-.ai-badge.your-account { background: rgba(255, 133, 66, 0.15); color: #ff8542; }
+.ai-badge.your-account { background: rgba(217, 119, 6, 0.15); color: #b45309; }
 
 .ai-launch-btn {
   padding: 6px 16px;

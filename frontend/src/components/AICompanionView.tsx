@@ -48,7 +48,7 @@ const TOOLS: ToolDef[] = [
   {
     id: 'aider',
     name: 'Aider',
-    desc: 'AI pair programming in your terminal. Edit code, generate scripts, and refactor with AI assistance.',
+    desc: 'AI pair programming — edit files, generate scripts, and refactor code. Powered by FABRIC-hosted LLMs. Requires a free FABRIC API key.',
     icon: 'Ai',
     iconClass: 'aider',
     needsKey: true,
@@ -56,7 +56,7 @@ const TOOLS: ToolDef[] = [
   {
     id: 'opencode',
     name: 'OpenCode',
-    desc: 'Terminal-based AI coding assistant. Interactive code generation and editing.',
+    desc: 'Interactive AI coding assistant with built-in FABRIC tools, skills, and agents. Powered by FABRIC-hosted LLMs. Requires a free FABRIC API key.',
     icon: 'OC',
     iconClass: 'opencode',
     needsKey: true,
@@ -64,7 +64,7 @@ const TOOLS: ToolDef[] = [
   {
     id: 'claude',
     name: 'Claude Code',
-    desc: 'Anthropic\'s official CLI for Claude. Requires your own paid Anthropic account.',
+    desc: 'Anthropic\'s most powerful agentic coding CLI. Requires your own paid Anthropic subscription (Max or API).',
     icon: 'CC',
     iconClass: 'claude',
     needsKey: false,
@@ -185,10 +185,10 @@ export default function AICompanionView({ selectedTool, onToolChange, visible = 
           {visibleTools.map((tool) => {
             const ready = tool.needsKey ? hasKey : true;
             const badge = tool.id === 'claude'
-              ? { cls: 'your-account', text: 'Your Account' }
+              ? { cls: 'your-account', text: 'Paid Subscription' }
               : ready
-                ? { cls: 'ready', text: 'Ready' }
-                : { cls: 'key-required', text: 'Key Required' };
+                ? { cls: 'free', text: 'Free \u2022 API Key Required' }
+                : { cls: 'key-required', text: 'API Key Required' };
 
             return (
               <div className="ai-card" key={tool.id} onClick={() => onToolChange?.(tool.id)}>

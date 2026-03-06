@@ -501,6 +501,62 @@ export function setAiTools(tools: Record<string, boolean>): Promise<Record<strin
   return fetchJson('/config/ai-tools', { method: 'POST', body: JSON.stringify(tools) });
 }
 
+// --- AI Chat ---
+
+export interface ChatAgent {
+  id: string;
+  name: string;
+  description: string;
+}
+
+export function getChatAgents(): Promise<ChatAgent[]> {
+  return fetchJson('/ai/chat/agents');
+}
+
+export function stopChatStream(requestId: string): Promise<{ status: string }> {
+  return fetchJson('/ai/chat/stop', { method: 'POST', body: JSON.stringify({ request_id: requestId }) });
+}
+
+export async function* streamChat(
+  messages: Array<{ role: string; content: string }>,
+  model: string,
+  options?: { agent?: string; sliceContext?: string; requestId?: string; signal?: AbortSignal },
+): AsyncGenerator<{ content?: string; error?: string; done?: boolean }> {
+  const res = await fetch(`${BASE}/ai/chat/stream`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      messages,
+      model,
+      agent: options?.agent,
+      slice_context: options?.sliceContext,
+      request_id: options?.requestId,
+    }),
+    signal: options?.signal,
+  });
+  if (!res.ok) {
+    yield { error: `API error ${res.status}` };
+    return;
+  }
+  const reader = res.body?.getReader();
+  if (!reader) { yield { error: 'No response body' }; return; }
+  const decoder = new TextDecoder();
+  let buffer = '';
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop() || '';
+    for (const line of lines) {
+      if (!line.startsWith('data: ')) continue;
+      const data = line.slice(6);
+      if (data === '[DONE]') { yield { done: true }; return; }
+      try { yield JSON.parse(data); } catch { /* skip */ }
+    }
+  }
+}
+
 export async function uploadToken(file: File): Promise<{ status: string; message: string }> {
   const form = new FormData();
   form.append('file', file);

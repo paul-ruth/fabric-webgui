@@ -130,11 +130,58 @@
   margin-bottom: 10px;
 }
 
+/* ── Sidebar branding ────────────────────────────────────────────────── */
+
+.tc-sidebar-branding {
+  margin-bottom: 12px;
+}
+
+.tc-sidebar-tagline {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--fabric-text);
+  margin-bottom: 6px;
+}
+
+.tc-sidebar-badge {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 10px;
+  letter-spacing: 0.02em;
+}
+
+.tc-sidebar-badge.free {
+  background: rgba(0, 142, 122, 0.15);
+  color: #008e7a;
+}
+
+[data-theme="dark"] .tc-sidebar-badge.free {
+  background: rgba(0, 142, 122, 0.2);
+  color: #26c6b0;
+}
+
+.tc-sidebar-badge.paid {
+  background: rgba(217, 119, 6, 0.15);
+  color: #b45309;
+}
+
+[data-theme="dark"] .tc-sidebar-badge.paid {
+  background: rgba(217, 119, 6, 0.2);
+  color: #fbbf24;
+}
+
 .tc-sidebar-desc {
   font-size: 12px;
   line-height: 1.6;
   color: var(--fabric-text-muted);
   margin-bottom: 16px;
+}
+
+.tc-sidebar-desc strong {
+  color: var(--fabric-text);
+  font-weight: 600;
 }
 
 .tc-new-session-btn {

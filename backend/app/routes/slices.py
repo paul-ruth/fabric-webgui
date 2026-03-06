@@ -657,27 +657,28 @@ async def reconcile_projects() -> dict[str, Any]:
         uuid_to_project: dict[str, str] = {}
         projects_scanned = 0
 
-        for proj in projects:
-            pid = proj.get("uuid", "")
-            if not pid:
-                continue
-            try:
-                fablib.set_project_id(pid)
-                os.environ["FABRIC_PROJECT_ID"] = pid
-                slices = fablib.get_slices()
-                for s in slices:
-                    sid = str(s.get_slice_id()) if s.get_slice_id() else ""
-                    if sid:
-                        uuid_to_project[sid] = pid
-                projects_scanned += 1
-            except Exception as e:
-                logger.warning("reconcile-projects: failed for project %s (%s): %s",
-                               proj.get("name", "?"), pid, e)
-
-        # Restore original project
-        if original_pid:
-            fablib.set_project_id(original_pid)
-            os.environ["FABRIC_PROJECT_ID"] = original_pid
+        try:
+            for proj in projects:
+                pid = proj.get("uuid", "")
+                if not pid:
+                    continue
+                try:
+                    fablib.set_project_id(pid)
+                    os.environ["FABRIC_PROJECT_ID"] = pid
+                    slices = fablib.get_slices()
+                    for s in slices:
+                        sid = str(s.get_slice_id()) if s.get_slice_id() else ""
+                        if sid:
+                            uuid_to_project[sid] = pid
+                    projects_scanned += 1
+                except Exception as e:
+                    logger.warning("reconcile-projects: failed for project %s (%s): %s",
+                                   proj.get("name", "?"), pid, e)
+        finally:
+            # Always restore original project, even if an exception occurs
+            if original_pid:
+                fablib.set_project_id(original_pid)
+                os.environ["FABRIC_PROJECT_ID"] = original_pid
 
         # Bulk-tag the registry
         tagged = bulk_tag_project(uuid_to_project)

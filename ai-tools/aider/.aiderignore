@@ -1,0 +1,4 @@
+*.json
+.fabric_config/*
+.opencode/*
+opencode.json

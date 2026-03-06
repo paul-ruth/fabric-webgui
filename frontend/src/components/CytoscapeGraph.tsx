@@ -589,11 +589,14 @@ export default function CytoscapeGraph({
       <div className="graph-controls">
         <label>Layout:</label>
         <select value={layout} onChange={(e) => onLayoutChange(e.target.value)} data-help-id="topology.layout">
-          {Object.keys(LAYOUTS).map((l) => (
-            <option key={l} value={l}>{l}</option>
-          ))}
+          <option value="dagre" title="Hierarchical layout — best for tree topologies">dagre</option>
+          <option value="cola" title="Force-directed layout — good for general topologies">cola</option>
+          <option value="breadthfirst" title="Tree layout from root — good for hierarchical networks">breadthfirst</option>
+          <option value="grid" title="Aligned grid — good for regular topologies">grid</option>
+          <option value="concentric" title="Radial circles — good for star topologies">concentric</option>
+          <option value="cose" title="Physics simulation — good for organic layouts">cose</option>
         </select>
-        <button onClick={handleFit} data-help-id="topology.fit">Fit</button>
+        <button onClick={handleFit} title="Fit graph to viewport" data-help-id="topology.fit">Fit</button>
         <button onClick={handleExport} title="Save graph as PNG image" data-help-id="topology.export">Save PNG</button>
         <span className="graph-controls-sep" />
         <label className="graph-toggle">
@@ -660,7 +663,7 @@ export default function CytoscapeGraph({
               onContextAction({ type: 'open-client', elements: [singleVm], port: 80 });
               setMenu(null);
             }}>
-              ▸ Open in Client
+              ▸ Open in Web Apps
             </button>
           )}
           {vmComponents.length > 0 && vmsWithIp.length > 0 && (

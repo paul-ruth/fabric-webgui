@@ -314,6 +314,12 @@ def _setup_aider_workspace(cwd: str) -> None:
         shutil.copy2(src_conf, dst_conf)
         logger.info("Wrote .aider.conf.yml")
 
+    # Aider ignore patterns
+    src_ignore = os.path.join(_AIDER_DEFAULTS_DIR, ".aiderignore")
+    if os.path.isfile(src_ignore):
+        shutil.copy2(src_ignore, os.path.join(cwd, ".aiderignore"))
+        logger.info("Wrote .aiderignore")
+
 
 def _setup_claude_workspace(cwd: str) -> None:
     """Seed Claude Code CLI configuration and FABRIC context into the workspace.

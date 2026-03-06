@@ -117,6 +117,15 @@ export default function OpenCodeWebView({ visible = true }: Props) {
           </button>
         </div>
         <div className="tc-sidebar-section">
+          <div className="tc-sidebar-branding">
+            <div className="tc-sidebar-tagline">Terminal-based AI coding assistant</div>
+            <span className="tc-sidebar-badge free">Free &bull; FABRIC API Key Required</span>
+          </div>
+          <div className="tc-sidebar-desc">
+            Interactive AI assistant with built-in FABRIC tools, skills, and agents.
+            Powered by <strong>FABRIC-hosted LLMs</strong> — free for FABRIC users with an API key.
+            Get your key from the FABRIC portal, then create slices, deploy experiments, debug connectivity, and write deploy scripts.
+          </div>
           <button className="tc-new-session-btn" onClick={restartSession} title="Restart OpenCode session">
             <PlusIcon />
             New Session
@@ -124,9 +133,6 @@ export default function OpenCodeWebView({ visible = true }: Props) {
           <div className="tc-sidebar-status">
             <span className={`tc-status-dot ${status === 'running' ? 'connected' : 'disconnected'}`} />
             {status === 'loading' ? 'Starting...' : status === 'running' ? 'Running' : 'Error'}
-          </div>
-          <div className="tc-sidebar-desc">
-            AI coding assistant with FABRIC tools, skills, agents, and MCP servers.
           </div>
           <div className="tc-model-picker">
             <label className="tc-model-label">Model</label>

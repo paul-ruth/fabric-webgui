@@ -19,6 +19,7 @@ import FileTransferView from './components/FileTransferView';
 import HelpView from './components/HelpView';
 import ClientView from './components/ClientView';
 import AICompanionView from './components/AICompanionView';
+import AIChatPanel from './components/AIChatPanel';
 import type { ClientTarget } from './components/ClientView';
 import HelpContextMenu from './components/HelpContextMenu';
 import GuidedTour from './components/GuidedTour';
@@ -53,20 +54,20 @@ export default function App() {
   const [listLoaded, setListLoaded] = useState(false);
   const [dark, setDark] = useState(() => localStorage.getItem('theme') === 'dark');
   // --- Draggable panel layout ---
-  type PanelId = 'editor' | 'template' | 'detail';
+  type PanelId = 'editor' | 'template' | 'chat';
   type PanelLayoutEntry = { side: 'left' | 'right'; collapsed: boolean; width: number; order: number };
   type PanelLayoutMap = Record<PanelId, PanelLayoutEntry>;
 
-  const PANEL_ICONS: Record<PanelId, string> = { editor: '\u270E', template: '\u29C9', detail: '\u2726' };
-  const PANEL_LABELS: Record<PanelId, string> = { editor: 'Editor', template: 'Artifacts', detail: 'Detail' };
-  const PANEL_IDS: PanelId[] = ['editor', 'template', 'detail'];
+  const PANEL_ICONS: Record<PanelId, string> = { editor: '\u270E', template: '\u29C9', chat: '\u2728' };
+  const PANEL_LABELS: Record<PanelId, string> = { editor: 'Editor', template: 'Artifacts', chat: 'AI Chat' };
+  const PANEL_IDS: PanelId[] = ['editor', 'template', 'chat'];
   const DEFAULT_PANEL_WIDTH = 280;
   const MIN_PANEL_WIDTH = 180;
 
   const defaultLayout: PanelLayoutMap = {
     editor: { side: 'left', collapsed: false, width: DEFAULT_PANEL_WIDTH, order: 0 },
-    detail: { side: 'left', collapsed: true, width: DEFAULT_PANEL_WIDTH, order: 1 },
     template: { side: 'right', collapsed: false, width: DEFAULT_PANEL_WIDTH, order: 0 },
+    chat: { side: 'right', collapsed: true, width: 320, order: 1 },
   };
 
   const [panelLayout, setPanelLayout] = useState<PanelLayoutMap>(() => {
@@ -80,28 +81,17 @@ export default function App() {
             parsed[id].width = DEFAULT_PANEL_WIDTH;
           }
         }
-        // Migrate: remove vm-template panel (merged into template)
+        // Clean up removed panels
         delete parsed['vm-template'];
-        // Migrate: add order field if missing
-        for (const id of PANEL_IDS) {
-          if (parsed[id] && parsed[id].order === undefined) {
-            parsed[id].order = defaultLayout[id].order;
-          }
-        }
-        // Migrate: move detail panel to left side (v2 layout)
-        if (!parsed._layoutV2) {
-          parsed.detail = { ...defaultLayout.detail };
-          parsed.template = { ...defaultLayout.template };
-          parsed._layoutV2 = true;
-        }
-        // Migrate: remove old project panel
         delete parsed.project;
-        // Migrate v3: reset to default panel positions
-        if (!parsed._layoutV3) {
-          for (const id of PANEL_IDS) {
+        delete parsed.detail;
+        // Ensure all current panels exist with defaults
+        for (const id of PANEL_IDS) {
+          if (!parsed[id]) {
             parsed[id] = { ...defaultLayout[id] };
           }
-          parsed._layoutV3 = true;
+          if (parsed[id].width === undefined) parsed[id].width = DEFAULT_PANEL_WIDTH;
+          if (parsed[id].order === undefined) parsed[id].order = defaultLayout[id].order;
         }
         return parsed;
       }
@@ -191,6 +181,13 @@ export default function App() {
   const [projectName, setProjectName] = useState('');
   const [projectId, setProjectId] = useState('');
   const [projects, setProjects] = useState<ProjectInfo[]>([]);
+  const [hiddenProjects, setHiddenProjects] = useState<Set<string>>(() => {
+    try {
+      const saved = localStorage.getItem('fabric-hidden-projects');
+      if (saved) return new Set(JSON.parse(saved));
+    } catch {}
+    return new Set();
+  });
   const [helpOpen, setHelpOpen] = useState(false);
   const [helpSection, setHelpSection] = useState<string | undefined>(undefined);
   const [statusMessage, setStatusMessage] = useState('');
@@ -203,6 +200,14 @@ export default function App() {
   const [consoleHeight, setConsoleHeight] = useState(260);
   const [openBootLogSlices, setOpenBootLogSlices] = useState<string[]>([]);
   const [dropIndicator, setDropIndicator] = useState<{ panelId: PanelId; edge: 'left' | 'right' } | null>(null);
+
+  // Persist hidden projects to localStorage
+  useEffect(() => {
+    localStorage.setItem('fabric-hidden-projects', JSON.stringify([...hiddenProjects]));
+  }, [hiddenProjects]);
+
+  // Visible projects = all projects minus hidden ones
+  const visibleProjects = projects.filter(p => !hiddenProjects.has(p.uuid));
 
   // Track previous slice states for build log state-transition messages
   const prevSliceStatesRef = useRef<Record<string, string>>({});
@@ -376,8 +381,13 @@ export default function App() {
         // Fetch full project list from Core API (replaces JWT subset)
         api.listUserProjects().then((resp) => {
           setProjects(resp.projects);
+          // Only update project if we don't already have one set from getConfig,
+          // or if the backend reports a different active project (explicit switch).
           if (resp.active_project_id) {
-            setProjectId(resp.active_project_id);
+            setProjectId(prev => {
+              if (prev && prev === resp.active_project_id) return prev; // no change
+              return resp.active_project_id;
+            });
             const proj = resp.projects.find((p) => p.uuid === resp.active_project_id);
             if (proj) setProjectName(proj.name);
           }
@@ -1465,8 +1475,17 @@ export default function App() {
             onRecipesChanged={() => api.listRecipes().then(setRecipes).catch(() => {})}
           />
         );
-      case 'detail':
-        return null;
+      case 'chat':
+        return (
+          <AIChatPanel
+            key="chat"
+            onCollapse={() => toggleCollapse('chat')}
+            dragHandleProps={dragProps}
+            panelIcon={icon}
+            sliceContext={sliceData ? JSON.stringify(sliceData, null, 2) : undefined}
+            onSliceChanged={refreshSliceList}
+          />
+        );
     }
   };
 
@@ -1575,7 +1594,7 @@ export default function App() {
         onOpenSettings={() => setSettingsOpen((prev) => !prev)}
         onOpenHelp={() => handleOpenHelp()}
         projectName={projectName}
-        projects={projects}
+        projects={visibleProjects}
         onProjectChange={handleProjectChange}
         aiTools={visibleAiTools}
         selectedAiTool={selectedAiTool}
@@ -1654,6 +1673,9 @@ export default function App() {
       {settingsOpen && !helpOpen && (
         <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
           <ConfigureView
+            hiddenProjects={hiddenProjects}
+            onHiddenProjectsChange={setHiddenProjects}
+            allProjects={projects}
             onConfigured={() => {
               setIsConfigured(true);
               setSettingsOpen(false);

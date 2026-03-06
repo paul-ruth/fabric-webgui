@@ -767,6 +767,23 @@ export default function BottomPanel({ terminals, onCloseTerminal, validationIssu
     }
   }
 
+  function getTabTitle(tabId: string): string {
+    switch (tabId) {
+      case 'slice-errors': return 'Slice provisioning errors and boot config errors';
+      case 'errors': return 'API and operation error log';
+      case 'validation': return 'Slice validation results — errors, warnings, and remedies';
+      case 'log': return 'Application event log with timestamps';
+      case 'recipes': return 'Recipe execution output';
+      case 'local-terminal': return 'Shell terminal on the backend container';
+      default: {
+        if (tabId.startsWith('boot:')) return `Boot config output for ${tabId.slice(5)}`;
+        if (tabId.startsWith('local-term-')) return 'Shell terminal on the backend container';
+        if (terminals.find(t => t.id === tabId)) return 'SSH terminal to this VM';
+        return '';
+      }
+    }
+  }
+
   function isTabCloseable(tabId: string): boolean {
     return !!terminals.find(t => t.id === tabId) || tabId.startsWith('boot:') || tabId.startsWith('local-term-');
   }
@@ -786,7 +803,7 @@ export default function BottomPanel({ terminals, onCloseTerminal, validationIssu
               <div className="bp-errors-header">
                 <span>{errors.length} error{errors.length !== 1 ? 's' : ''}</span>
                 {errors.length > 0 && (
-                  <button className="bp-errors-clear" onClick={onClearErrors}>Clear All</button>
+                  <button className="bp-errors-clear" onClick={onClearErrors} title="Clear all entries from this tab">Clear All</button>
                 )}
               </div>
               {errors.length === 0 && (
@@ -938,6 +955,7 @@ export default function BottomPanel({ terminals, onCloseTerminal, validationIssu
                   }
                 }}
                 data-help-id={getTabHelpId(tabId)}
+                title={getTabTitle(tabId)}
               >
                 {getTabLabel(tabId)}
                 {getTabBadge(tabId)}
@@ -981,7 +999,7 @@ export default function BottomPanel({ terminals, onCloseTerminal, validationIssu
   if (!expanded) {
     return (
       <div className="bottom-panel-collapsed">
-        <span className="bottom-panel-collapsed-label" onClick={() => setExpanded(true)}>
+        <span className="bottom-panel-collapsed-label" onClick={() => setExpanded(true)} title="Expand the console panel">
           ▲ Console
           {totalSliceIssues > 0 && <span className="bottom-panel-badge error">{totalSliceIssues} slice issue{totalSliceIssues !== 1 ? 's' : ''}</span>}
           {apiErrorCount > 0 && <span className="bottom-panel-badge error">{apiErrorCount} error{apiErrorCount !== 1 ? 's' : ''}</span>}
@@ -1001,7 +1019,7 @@ export default function BottomPanel({ terminals, onCloseTerminal, validationIssu
             <button
               className="bp-width-toggle"
               onClick={(e) => { e.stopPropagation(); onToggleFullWidth(); }}
-              title={fullWidth ? 'Fit to canvas panel' : 'Span full window width'}
+              title="Toggle console between full width and panel-constrained width"
             >
               <span className={`bp-width-icon ${fullWidth ? 'full' : 'narrow'}`} />
             </button>
@@ -1022,12 +1040,12 @@ export default function BottomPanel({ terminals, onCloseTerminal, validationIssu
           <button
             className="bp-width-toggle"
             onClick={onToggleFullWidth}
-            title={fullWidth ? 'Fit to canvas panel' : 'Span full window width'}
+            title="Toggle console between full width and panel-constrained width"
           >
             <span className={`bp-width-icon ${fullWidth ? 'full' : 'narrow'}`} />
           </button>
         )}
-        <button className="bp-collapse-btn" onClick={() => setExpanded(false)} title="Collapse panel">▼</button>
+        <button className="bp-collapse-btn" onClick={() => setExpanded(false)} title="Expand or collapse the console panel">▼</button>
       </div>
       {/* Recursive layout */}
       <div className="bp-panes-row">
@@ -1052,7 +1070,7 @@ function RecipeConsoleView({ lines, running, onClear, endRef }: { lines: RecipeC
       <div className="bp-recipe-header">
         <span>{running ? 'Recipe running...' : 'Recipe complete'}</span>
         {!running && (
-          <button className="bp-errors-clear" onClick={onClear}>Clear</button>
+          <button className="bp-errors-clear" onClick={onClear} title="Clear all entries from this tab">Clear</button>
         )}
         {running && <span className="bp-recipe-pulse" />}
       </div>
@@ -1123,7 +1141,7 @@ function SingleSliceBootLogView({
         {running && <span className="bp-recipe-pulse" style={{ marginLeft: '8px' }} />}
         {!running && lines.length > 0 && (
           <button className="bp-errors-clear" style={{ marginLeft: 'auto' }}
-            onClick={onClear}>Clear</button>
+            onClick={onClear} title="Clear all entries from this tab">Clear</button>
         )}
       </div>
       <div className="bp-recipe-body" style={{ flex: 1 }}>
@@ -1237,7 +1255,7 @@ function SliceErrorsView({ errors, bootConfigErrors, onClearBootConfigErrors }: 
           <div className="bp-validation-header error" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <span>Boot Config — {bootConfigErrors.length} error{bootConfigErrors.length !== 1 ? 's' : ''}</span>
             {onClearBootConfigErrors && (
-              <button className="bp-errors-clear" onClick={onClearBootConfigErrors}>Clear</button>
+              <button className="bp-errors-clear" onClick={onClearBootConfigErrors} title="Clear all entries from this tab">Clear</button>
             )}
           </div>
           {bootConfigErrors.map((e, i) => (

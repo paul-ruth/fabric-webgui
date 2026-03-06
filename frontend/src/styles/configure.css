@@ -101,7 +101,8 @@
 }
 
 .configure-section select,
-.configure-section input[type="text"] {
+.configure-section input[type="text"],
+.configure-section input[type="password"] {
   width: 100%;
   padding: 8px 10px;
   border: 1px solid var(--fabric-border);
@@ -403,6 +404,60 @@
   font-size: 12px;
   resize: vertical;
   box-sizing: border-box;
+}
+
+/* --- Project visibility toggles --- */
+.project-toggle-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.project-toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 5px;
+  background: var(--fabric-bg-tint);
+  border: 1px solid var(--fabric-border);
+  cursor: pointer;
+  font-size: 13px;
+  transition: opacity 0.15s, border-color 0.15s;
+}
+
+.project-toggle-row:hover {
+  border-color: var(--fabric-primary);
+}
+
+.project-toggle-row.hidden-project {
+  opacity: 0.5;
+}
+
+.project-toggle-row input[type="checkbox"] {
+  accent-color: var(--fabric-primary);
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+}
+
+.project-toggle-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fabric-text);
+}
+
+.project-toggle-active {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: rgba(0, 142, 122, 0.15);
+  color: #008e7a;
+  font-weight: 600;
+  flex-shrink: 0;
 }
 
 /* --- AI tool toggles --- */

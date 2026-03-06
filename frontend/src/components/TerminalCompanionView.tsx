@@ -30,27 +30,47 @@ const TERM_THEME = {
   brightWhite: '#ffffff',
 };
 
-const TOOL_INFO: Record<string, { name: string; icon: string; iconClass: string; desc: string; tips: string }> = {
+interface ToolMeta {
+  name: string;
+  icon: string;
+  iconClass: string;
+  tagline: string;
+  desc: string;
+  tips: string;
+  badge: string;
+  badgeClass: string;
+}
+
+const TOOL_INFO: Record<string, ToolMeta> = {
   claude: {
     name: 'Claude Code',
     icon: 'CC',
     iconClass: 'claude',
-    desc: "Anthropic's official CLI for Claude. An agentic coding assistant that runs in your terminal.",
+    tagline: "Anthropic's agentic coding CLI",
+    desc: "The most powerful AI coding assistant available. Requires your own paid Anthropic subscription (Max or API). Charges apply to your account.",
     tips: 'Type /help for available commands. Use Ctrl+C to cancel. Type /exit to quit.',
+    badge: 'Paid Subscription',
+    badgeClass: 'paid',
   },
   aider: {
     name: 'Aider',
     icon: 'Ai',
     iconClass: 'aider',
-    desc: 'AI pair programming in your terminal. Edit code, generate scripts, and refactor with AI assistance.',
+    tagline: 'AI pair programming in your terminal',
+    desc: 'Edit files, generate scripts, and refactor code. Powered by FABRIC-hosted LLMs — free with a FABRIC API key.',
     tips: 'Use /add to add files to the chat. /help for all commands.',
+    badge: 'Free \u2022 API Key Required',
+    badgeClass: 'free',
   },
   opencode: {
     name: 'OpenCode',
     icon: 'OC',
     iconClass: 'opencode',
-    desc: 'Terminal-based AI coding assistant. Interactive code generation and editing.',
+    tagline: 'Terminal-based AI coding assistant',
+    desc: 'Interactive AI assistant with FABRIC tools. Powered by FABRIC-hosted LLMs — free with a FABRIC API key.',
     tips: 'Type your request at the prompt. Use Ctrl+C to cancel.',
+    badge: 'Free \u2022 API Key Required',
+    badgeClass: 'free',
   },
 };
 
@@ -238,6 +258,11 @@ export default function TerminalCompanionView({ toolId, visible = true }: Props)
           </button>
         </div>
         <div className="tc-sidebar-section">
+          <div className="tc-sidebar-branding">
+            <div className="tc-sidebar-tagline">{info.tagline}</div>
+            <span className={`tc-sidebar-badge ${info.badgeClass}`}>{info.badge}</span>
+          </div>
+          <div className="tc-sidebar-desc">{info.desc}</div>
           <button className="tc-new-session-btn" onClick={restartSession} title="Restart terminal session">
             <PlusIcon />
             New Session
@@ -246,7 +271,6 @@ export default function TerminalCompanionView({ toolId, visible = true }: Props)
             <span className={`tc-status-dot ${connected ? 'connected' : 'disconnected'}`} />
             {connected ? 'Connected' : 'Disconnected'}
           </div>
-          <div className="tc-sidebar-desc">{info.desc}</div>
           {toolId === 'opencode' && (
             <div className="tc-model-picker">
               <label className="tc-model-label">Model</label>

@@ -116,6 +116,15 @@ export default function AiderWebView({ visible = true }: Props) {
           </button>
         </div>
         <div className="tc-sidebar-section">
+          <div className="tc-sidebar-branding">
+            <div className="tc-sidebar-tagline">AI pair programming in your browser</div>
+            <span className="tc-sidebar-badge free">Free &bull; FABRIC API Key Required</span>
+          </div>
+          <div className="tc-sidebar-desc">
+            Edit files, generate scripts, and refactor code with AI assistance.
+            Powered by <strong>FABRIC-hosted LLMs</strong> — free for FABRIC users with an API key.
+            Get your key from the FABRIC portal, then add files with /add and Aider will apply changes directly.
+          </div>
           <button className="tc-new-session-btn" onClick={restartSession} title="Restart Aider session">
             <PlusIcon />
             New Session
@@ -123,9 +132,6 @@ export default function AiderWebView({ visible = true }: Props) {
           <div className="tc-sidebar-status">
             <span className={`tc-status-dot ${status === 'running' ? 'connected' : 'disconnected'}`} />
             {status === 'loading' ? 'Starting...' : status === 'running' ? 'Running' : 'Error'}
-          </div>
-          <div className="tc-sidebar-desc">
-            AI pair programming in your browser. Edit code, generate scripts, and refactor with AI assistance.
           </div>
           <div className="tc-model-picker">
             <label className="tc-model-label">Model</label>
