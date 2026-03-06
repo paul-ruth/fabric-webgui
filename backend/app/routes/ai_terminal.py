@@ -139,12 +139,13 @@ _MODEL_PROXY_SCRIPT = os.path.join(
 )
 _MODEL_PROXY_PORT = 9199
 
-# Paths to FABRIC instruction files and OpenCode defaults (inside the container)
+# Paths to AI tool assets (inside the container)
 _APP_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
-_FABRIC_AI_MD_PATH = os.path.join(_APP_ROOT, "FABRIC_AI.md")
-_OPENCODE_DEFAULTS_DIR = os.path.join(
-    os.path.dirname(__file__), "..", "opencode_defaults",
-)
+_AI_TOOLS_DIR = os.path.join(_APP_ROOT, "ai-tools")
+_FABRIC_AI_MD_PATH = os.path.join(_AI_TOOLS_DIR, "shared", "FABRIC_AI.md")
+_OPENCODE_DEFAULTS_DIR = os.path.join(_AI_TOOLS_DIR, "opencode")
+_AIDER_DEFAULTS_DIR = os.path.join(_AI_TOOLS_DIR, "aider")
+_CLAUDE_DEFAULTS_DIR = os.path.join(_AI_TOOLS_DIR, "claude-code")
 
 # Skills to skip (conflict with OpenCode builtins)
 _SKIP_SKILLS = {"compact", "help"}
@@ -291,6 +292,48 @@ def _setup_opencode_workspace(cwd: str) -> dict:
     }
 
     return {"mcp": mcp_cfg, "agent": agent_cfg, "command": cmd_cfg}
+
+
+def _setup_aider_workspace(cwd: str) -> None:
+    """Seed Aider configuration and FABRIC context into the workspace.
+
+    Copies:
+    - .aider.conf.yml from ai-tools/aider/
+    - AGENTS.md (shared FABRIC context, also used by Aider as read-only)
+    """
+    # Shared FABRIC context
+    agents_md = os.path.join(cwd, "AGENTS.md")
+    if os.path.isfile(_FABRIC_AI_MD_PATH) and not os.path.isfile(agents_md):
+        shutil.copy2(_FABRIC_AI_MD_PATH, agents_md)
+        logger.info("Wrote AGENTS.md for Aider from FABRIC_AI.md")
+
+    # Aider config
+    src_conf = os.path.join(_AIDER_DEFAULTS_DIR, ".aider.conf.yml")
+    if os.path.isfile(src_conf):
+        dst_conf = os.path.join(cwd, ".aider.conf.yml")
+        shutil.copy2(src_conf, dst_conf)
+        logger.info("Wrote .aider.conf.yml")
+
+
+def _setup_claude_workspace(cwd: str) -> None:
+    """Seed Claude Code CLI configuration and FABRIC context into the workspace.
+
+    Copies:
+    - CLAUDE.md from ai-tools/claude-code/
+    - AGENTS.md (shared FABRIC context, referenced by CLAUDE.md)
+    """
+    # Shared FABRIC context
+    agents_md = os.path.join(cwd, "AGENTS.md")
+    if os.path.isfile(_FABRIC_AI_MD_PATH) and not os.path.isfile(agents_md):
+        shutil.copy2(_FABRIC_AI_MD_PATH, agents_md)
+        logger.info("Wrote AGENTS.md for Claude Code from FABRIC_AI.md")
+
+    # Claude Code project instructions
+    src_claude = os.path.join(_CLAUDE_DEFAULTS_DIR, "CLAUDE.md")
+    if os.path.isfile(src_claude):
+        dst_claude = os.path.join(cwd, "CLAUDE.md")
+        shutil.copy2(src_claude, dst_claude)
+        logger.info("Wrote CLAUDE.md for Claude Code CLI")
 
 
 def _start_model_proxy(
@@ -473,6 +516,7 @@ async def start_aider_web(model: str = ""):
 
     cwd = "/fabric_storage/" if os.path.isdir("/fabric_storage") else os.path.expanduser("~")
     _ensure_git_ready(cwd)
+    _setup_aider_workspace(cwd)
 
     if not model:
         models = _fetch_models(api_key)
@@ -582,9 +626,12 @@ async def ai_terminal_ws(websocket: WebSocket, tool: str, model: str = ""):
 
         cwd = "/fabric_storage/" if os.path.isdir("/fabric_storage") else os.path.expanduser("~")
 
-        # Ensure git is ready for aider (needs user config + initial commit)
+        # Tool-specific workspace setup
         if tool == "aider":
             _ensure_git_ready(cwd)
+            _setup_aider_workspace(cwd)
+        elif tool == "claude":
+            _setup_claude_workspace(cwd)
 
         # Build opencode.json dynamically from available models on the AI server
         if tool == "opencode":

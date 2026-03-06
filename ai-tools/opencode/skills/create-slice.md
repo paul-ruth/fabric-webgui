@@ -50,7 +50,7 @@ This auto-assigns IPv4 addresses and routes. No manual network definition needed
 | Field | Default | Description |
 |-------|---------|-------------|
 | name | required | Unique node name |
-| site | "auto" | Site name or "auto" for best available |
+| site | "auto" | Site name, "auto", or "@group" tag for co-location |
 | cores | 2 | CPU cores (1-128) |
 | ram | 8 | RAM in GB (2-512) |
 | disk | 10 | Disk in GB (10-500) |

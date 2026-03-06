@@ -103,7 +103,33 @@ These tools interact directly with the FABRIC testbed using the user's credentia
 - `fabric_list_templates` — List slice templates
 - `fabric_create_from_template(template_name, slice_name?)` — Create draft from template
 
-**Prefer FABlib tools over Python scripts** for standard operations.
+## Slice Lifecycle
+
+```
+Template ──fabric_create_from_template──> Draft (.drafts/, visible in WebUI)
+Custom spec ──fabric_create_slice──────> Draft
+Draft ──fabric_submit_slice──────────> Configuring ──> StableOK or StableError
+StableOK ──fabric_modify_slice───────> ModifyOK ──> Configuring ──> StableOK
+StableOK ──fabric_renew_slice────────> StableOK (extended lease, default 24h)
+StableOK ──save-as-template──────────> Template (reusable, via WebUI)
+StableOK ──clone────────────────────> Draft (new name, same topology)
+Any state ──fabric_delete_slice──────> (destroyed, always confirm first)
+```
+
+Key points:
+- Drafts are local-only until submitted — no FABRIC resources allocated
+- `wait=true` blocks until StableOK (use for <=3 nodes); `wait=false` returns immediately
+- StableError means provisioning failed — check per-node errors with `fabric_get_slice`
+- Leases auto-delete slices when expired — renew proactively
+
+**Always use the built-in FABlib tools above** for FABRIC operations. These tools
+wrap the FABlib Python library directly — they are NOT MCP tools. Do not use the
+MCP `fabric-api` server; it duplicates what the built-in tools already provide.
+
+**fabric-reports MCP** is also available but requires FABRIC staff/admin
+permissions. Regular users cannot access it. Only use it if the user is known
+to be FABRIC staff or admin, or if they explicitly ask to query reports data.
+
 Only write Python scripts for: sub-interfaces, port mirroring, VLAN tagging,
 CPU pinning, NUMA tuning, persistent storage (CephFS), batch operations,
 or complex data analysis with pandas/matplotlib.

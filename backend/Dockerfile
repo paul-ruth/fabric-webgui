@@ -26,7 +26,9 @@ COPY scripts/ scripts/
 COPY app/ app/
 
 COPY VERSION /app/VERSION
-COPY FABRIC_AI.md /app/FABRIC_AI.md
+
+# Copy AI tool configurations (skills, agents, prompts, shared context)
+COPY ai-tools/ ai-tools/
 
 # Copy builtin slice-libraries (slice templates, VM templates, recipes) — synced before build
 COPY slice-libraries/ slice-libraries/
