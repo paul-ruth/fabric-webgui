@@ -484,49 +484,17 @@ export function getOpenCodeWebStatus(): Promise<{ port?: number; status: string 
   return fetchJson('/ai/opencode-web/status');
 }
 
-// --- Weave Skills & Agents ---
-
-export interface WeaveSkill {
-  name: string;
-  description: string;
+export function startAiderWeb(model?: string): Promise<{ port?: number; status: string; error?: string }> {
+  const params = model ? `?model=${encodeURIComponent(model)}` : '';
+  return fetchJson(`/ai/aider-web/start${params}`, { method: 'POST' });
 }
 
-export function listWeaveSkills(): Promise<WeaveSkill[]> {
-  return fetchJson('/weave/skills');
+export function stopAiderWeb(): Promise<{ status: string }> {
+  return fetchJson('/ai/aider-web/stop', { method: 'POST' });
 }
 
-export function listWeaveAgents(): Promise<WeaveSkill[]> {
-  return fetchJson('/weave/agents');
-}
-
-export interface WeaveModel {
-  id: string;
-  name: string;
-}
-
-export function listWeaveModels(): Promise<{ models: WeaveModel[]; default: string }> {
-  return fetchJson('/weave/models');
-}
-
-export interface WeaveChat {
-  id: string;
-  title: string;
-  folder: string;
-  model: string;
-  created_at: string;
-  updated_at: string;
-}
-
-export function listWeaveChats(): Promise<WeaveChat[]> {
-  return fetchJson('/weave/chats');
-}
-
-export function deleteWeaveChat(id: string): Promise<{ status: string }> {
-  return fetchJson(`/weave/chats/${encodeURIComponent(id)}`, { method: 'DELETE' });
-}
-
-export function listWeaveFolders(): Promise<{ folders: string[]; default: string }> {
-  return fetchJson('/weave/folders');
+export function getAiderWebStatus(): Promise<{ port?: number; status: string }> {
+  return fetchJson('/ai/aider-web/status');
 }
 
 export function setAiTools(tools: Record<string, boolean>): Promise<Record<string, boolean>> {

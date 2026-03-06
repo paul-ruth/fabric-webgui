@@ -42,7 +42,7 @@ export default function ConfigureView({ onConfigured, onClose }: ConfigureViewPr
   );
   const [litellmApiKey, setLitellmApiKey] = useState('');
   const [aiTools, setAiTools] = useState<Record<string, boolean>>({
-    weave: true, aider: false, opencode: false, claude: false,
+    aider: true, opencode: true, claude: false,
   });
 
   const tokenFileRef = useRef<HTMLInputElement>(null);
@@ -611,7 +611,7 @@ export default function ConfigureView({ onConfigured, onClose }: ConfigureViewPr
 
               <p style={{ marginTop: 16, fontWeight: 600 }}>AI Companion</p>
               <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2, marginBottom: 6 }}>
-                API key for FABRIC AI services (ai.fabric-testbed.net). Used by Weave, Aider, and OpenCode.
+                API key for FABRIC AI services (ai.fabric-testbed.net). Used by Aider and OpenCode.
               </p>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 <input
@@ -632,7 +632,6 @@ export default function ConfigureView({ onConfigured, onClose }: ConfigureViewPr
               </p>
               <div className="ai-tool-toggles">
                 {([
-                  { id: 'weave', label: 'Weave', desc: 'FABRIC AI coding assistant (built-in)' },
                   { id: 'aider', label: 'Aider', desc: 'AI pair programming terminal' },
                   { id: 'opencode', label: 'OpenCode', desc: 'Terminal-based AI coding assistant' },
                   { id: 'claude', label: 'Claude Code', desc: 'Anthropic CLI (requires your own account)' },

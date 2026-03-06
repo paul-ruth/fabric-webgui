@@ -180,7 +180,7 @@ export default function LibrariesPanel({
     if (activeTab === 'recipes') refreshRecipes();
   }, [activeTab]);  // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Periodic polling — pick up templates created by Weave or manually
+  // Periodic polling — pick up templates created externally or manually
   useEffect(() => {
     const interval = setInterval(() => {
       if (activeTab === 'slice') refreshSliceTemplates();

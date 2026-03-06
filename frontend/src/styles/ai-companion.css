@@ -52,7 +52,6 @@
   flex-shrink: 0;
 }
 
-.ai-card-icon.weave { background: linear-gradient(135deg, #5798bc, #008e7a); color: #fff; font-style: italic; }
 .ai-card-icon.aider { background: linear-gradient(135deg, #008e7a, #006b5a); color: #fff; }
 .ai-card-icon.opencode { background: linear-gradient(135deg, #6c5ce7, #a29bfe); color: #fff; }
 .ai-card-icon.claude { background: linear-gradient(135deg, #d4a574, #c4956a); color: #fff; }

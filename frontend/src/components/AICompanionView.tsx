@@ -6,9 +6,9 @@ import '@xterm/xterm/css/xterm.css';
 import { buildWsUrl } from '../utils/wsUrl';
 import { getConfig, getAiTools } from '../api/client';
 import ContainerFileBrowser from './ContainerFileBrowser';
-import WeaveChat from './WeaveChat';
 import TerminalCompanionView from './TerminalCompanionView';
 import OpenCodeWebView from './OpenCodeWebView';
+import AiderWebView from './AiderWebView';
 import '../styles/ai-companion.css';
 
 const TERM_THEME = {
@@ -45,14 +45,6 @@ interface ToolDef {
 }
 
 const TOOLS: ToolDef[] = [
-  {
-    id: 'weave',
-    name: 'Weave',
-    desc: 'FABRIC AI coding assistant. Read and edit files, run commands, search code, and manage experiments — powered by FABRIC\'s self-hosted LLM.',
-    icon: 'W',
-    iconClass: 'weave',
-    needsKey: true,
-  },
   {
     id: 'aider',
     name: 'Aider',
@@ -164,8 +156,8 @@ export default function AICompanionView({ selectedTool, onToolChange, visible = 
   // render it full-screen without the card launcher or split pane
   const renderDirectTool = () => {
     if (!selectedTool) return null;
-    if (selectedTool === 'weave') return <WeaveChat />;
     if (selectedTool === 'opencode') return <OpenCodeWebView visible={visible} />;
+    if (selectedTool === 'aider') return <AiderWebView visible={visible} />;
     return <TerminalCompanionView toolId={selectedTool} visible={visible} />;
   };
 
@@ -239,11 +231,7 @@ export default function AICompanionView({ selectedTool, onToolChange, visible = 
               <div className="ai-terminal-pane">
                 {tabs.map((tab) => (
                   <div key={tab.id} style={{ width: '100%', height: '100%', display: activeTab === tab.id ? 'block' : 'none' }}>
-                    {tab.toolId === 'weave' ? (
-                      <WeaveChat />
-                    ) : (
-                      <AITerminalPane toolId={tab.toolId} tabId={tab.id} />
-                    )}
+                    <AITerminalPane toolId={tab.toolId} tabId={tab.id} />
                   </div>
                 ))}
               </div>

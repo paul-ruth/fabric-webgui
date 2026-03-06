@@ -290,7 +290,7 @@ def list_templates() -> list[dict[str, Any]]:
         tmpl_path = os.path.join(entry_dir, "template.fabric.json")
 
         # Auto-generate metadata for directories that have a template but no metadata
-        # (e.g. created by Weave or manually)
+        # (e.g. created externally or manually)
         if os.path.isfile(tmpl_path) and not os.path.isfile(meta_path):
             try:
                 with open(tmpl_path) as f:

@@ -10,7 +10,6 @@ import EditorPanel from './components/EditorPanel';
 import LibrariesPanel from './components/LibrariesPanel';
 import MonitoringView from './components/MonitoringView';
 import LibrariesView from './components/LibrariesView';
-import WeaveMiniChat from './components/WeaveMiniChat';
 import GeoView from './components/GeoView';
 import BottomPanel from './components/BottomPanel';
 import type { TerminalTab, RecipeConsoleLine, BootConsoleLine } from './components/BottomPanel';
@@ -59,7 +58,7 @@ export default function App() {
   type PanelLayoutMap = Record<PanelId, PanelLayoutEntry>;
 
   const PANEL_ICONS: Record<PanelId, string> = { editor: '\u270E', template: '\u29C9', detail: '\u2726' };
-  const PANEL_LABELS: Record<PanelId, string> = { editor: 'Editor', template: 'Artifacts', detail: 'Weave' };
+  const PANEL_LABELS: Record<PanelId, string> = { editor: 'Editor', template: 'Artifacts', detail: 'Detail' };
   const PANEL_IDS: PanelId[] = ['editor', 'template', 'detail'];
   const DEFAULT_PANEL_WIDTH = 280;
   const MIN_PANEL_WIDTH = 180;
@@ -1467,14 +1466,7 @@ export default function App() {
           />
         );
       case 'detail':
-        return (
-          <WeaveMiniChat
-            key="detail"
-            onCollapse={() => toggleCollapse('detail')}
-            dragHandleProps={dragProps}
-            panelIcon={icon}
-          />
-        );
+        return null;
     }
   };
 
@@ -1567,7 +1559,6 @@ export default function App() {
   const rightCollapsed = sortByOrder(PANEL_IDS.filter(id => panelLayout[id].side === 'right' && panelLayout[id].collapsed));
 
   const AI_TOOL_INFO = [
-    { id: 'weave', name: 'Weave', icon: 'W' },
     { id: 'aider', name: 'Aider', icon: 'Ai' },
     { id: 'opencode', name: 'OpenCode', icon: 'OC' },
     { id: 'claude', name: 'Claude Code', icon: 'CC' },
@@ -1610,7 +1601,7 @@ export default function App() {
             setStatusMessage('Loading slice...');
             api.getSlice(name).then(data => {
               setSliceData(data);
-              // Update the slice list entry if the state changed (e.g. Weave submitted a draft)
+              // Update the slice list entry if the state changed (e.g. AI tool submitted a draft)
               if (data.state) {
                 setSlices(prev => prev.map(s =>
                   s.name === name && s.state !== data.state

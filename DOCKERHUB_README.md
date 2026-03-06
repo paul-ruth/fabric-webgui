@@ -11,7 +11,7 @@ A standalone web interface for the [FABRIC testbed](https://fabric-testbed.net/)
 - **Slice Templates** — Pre-built experiment topologies with one-click deployment
 - **Boot Configuration** — Per-node startup scripts with real-time progress streaming
 - **Monitoring** — Live CPU and network metrics from deployed VMs
-- **AI Assistant (Weave)** — AI-powered companion for creating and managing slices
+- **AI Companion** — AI-powered coding assistants (Aider, OpenCode, Claude Code)
 
 ## Quick Start
 

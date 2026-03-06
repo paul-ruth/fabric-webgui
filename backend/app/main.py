@@ -8,7 +8,7 @@ import os
 import asyncio
 from contextlib import asynccontextmanager
 
-from app.routes import slices, resources, terminal, config, metrics, files, templates, vm_templates, projects, monitoring, recipes, experiments, http_proxy, tunnels, ai_terminal, weave
+from app.routes import slices, resources, terminal, config, metrics, files, templates, vm_templates, projects, monitoring, recipes, experiments, http_proxy, tunnels, ai_terminal
 from app.tunnel_manager import get_tunnel_manager
 
 
@@ -42,7 +42,6 @@ app.include_router(slices.router, prefix="/api")
 app.include_router(resources.router, prefix="/api")
 app.include_router(metrics.router, prefix="/api")
 app.include_router(ai_terminal.router)
-app.include_router(weave.router)
 app.include_router(terminal.router)
 app.include_router(config.router)
 app.include_router(files.router)

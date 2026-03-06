@@ -139,11 +139,11 @@ _MODEL_PROXY_SCRIPT = os.path.join(
 )
 _MODEL_PROXY_PORT = 9199
 
-# Paths to FABRIC instruction files and weave defaults (inside the container)
+# Paths to FABRIC instruction files and OpenCode defaults (inside the container)
 _APP_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
-_WEAVE_MD_PATH = os.path.join(_APP_ROOT, "WEAVE.md")
-_WEAVE_DEFAULTS_DIR = os.path.join(
-    os.path.dirname(__file__), "..", "weave_defaults",
+_FABRIC_AI_MD_PATH = os.path.join(_APP_ROOT, "FABRIC_AI.md")
+_OPENCODE_DEFAULTS_DIR = os.path.join(
+    os.path.dirname(__file__), "..", "opencode_defaults",
 )
 
 # Skills to skip (conflict with OpenCode builtins)
@@ -154,7 +154,7 @@ def _setup_opencode_workspace(cwd: str) -> dict:
     """Set up FABRIC tools, skills, agents, MCP servers, and instructions.
 
     Creates the following in the working directory:
-    - AGENTS.md — comprehensive FABRIC instructions (from WEAVE.md)
+    - AGENTS.md — comprehensive FABRIC instructions (from FABRIC_AI.md)
     - .opencode/skills/<name>/SKILL.md — FABRIC skill definitions
     - .opencode/agent-prompts/<name>.md — agent prompt files
     - .opencode/mcp-scripts/<name>.sh — MCP server wrapper scripts
@@ -169,12 +169,12 @@ def _setup_opencode_workspace(cwd: str) -> dict:
 
     # --- AGENTS.md (auto-discovered by OpenCode as project instructions) ---
     agents_md = os.path.join(cwd, "AGENTS.md")
-    if os.path.isfile(_WEAVE_MD_PATH):
-        shutil.copy2(_WEAVE_MD_PATH, agents_md)
-        logger.info("Wrote AGENTS.md from WEAVE.md")
+    if os.path.isfile(_FABRIC_AI_MD_PATH):
+        shutil.copy2(_FABRIC_AI_MD_PATH, agents_md)
+        logger.info("Wrote AGENTS.md from FABRIC_AI.md")
 
     # --- Skills → .opencode/skills/<name>/SKILL.md ---
-    skills_src = os.path.join(_WEAVE_DEFAULTS_DIR, "skills")
+    skills_src = os.path.join(_OPENCODE_DEFAULTS_DIR, "skills")
     skill_count = 0
     if os.path.isdir(skills_src):
         for fname in os.listdir(skills_src):
@@ -188,7 +188,7 @@ def _setup_opencode_workspace(cwd: str) -> dict:
 
             with open(os.path.join(skills_src, fname)) as f:
                 content = f.read()
-            # Convert weave frontmatter to OpenCode YAML frontmatter
+            # Convert frontmatter to OpenCode YAML frontmatter
             if not content.startswith("---"):
                 content = "---\n" + content
 
@@ -201,7 +201,7 @@ def _setup_opencode_workspace(cwd: str) -> dict:
     prompts_dir = os.path.join(oc_dir, "agent-prompts")
     os.makedirs(prompts_dir, exist_ok=True)
     agent_cfg: dict = {}
-    agents_src = os.path.join(_WEAVE_DEFAULTS_DIR, "agents")
+    agents_src = os.path.join(_OPENCODE_DEFAULTS_DIR, "agents")
     if os.path.isdir(agents_src):
         for fname in os.listdir(agents_src):
             if not fname.endswith(".md"):
@@ -327,15 +327,6 @@ def _start_model_proxy(
 
 # Tool definitions: env setup and command for each AI tool
 TOOL_CONFIGS = {
-    "weave": {
-        "env": lambda key: {
-            "OPENAI_API_KEY": key,
-            "OPENAI_BASE_URL": "https://ai.fabric-testbed.net/v1",
-            "WEAVE_MODEL": "qwen3-coder-30b",
-        },
-        "cmd": ["python3", "/app/scripts/weave.py"],
-        "needs_key": True,
-    },
     "aider": {
         "env": lambda key: {
             "OPENAI_API_KEY": key,
@@ -461,6 +452,90 @@ async def opencode_web_status():
     """Check if the OpenCode web server is running."""
     running = _opencode_web_proc is not None and _opencode_web_proc.poll() is None
     return {"port": _OPENCODE_WEB_PORT if running else None, "status": "running" if running else "stopped"}
+
+
+_AIDER_WEB_PORT = 9197
+_aider_web_proc: subprocess.Popen | None = None
+
+
+@router.post("/api/ai/aider-web/start")
+async def start_aider_web(model: str = ""):
+    """Start the Aider browser GUI (Streamlit) and return its port."""
+    global _aider_web_proc
+
+    # Already running?
+    if _aider_web_proc and _aider_web_proc.poll() is None:
+        return {"port": _AIDER_WEB_PORT, "status": "running"}
+
+    api_key = _get_ai_api_key()
+    if not api_key:
+        return {"error": "AI API key not configured", "status": "error"}
+
+    cwd = "/fabric_storage/" if os.path.isdir("/fabric_storage") else os.path.expanduser("~")
+    _ensure_git_ready(cwd)
+
+    if not model:
+        models = _fetch_models(api_key)
+        model = _pick_model(models, _PREFERRED_MODELS, "qwen3-coder-30b")
+
+    tool_env = {
+        **os.environ,
+        "OPENAI_API_KEY": api_key,
+        "OPENAI_API_BASE": f"{AI_SERVER_URL}/v1",
+    }
+
+    cmd = [
+        "aider", "--gui",
+        "--model", f"openai/{model}",
+        "--no-auto-lint",
+        "--no-auto-test",
+        "--no-git-commit-verify",
+    ]
+    # Streamlit needs server config via env or CLI args
+    tool_env["STREAMLIT_SERVER_PORT"] = str(_AIDER_WEB_PORT)
+    tool_env["STREAMLIT_SERVER_ADDRESS"] = "0.0.0.0"
+    tool_env["STREAMLIT_SERVER_HEADLESS"] = "true"
+    tool_env["STREAMLIT_BROWSER_GATHER_USAGE_STATS"] = "false"
+
+    try:
+        _aider_web_proc = subprocess.Popen(
+            cmd, cwd=cwd, env=tool_env,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            preexec_fn=os.setsid,
+        )
+        logger.info("Aider GUI started pid=%d on :%d model=%s", _aider_web_proc.pid, _AIDER_WEB_PORT, model)
+    except Exception:
+        logger.exception("Failed to start aider GUI")
+        return {"error": "Failed to start Aider GUI", "status": "error"}
+
+    # Streamlit takes a moment to start
+    await asyncio.sleep(3)
+
+    return {"port": _AIDER_WEB_PORT, "status": "running"}
+
+
+@router.post("/api/ai/aider-web/stop")
+async def stop_aider_web():
+    """Stop the Aider GUI server."""
+    global _aider_web_proc
+    if _aider_web_proc and _aider_web_proc.poll() is None:
+        try:
+            os.killpg(os.getpgid(_aider_web_proc.pid), signal.SIGTERM)
+            _aider_web_proc.wait(timeout=3)
+        except Exception:
+            try:
+                _aider_web_proc.kill()
+            except Exception:
+                pass
+    _aider_web_proc = None
+    return {"status": "stopped"}
+
+
+@router.get("/api/ai/aider-web/status")
+async def aider_web_status():
+    """Check if the Aider GUI server is running."""
+    running = _aider_web_proc is not None and _aider_web_proc.poll() is None
+    return {"port": _AIDER_WEB_PORT if running else None, "status": "running" if running else "stopped"}
 
 
 @router.get("/api/ai/models")

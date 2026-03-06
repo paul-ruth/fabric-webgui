@@ -941,7 +941,7 @@ def check_update():
 # AI Companion tool toggles
 # ---------------------------------------------------------------------------
 
-_DEFAULT_AI_TOOLS = {"weave": True, "aider": False, "opencode": False, "claude": False}
+_DEFAULT_AI_TOOLS = {"aider": True, "opencode": True, "claude": False}
 
 
 def _ai_tools_path() -> str:

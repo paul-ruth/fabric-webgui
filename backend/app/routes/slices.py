@@ -416,7 +416,7 @@ async def list_slices() -> list[dict[str, Any]]:
        fast results, individually query by UUID to get its current state and
        ``has_errors``.  This catches slices that transitioned to terminal
        states (Dead, Closing, StableError) since the last list.
-    4. Scan .drafts/ on disk for new drafts (e.g. created by Weave).
+    4. Scan .drafts/ on disk for new drafts (e.g. created externally).
     5. Append new (never-submitted) draft slices.
     """
     # Scan .drafts/ for any new drafts not yet in memory
@@ -705,7 +705,7 @@ async def get_slice(slice_name: str) -> dict[str, Any]:
     def _do():
         # New drafts (never submitted) — serve from memory.
         # Safety net: if the registry already has a UUID for this name, the
-        # draft was submitted externally (e.g. by Weave) — skip the draft
+        # draft was submitted externally (e.g. by an AI tool) — skip the draft
         # and fall through to the FABRIC lookup below.
         if _is_new_draft(slice_name):
             existing_uuid = get_slice_uuid(slice_name)
