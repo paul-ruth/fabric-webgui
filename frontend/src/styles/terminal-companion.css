@@ -211,6 +211,63 @@
   font-weight: 600;
 }
 
+/* ── Model picker ────────────────────────────────────────────────────────── */
+
+.tc-model-picker {
+  margin-top: 12px;
+  padding: 10px 12px;
+  background: var(--fabric-bg-tint);
+  border-radius: 8px;
+}
+
+[data-theme="dark"] .tc-model-picker {
+  background: rgba(255,255,255,0.04);
+}
+
+.tc-model-label {
+  display: block;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--fabric-text-muted);
+  margin-bottom: 6px;
+}
+
+.tc-model-select {
+  width: 100%;
+  padding: 6px 8px;
+  font-size: 12px;
+  font-family: 'JetBrains Mono', monospace;
+  border: 1px solid var(--fabric-border);
+  border-radius: 6px;
+  background: var(--fabric-input-bg, #fff);
+  color: var(--fabric-text);
+  cursor: pointer;
+}
+
+[data-theme="dark"] .tc-model-select {
+  background: #1a1a2e;
+  border-color: rgba(255,255,255,0.12);
+}
+
+.tc-model-select:focus {
+  outline: none;
+  border-color: var(--fabric-primary);
+}
+
+.tc-model-hint {
+  font-size: 10px;
+  color: var(--fabric-text-muted);
+  margin-top: 4px;
+}
+
+.tc-model-loading {
+  font-size: 11px;
+  color: var(--fabric-text-muted);
+  font-style: italic;
+}
+
 /* ── Main area ───────────────────────────────────────────────────────────── */
 
 .tc-main {
@@ -276,6 +333,34 @@
   color: var(--fabric-primary);
 }
 
+.tc-refresh-btn {
+  margin-left: auto;
+  background: none;
+  border: 1px solid var(--fabric-border-solid);
+  color: var(--fabric-text-muted);
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 500;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.tc-refresh-btn:hover {
+  background: var(--fabric-bg-tint);
+  color: var(--fabric-primary);
+  border-color: var(--fabric-primary);
+}
+.tc-refresh-btn svg {
+  width: 14px;
+  height: 14px;
+}
+[data-theme="dark"] .tc-refresh-btn {
+  border-color: rgba(255,255,255,0.1);
+}
+
 /* ── Terminal wrapper ────────────────────────────────────────────────────── */
 
 .tc-terminal-wrapper {
@@ -301,4 +386,48 @@
 [data-theme="dark"] .tc-terminal-inner {
   border-color: rgba(255,255,255,0.08);
   box-shadow: 0 2px 16px rgba(0,0,0,0.3);
+}
+
+/* ── OpenCode Web iframe ───────────────────────────────────────────────── */
+
+.tc-opencode-iframe {
+  width: 100%;
+  height: 100%;
+  border: none;
+  border-radius: 12px;
+  background: #1a1a2e;
+}
+
+/* ── Loading state ─────────────────────────────────────────────────────── */
+
+.tc-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  gap: 12px;
+}
+
+.tc-loading-spinner {
+  width: 32px;
+  height: 32px;
+  border: 3px solid rgba(87, 152, 188, 0.2);
+  border-top-color: var(--fabric-primary, #5798bc);
+  border-radius: 50%;
+  animation: tc-spin 0.8s linear infinite;
+}
+
+@keyframes tc-spin {
+  to { transform: rotate(360deg); }
+}
+
+.tc-loading-text {
+  font-size: 14px;
+  color: var(--fabric-text-muted);
+  font-weight: 500;
+}
+
+.tc-loading-error {
+  color: var(--fabric-coral, #e25241);
 }

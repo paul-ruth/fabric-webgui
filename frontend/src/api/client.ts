@@ -467,6 +467,23 @@ export function getAiTools(): Promise<Record<string, boolean>> {
   return fetchJson('/config/ai-tools');
 }
 
+export function getAiModels(): Promise<{ models: string[]; default: string; error?: string }> {
+  return fetchJson('/ai/models');
+}
+
+export function startOpenCodeWeb(model?: string): Promise<{ port?: number; status: string; error?: string }> {
+  const params = model ? `?model=${encodeURIComponent(model)}` : '';
+  return fetchJson(`/ai/opencode-web/start${params}`, { method: 'POST' });
+}
+
+export function stopOpenCodeWeb(): Promise<{ status: string }> {
+  return fetchJson('/ai/opencode-web/stop', { method: 'POST' });
+}
+
+export function getOpenCodeWebStatus(): Promise<{ port?: number; status: string }> {
+  return fetchJson('/ai/opencode-web/status');
+}
+
 // --- Weave Skills & Agents ---
 
 export interface WeaveSkill {

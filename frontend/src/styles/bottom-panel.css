@@ -117,6 +117,19 @@
   padding-left: 14px;
 }
 
+.bp-add-local-btn {
+  font-size: 14px;
+  font-weight: 600;
+  padding: 4px 8px;
+  opacity: 0.4;
+  border-left: 1px solid var(--fabric-border);
+  margin-left: 2px;
+}
+.bp-add-local-btn:hover {
+  opacity: 1;
+  color: var(--fabric-primary);
+}
+
 .bp-tab-close {
   font-size: 10px;
   opacity: 0.5;

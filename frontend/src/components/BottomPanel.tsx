@@ -287,6 +287,10 @@ export default function BottomPanel({ terminals, onCloseTerminal, validationIssu
   }));
   const [dragState, setDragState] = useState<DragState | null>(null);
 
+  // --- Extra local terminals ---
+  const [extraLocalTerminals, setExtraLocalTerminals] = useState<string[]>([]);
+  const localTermCounter = useRef(1);
+
   // --- Tab metadata ---
   const termCount = terminals.length;
   const validationErrorCount = validationIssues.filter((i) => i.severity === 'error').length;
@@ -301,10 +305,11 @@ export default function BottomPanel({ terminals, onCloseTerminal, validationIssu
   // All tab IDs that should exist
   const allTabIds = useMemo(() => {
     const ids: string[] = [...FIXED_TABS];
+    extraLocalTerminals.forEach(id => ids.push(id));
     openBootLogSlices.forEach(sn => ids.push(`boot:${sn}`));
     terminals.forEach(t => ids.push(t.id));
     return ids;
-  }, [terminals, openBootLogSlices]);
+  }, [terminals, openBootLogSlices, extraLocalTerminals]);
 
   // Default leaf for reset
   const makeDefaultLeaf = useCallback((): LeafNode => ({
@@ -313,6 +318,27 @@ export default function BottomPanel({ terminals, onCloseTerminal, validationIssu
     tabIds: [...FIXED_TABS],
     activeTabId: 'validation',
   }), []);
+
+  // --- Local terminal management ---
+  const addLocalTerminal = useCallback((leafId: string) => {
+    localTermCounter.current++;
+    const newId = `local-term-${localTermCounter.current}`;
+    setExtraLocalTerminals(prev => [...prev, newId]);
+    setLayout(prev => updateLeaf(prev, leafId, l => ({
+      ...l,
+      tabIds: [...l.tabIds, newId],
+      activeTabId: newId,
+    })));
+    setExpanded(true);
+  }, [setExpanded]);
+
+  const closeLocalTerminal = useCallback((tabId: string) => {
+    setExtraLocalTerminals(prev => prev.filter(id => id !== tabId));
+    setLayout(prev => {
+      const result = removeTabFromTree(prev, tabId);
+      return result || makeDefaultLeaf();
+    });
+  }, [makeDefaultLeaf]);
 
   // --- Sync terminal additions/removals into layout tree ---
   const prevTermIds = useRef<string[]>([]);
@@ -686,6 +712,7 @@ export default function BottomPanel({ terminals, onCloseTerminal, validationIssu
       case 'local-terminal': return 'Local';
       default: {
         if (tabId.startsWith('boot:')) return tabId.slice(5);
+        if (tabId.startsWith('local-term-')) return `Local ${tabId.slice(11)}`;
         const term = terminals.find(t => t.id === tabId);
         return term ? term.label : tabId;
       }
@@ -741,7 +768,7 @@ export default function BottomPanel({ terminals, onCloseTerminal, validationIssu
   }
 
   function isTabCloseable(tabId: string): boolean {
-    return !!terminals.find(t => t.id === tabId) || tabId.startsWith('boot:');
+    return !!terminals.find(t => t.id === tabId) || tabId.startsWith('boot:') || tabId.startsWith('local-term-');
   }
 
   function renderTabContent(tabId: string, isActive: boolean): React.ReactNode {
@@ -803,6 +830,13 @@ export default function BottomPanel({ terminals, onCloseTerminal, validationIssu
           </div>
         );
       default: {
+        if (tabId.startsWith('local-term-')) {
+          return (
+            <div style={{ display: isActive ? 'flex' : 'none', flex: 1, overflow: 'hidden' }}>
+              <ContainerTerminalView />
+            </div>
+          );
+        }
         if (tabId.startsWith('boot:')) {
           const sn = tabId.slice(5);
           const lines = sliceBootLogs[sn] || [];
@@ -913,6 +947,7 @@ export default function BottomPanel({ terminals, onCloseTerminal, validationIssu
                     onClick={(e) => {
                       e.stopPropagation();
                       if (tabId.startsWith('boot:')) onCloseBootLog(tabId.slice(5));
+                      else if (tabId.startsWith('local-term-')) closeLocalTerminal(tabId);
                       else onCloseTerminal(tabId);
                     }}
                   >
@@ -922,6 +957,13 @@ export default function BottomPanel({ terminals, onCloseTerminal, validationIssu
               </button>
             );
           })}
+          <button
+            className="bp-tab bp-add-local-btn"
+            onClick={() => addLocalTerminal(leaf.id)}
+            title="New local terminal"
+          >
+            +
+          </button>
         </div>
         {/* Content area */}
         <div className="bottom-panel-content">
@@ -946,7 +988,11 @@ export default function BottomPanel({ terminals, onCloseTerminal, validationIssu
           <span className={`bottom-panel-badge ${validationErrorCount > 0 ? 'warn' : 'ok'}`}>{validationErrorCount} validation</span>
           {warnCount > 0 && <span className="bottom-panel-badge warn">{warnCount} warning{warnCount !== 1 ? 's' : ''}</span>}
           {termCount > 0 && <span className="bottom-panel-badge">{termCount} terminal{termCount !== 1 ? 's' : ''}</span>}
-          {containerTermActive && <span className="bottom-panel-badge">local</span>}
+          {(containerTermActive || extraLocalTerminals.length > 0) && (
+            <span className="bottom-panel-badge">
+              {extraLocalTerminals.length > 0 ? `${1 + extraLocalTerminals.length} local` : 'local'}
+            </span>
+          )}
           {recipeRunning && <span className="bottom-panel-badge warn">recipe running</span>}
           {anyBootRunning && <span className="bottom-panel-badge warn">boot config running</span>}
         </span>

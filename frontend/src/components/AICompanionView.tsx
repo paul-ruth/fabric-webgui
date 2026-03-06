@@ -8,6 +8,7 @@ import { getConfig, getAiTools } from '../api/client';
 import ContainerFileBrowser from './ContainerFileBrowser';
 import WeaveChat from './WeaveChat';
 import TerminalCompanionView from './TerminalCompanionView';
+import OpenCodeWebView from './OpenCodeWebView';
 import '../styles/ai-companion.css';
 
 const TERM_THEME = {
@@ -88,9 +89,10 @@ interface TabState {
 interface AICompanionViewProps {
   selectedTool?: string | null;
   onToolChange?: (toolId: string | null) => void;
+  visible?: boolean;
 }
 
-export default function AICompanionView({ selectedTool, onToolChange }: AICompanionViewProps) {
+export default function AICompanionView({ selectedTool, onToolChange, visible = true }: AICompanionViewProps) {
   const [hasKey, setHasKey] = useState<boolean | null>(null);
   const [enabledTools, setEnabledTools] = useState<Record<string, boolean>>({});
   const [tabs, setTabs] = useState<TabState[]>([]);
@@ -163,7 +165,8 @@ export default function AICompanionView({ selectedTool, onToolChange }: AICompan
   const renderDirectTool = () => {
     if (!selectedTool) return null;
     if (selectedTool === 'weave') return <WeaveChat />;
-    return <TerminalCompanionView toolId={selectedTool} />;
+    if (selectedTool === 'opencode') return <OpenCodeWebView visible={visible} />;
+    return <TerminalCompanionView toolId={selectedTool} visible={visible} />;
   };
 
   return (
@@ -259,6 +262,8 @@ export default function AICompanionView({ selectedTool, onToolChange }: AICompan
 function AITerminalPane({ toolId, tabId }: { toolId: string; tabId: string }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
+  const fitRef = useRef<FitAddon | null>(null);
+  const wsRef = useRef<WebSocket | null>(null);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -275,11 +280,13 @@ function AITerminalPane({ toolId, tabId }: { toolId: string; tabId: string }) {
     term.open(containerRef.current);
     fitAddon.fit();
     termRef.current = term;
+    fitRef.current = fitAddon;
 
     term.writeln(`\x1b[36m[ai] Launching ${toolId}...\x1b[0m`);
 
     const wsUrl = buildWsUrl(`/ws/terminal/ai/${encodeURIComponent(toolId)}`);
     const ws = new WebSocket(wsUrl);
+    wsRef.current = ws;
 
     ws.onopen = () => {
       ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
@@ -316,6 +323,8 @@ function AITerminalPane({ toolId, tabId }: { toolId: string; tabId: string }) {
       ws.close();
       term.dispose();
       termRef.current = null;
+      fitRef.current = null;
+      wsRef.current = null;
     };
   }, [toolId, tabId]);
 

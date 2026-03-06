@@ -7,11 +7,15 @@ import json
 import logging
 import os
 import pty
+import shutil
+import signal
 import struct
 import subprocess
 import termios
+import time
+import urllib.request
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
 
 from app.routes.config import _get_ai_api_key
 
@@ -19,27 +23,307 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-# Tool definitions: env setup and command for each AI tool
-# Default opencode.json — sets model to one available on the FABRIC AI server
-_OPENCODE_CONFIG = {
-    "$schema": "https://opencode.ai/config.json",
-    "model": "openai/qwen3-coder-30b",
-    "small_model": "openai/qwen3-coder-30b",
-    "provider": {
-        "openai": {
-            "api": "env:OPENAI_API_KEY",
+AI_SERVER_URL = "https://ai.fabric-testbed.net"
+
+# Preferred model for the primary/default slot — first match wins
+_PREFERRED_MODELS = [
+    "qwen3-coder-30b",
+    "qwen3-coder",
+    "qwen3-30b",
+    "qwen3",
+    "deepseek-coder",
+]
+
+# Preferred small model (for title, summary, compaction)
+_PREFERRED_SMALL = [
+    "qwen3-coder-8b",
+    "qwen3-8b",
+    "qwen3-coder-30b",
+]
+
+
+def _fetch_models(api_key: str) -> list[str]:
+    """Query the FABRIC AI server for available model IDs."""
+    url = f"{AI_SERVER_URL}/v1/models"
+    req = urllib.request.Request(url, headers={
+        "Authorization": f"Bearer {api_key}",
+    })
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            body = json.loads(resp.read())
+        return [m["id"] for m in body.get("data", [])]
+    except Exception as e:
+        logger.warning("Could not fetch models from %s: %s", url, e)
+        return []
+
+
+def _pick_model(models: list[str], preferences: list[str], fallback: str) -> str:
+    """Pick the best model from available list using preference order."""
+    for pref in preferences:
+        for m in models:
+            if pref in m.lower():
+                return m
+    return models[0] if models else fallback
+
+
+def _build_opencode_config(
+    api_key: str,
+    model_override: str = "",
+    workspace_config: dict | None = None,
+) -> dict:
+    """Build an opencode.json config with models from the FABRIC AI server.
+
+    Generates a provider-based config using @ai-sdk/openai-compatible that
+    connects directly to the FABRIC AI server with all available models.
+
+    If workspace_config is provided, merges mcp, agent, and command sections.
+
+    Returns dict with internal keys _default and _allowed (stripped before
+    writing to file).
+    """
+    models = _fetch_models(api_key)
+
+    if model_override:
+        default = model_override
+        logger.info("Using user-selected model: %s", default)
+    elif not models:
+        default = "qwen3-coder-30b"
+        logger.info("No models from server, using fallback: %s", default)
+    else:
+        logger.info("Available models from %s: %s", AI_SERVER_URL, models)
+        default = _pick_model(models, _PREFERRED_MODELS, "qwen3-coder-30b")
+
+    small = _pick_model(models, _PREFERRED_SMALL, default) if models else default
+
+    # Build models dict — each available model gets an entry
+    models_dict = {}
+    for m in (models if models else [default]):
+        models_dict[m] = {"name": m}
+    if default not in models_dict:
+        models_dict[default] = {"name": default}
+    if small not in models_dict:
+        models_dict[small] = {"name": small}
+
+    config: dict = {
+        "$schema": "https://opencode.ai/config.json",
+        "provider": {
+            "fabric": {
+                "npm": "@ai-sdk/openai-compatible",
+                "name": "FABRIC AI",
+                "options": {
+                    "baseURL": f"{AI_SERVER_URL}/v1",
+                    "apiKey": "{env:FABRIC_AI_API_KEY}",
+                },
+                "models": models_dict,
+            }
         },
-    },
-    "agent": {
-        "build": {"model": "openai/qwen3-coder-30b"},
-        "plan": {"model": "openai/qwen3-coder-30b"},
-        "explore": {"model": "openai/qwen3-coder-30b"},
-        "general": {"model": "openai/qwen3-coder-30b"},
-        "summary": {"model": "openai/qwen3-coder-30b"},
-        "title": {"model": "openai/qwen3-coder-30b"},
-        "compaction": {"model": "openai/qwen3-coder-30b"},
-    },
-}
+        "model": f"fabric/{default}",
+        "small_model": f"fabric/{small}",
+        # Internal: used to configure the model proxy (not written to JSON)
+        "_default": default,
+        "_allowed": models if models else [default],
+    }
+
+    # Merge workspace config (mcp, agent, command)
+    if workspace_config:
+        for key in ("mcp", "agent", "command"):
+            if key in workspace_config:
+                config[key] = workspace_config[key]
+
+    return config
+
+
+_MODEL_PROXY_SCRIPT = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+    "scripts", "model_proxy.py",
+)
+_MODEL_PROXY_PORT = 9199
+
+# Paths to FABRIC instruction files and weave defaults (inside the container)
+_APP_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+_WEAVE_MD_PATH = os.path.join(_APP_ROOT, "WEAVE.md")
+_WEAVE_DEFAULTS_DIR = os.path.join(
+    os.path.dirname(__file__), "..", "weave_defaults",
+)
+
+# Skills to skip (conflict with OpenCode builtins)
+_SKIP_SKILLS = {"compact", "help"}
+
+
+def _setup_opencode_workspace(cwd: str) -> dict:
+    """Set up FABRIC tools, skills, agents, MCP servers, and instructions.
+
+    Creates the following in the working directory:
+    - AGENTS.md — comprehensive FABRIC instructions (from WEAVE.md)
+    - .opencode/skills/<name>/SKILL.md — FABRIC skill definitions
+    - .opencode/agent-prompts/<name>.md — agent prompt files
+    - .opencode/mcp-scripts/<name>.sh — MCP server wrapper scripts
+
+    Returns dict with extra opencode.json config sections: mcp, agent, command.
+    """
+    config_dir = os.environ.get(
+        "FABRIC_CONFIG_DIR", os.path.join(cwd, ".fabric_config"),
+    )
+    token_file = os.path.join(config_dir, "id_token.json")
+    oc_dir = os.path.join(cwd, ".opencode")
+
+    # --- AGENTS.md (auto-discovered by OpenCode as project instructions) ---
+    agents_md = os.path.join(cwd, "AGENTS.md")
+    if os.path.isfile(_WEAVE_MD_PATH):
+        shutil.copy2(_WEAVE_MD_PATH, agents_md)
+        logger.info("Wrote AGENTS.md from WEAVE.md")
+
+    # --- Skills → .opencode/skills/<name>/SKILL.md ---
+    skills_src = os.path.join(_WEAVE_DEFAULTS_DIR, "skills")
+    skill_count = 0
+    if os.path.isdir(skills_src):
+        for fname in os.listdir(skills_src):
+            if not fname.endswith(".md"):
+                continue
+            skill_name = fname[:-3]
+            if skill_name in _SKIP_SKILLS:
+                continue
+            skill_dir = os.path.join(oc_dir, "skills", skill_name)
+            os.makedirs(skill_dir, exist_ok=True)
+
+            with open(os.path.join(skills_src, fname)) as f:
+                content = f.read()
+            # Convert weave frontmatter to OpenCode YAML frontmatter
+            if not content.startswith("---"):
+                content = "---\n" + content
+
+            with open(os.path.join(skill_dir, "SKILL.md"), "w") as f:
+                f.write(content)
+            skill_count += 1
+    logger.info("Created %d OpenCode skills", skill_count)
+
+    # --- Agent prompts → .opencode/agent-prompts/<name>.md ---
+    prompts_dir = os.path.join(oc_dir, "agent-prompts")
+    os.makedirs(prompts_dir, exist_ok=True)
+    agent_cfg: dict = {}
+    agents_src = os.path.join(_WEAVE_DEFAULTS_DIR, "agents")
+    if os.path.isdir(agents_src):
+        for fname in os.listdir(agents_src):
+            if not fname.endswith(".md"):
+                continue
+            name = fname[:-3]
+            with open(os.path.join(agents_src, fname)) as f:
+                raw = f.read()
+
+            # Parse frontmatter
+            desc = ""
+            body_lines: list[str] = []
+            past_sep = False
+            for line in raw.split("\n"):
+                if not past_sep:
+                    if line.strip() == "---":
+                        past_sep = True
+                    elif line.startswith("description:"):
+                        desc = line.split(":", 1)[1].strip()
+                else:
+                    body_lines.append(line)
+            body = "\n".join(body_lines).strip()
+
+            prompt_file = os.path.join(prompts_dir, f"{name}.md")
+            with open(prompt_file, "w") as f:
+                f.write(body)
+
+            agent_cfg[name] = {
+                "description": desc,
+                "prompt": "{file:.opencode/agent-prompts/" + name + ".md}",
+                "mode": "subagent",
+            }
+    logger.info("Created %d OpenCode agents", len(agent_cfg))
+
+    # --- MCP server wrapper scripts ---
+    mcp_dir = os.path.join(oc_dir, "mcp-scripts")
+    os.makedirs(mcp_dir, exist_ok=True)
+    mcp_cfg: dict = {}
+    for sname, url in [
+        ("fabric-api", "https://alpha-5.fabric-testbed.net/mcp"),
+        ("fabric-reports", "https://reports.fabric-testbed.net/mcp"),
+    ]:
+        script = os.path.join(mcp_dir, f"{sname}.sh")
+        py_cmd = (
+            f'import json; print(json.load(open("{token_file}"))["id_token"])'
+        )
+        with open(script, "w") as f:
+            f.write("#!/bin/bash\n")
+            f.write("set -euo pipefail\n")
+            f.write(f"TOKEN=$(python3 -c '{py_cmd}')\n")
+            f.write(
+                f'exec npx -y mcp-remote "{url}"'
+                f' --header "Authorization: Bearer $TOKEN"\n'
+            )
+        os.chmod(script, 0o755)
+        mcp_cfg[sname] = {
+            "type": "local",
+            "command": ["bash", script],
+            "enabled": True,
+            "timeout": 15000,
+        }
+    logger.info("Created MCP wrapper scripts for %s", list(mcp_cfg.keys()))
+
+    # --- Custom commands ---
+    cmd_cfg = {
+        "create-slice": {
+            "description": "Create a new FABRIC slice",
+            "template": (
+                "Create a new FABRIC slice based on the user's requirements. "
+                "Use fabric_create_slice or fabric_create_from_template. $input"
+            ),
+        },
+        "deploy": {
+            "description": "Deploy a slice from a template",
+            "template": (
+                "Deploy a FABRIC slice from a template. List available "
+                "templates, create the draft, and submit it. $input"
+            ),
+        },
+        "sites": {
+            "description": "Show FABRIC site availability",
+            "template": "Show available FABRIC sites and resources. $input",
+        },
+        "slices": {
+            "description": "List all FABRIC slices",
+            "template": "List all FABRIC slices with current status. $input",
+        },
+    }
+
+    return {"mcp": mcp_cfg, "agent": agent_cfg, "command": cmd_cfg}
+
+
+def _start_model_proxy(
+    api_key: str, default_model: str, allowed_models: list[str], env: dict,
+) -> subprocess.Popen | None:
+    """Start the model-rewriting proxy as a background subprocess."""
+    if not os.path.exists(_MODEL_PROXY_SCRIPT):
+        logger.warning("Model proxy script not found: %s", _MODEL_PROXY_SCRIPT)
+        return None
+
+    allowed_csv = ",".join(allowed_models) if allowed_models else default_model
+    cmd = [
+        "python3", _MODEL_PROXY_SCRIPT,
+        str(_MODEL_PROXY_PORT),
+        f"{AI_SERVER_URL}/v1",
+        default_model,
+        allowed_csv,
+    ]
+    proxy_env = {**env, "OPENAI_API_KEY": api_key}
+    try:
+        proc = subprocess.Popen(
+            cmd, env=proxy_env,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            preexec_fn=os.setsid,
+        )
+        logger.info(
+            "Model proxy started (pid=%d) on :%d → %s (default=%s, allowed=%s)",
+            proc.pid, _MODEL_PROXY_PORT, AI_SERVER_URL, default_model, allowed_csv,
+        )
+        return proc
+    except Exception:
+        logger.exception("Failed to start model proxy")
+        return None
 
 # Tool definitions: env setup and command for each AI tool
 TOOL_CONFIGS = {
@@ -70,6 +354,7 @@ TOOL_CONFIGS = {
     "opencode": {
         "env": lambda key: {
             "OPENAI_API_KEY": key,
+            "FABRIC_AI_API_KEY": key,
             "OPENAI_BASE_URL": "https://ai.fabric-testbed.net/v1",
         },
         "cmd": ["opencode"],
@@ -83,8 +368,114 @@ TOOL_CONFIGS = {
 }
 
 
+_OPENCODE_WEB_PORT = 9198
+_opencode_web_proc: subprocess.Popen | None = None
+_opencode_web_proxy: subprocess.Popen | None = None
+
+
+@router.post("/api/ai/opencode-web/start")
+async def start_opencode_web(model: str = ""):
+    """Start the OpenCode web server and return its port."""
+    global _opencode_web_proc, _opencode_web_proxy
+
+    # Already running?
+    if _opencode_web_proc and _opencode_web_proc.poll() is None:
+        return {"port": _OPENCODE_WEB_PORT, "status": "running"}
+
+    api_key = _get_ai_api_key()
+    if not api_key:
+        return {"error": "AI API key not configured", "status": "error"}
+
+    cwd = "/fabric_storage/" if os.path.isdir("/fabric_storage") else os.path.expanduser("~")
+    _ensure_git_ready(cwd)
+
+    # Set up workspace (skills, agents, MCP, AGENTS.md) and build config
+    ws_config = _setup_opencode_workspace(cwd)
+    oc_config = _build_opencode_config(
+        api_key, model_override=model, workspace_config=ws_config,
+    )
+    write_cfg = {k: v for k, v in oc_config.items() if not k.startswith("_")}
+    with open(os.path.join(cwd, "opencode.json"), "w") as f:
+        json.dump(write_cfg, f, indent=2)
+    logger.info("Wrote opencode.json for web mode, model=%s", write_cfg.get("model"))
+
+    tool_env = {
+        **os.environ,
+        "TERM": "xterm-256color",
+        "OPENAI_API_KEY": api_key,
+        "FABRIC_AI_API_KEY": api_key,
+        "OPENAI_BASE_URL": f"{AI_SERVER_URL}/v1",
+    }
+
+    # Start model proxy
+    _opencode_web_proxy = _start_model_proxy(
+        api_key, oc_config["_default"], oc_config["_allowed"], tool_env,
+    )
+    if _opencode_web_proxy:
+        await asyncio.sleep(0.3)
+        tool_env["OPENAI_BASE_URL"] = f"http://127.0.0.1:{_MODEL_PROXY_PORT}/v1"
+
+    cmd = [
+        "opencode", "web",
+        "--port", str(_OPENCODE_WEB_PORT),
+        "--hostname", "0.0.0.0",
+    ]
+    try:
+        _opencode_web_proc = subprocess.Popen(
+            cmd, cwd=cwd, env=tool_env,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            preexec_fn=os.setsid,
+        )
+        logger.info("OpenCode web started pid=%d on :%d", _opencode_web_proc.pid, _OPENCODE_WEB_PORT)
+    except Exception:
+        logger.exception("Failed to start opencode web")
+        return {"error": "Failed to start OpenCode web server", "status": "error"}
+
+    # Wait for it to bind
+    await asyncio.sleep(2)
+
+    return {"port": _OPENCODE_WEB_PORT, "status": "running"}
+
+
+@router.post("/api/ai/opencode-web/stop")
+async def stop_opencode_web():
+    """Stop the OpenCode web server."""
+    global _opencode_web_proc, _opencode_web_proxy
+    for p in (_opencode_web_proc, _opencode_web_proxy):
+        if p and p.poll() is None:
+            try:
+                os.killpg(os.getpgid(p.pid), signal.SIGTERM)
+                p.wait(timeout=3)
+            except Exception:
+                try:
+                    p.kill()
+                except Exception:
+                    pass
+    _opencode_web_proc = None
+    _opencode_web_proxy = None
+    return {"status": "stopped"}
+
+
+@router.get("/api/ai/opencode-web/status")
+async def opencode_web_status():
+    """Check if the OpenCode web server is running."""
+    running = _opencode_web_proc is not None and _opencode_web_proc.poll() is None
+    return {"port": _OPENCODE_WEB_PORT if running else None, "status": "running" if running else "stopped"}
+
+
+@router.get("/api/ai/models")
+async def list_ai_models():
+    """Return available models from the FABRIC AI server."""
+    api_key = _get_ai_api_key()
+    if not api_key:
+        return {"models": [], "default": "", "error": "AI API key not configured"}
+    models = _fetch_models(api_key)
+    default = _pick_model(models, _PREFERRED_MODELS, "qwen3-coder-30b") if models else "qwen3-coder-30b"
+    return {"models": models, "default": default}
+
+
 @router.websocket("/ws/terminal/ai/{tool}")
-async def ai_terminal_ws(websocket: WebSocket, tool: str):
+async def ai_terminal_ws(websocket: WebSocket, tool: str, model: str = ""):
     """WebSocket endpoint for interactive AI tool terminal."""
     if tool not in TOOL_CONFIGS:
         await websocket.close(code=4000, reason=f"Unknown tool: {tool}")
@@ -105,6 +496,7 @@ async def ai_terminal_ws(websocket: WebSocket, tool: str):
     loop = asyncio.get_event_loop()
     master_fd = None
     proc = None
+    proxy_proc = None
 
     try:
         master_fd, slave_fd = pty.openpty()
@@ -119,13 +511,31 @@ async def ai_terminal_ws(websocket: WebSocket, tool: str):
         if tool == "aider":
             _ensure_git_ready(cwd)
 
-        # Write opencode.json so all agents use the FABRIC AI model
+        # Build opencode.json dynamically from available models on the AI server
         if tool == "opencode":
             _ensure_git_ready(cwd)
             oc_cfg = os.path.join(cwd, "opencode.json")
             try:
+                ws_config = _setup_opencode_workspace(cwd)
+                oc_config = _build_opencode_config(
+                    api_key, model_override=model, workspace_config=ws_config,
+                )
+                # Write config without internal keys
+                write_cfg = {k: v for k, v in oc_config.items() if not k.startswith("_")}
                 with open(oc_cfg, "w") as f:
-                    json.dump(_OPENCODE_CONFIG, f, indent=2)
+                    json.dump(write_cfg, f, indent=2)
+                logger.info("Wrote opencode.json with model=%s", write_cfg.get("model"))
+
+                # Start model proxy — rewrites unknown model names to our default
+                proxy_proc = _start_model_proxy(
+                    api_key,
+                    oc_config["_default"],
+                    oc_config["_allowed"],
+                    tool_env,
+                )
+                if proxy_proc:
+                    time.sleep(0.3)  # let the proxy bind
+                    tool_env["OPENAI_BASE_URL"] = f"http://127.0.0.1:{_MODEL_PROXY_PORT}/v1"
             except OSError:
                 pass
 
@@ -186,6 +596,15 @@ async def ai_terminal_ws(websocket: WebSocket, tool: str):
             except Exception:
                 try:
                     proc.kill()
+                except Exception:
+                    pass
+        if proxy_proc is not None:
+            try:
+                os.killpg(os.getpgid(proxy_proc.pid), signal.SIGTERM)
+                proxy_proc.wait(timeout=2)
+            except Exception:
+                try:
+                    proxy_proc.kill()
                 except Exception:
                     pass
 

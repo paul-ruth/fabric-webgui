@@ -4,6 +4,7 @@ import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
 import { buildWsUrl } from '../utils/wsUrl';
+import { getAiModels } from '../api/client';
 import '../styles/terminal-companion.css';
 
 const TERM_THEME = {
@@ -71,11 +72,21 @@ function PlusIcon() {
   );
 }
 
-interface Props {
-  toolId: string;
+function RefreshIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="23 4 23 10 17 10" />
+      <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
+    </svg>
+  );
 }
 
-export default function TerminalCompanionView({ toolId }: Props) {
+interface Props {
+  toolId: string;
+  visible?: boolean;
+}
+
+export default function TerminalCompanionView({ toolId, visible = true }: Props) {
   const info = TOOL_INFO[toolId] ?? { name: toolId, icon: '?', iconClass: '', desc: '', tips: '' };
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [connected, setConnected] = useState(false);
@@ -83,6 +94,24 @@ export default function TerminalCompanionView({ toolId }: Props) {
   const termRef = useRef<Terminal | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
+
+  // Model picker state (OpenCode only)
+  const [availableModels, setAvailableModels] = useState<string[]>([]);
+  const [selectedModel, setSelectedModel] = useState('');
+  const [modelsLoading, setModelsLoading] = useState(false);
+  const selectedModelRef = useRef('');
+
+  useEffect(() => {
+    if (toolId === 'opencode') {
+      setModelsLoading(true);
+      getAiModels().then((data) => {
+        setAvailableModels(data.models || []);
+        const def = data.default || (data.models?.[0] ?? '');
+        setSelectedModel(def);
+        selectedModelRef.current = def;
+      }).catch(() => {}).finally(() => setModelsLoading(false));
+    }
+  }, [toolId]);
 
   const restartSession = useCallback(() => {
     // Close existing connection and terminal
@@ -113,7 +142,10 @@ export default function TerminalCompanionView({ toolId }: Props) {
 
     term.writeln(`\x1b[36m[${info.name}] Connecting...\x1b[0m`);
 
-    const wsUrl = buildWsUrl(`/ws/terminal/ai/${encodeURIComponent(toolId)}`);
+    const modelParam = toolId === 'opencode' && selectedModelRef.current
+      ? `?model=${encodeURIComponent(selectedModelRef.current)}`
+      : '';
+    const wsUrl = buildWsUrl(`/ws/terminal/ai/${encodeURIComponent(toolId)}${modelParam}`);
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
 
@@ -168,6 +200,33 @@ export default function TerminalCompanionView({ toolId }: Props) {
     };
   }, [toolId]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Force full terminal repaint: fit canvas, toggle resize to force redraw, send SIGWINCH
+  const refreshTerminal = useCallback(() => {
+    const t = termRef.current;
+    const fit = fitRef.current;
+    if (!t || !fit) return;
+    fit.fit();
+    const { cols, rows } = t;
+    if (cols > 1) {
+      t.resize(cols - 1, rows);
+      t.resize(cols, rows);
+    }
+    t.refresh(0, t.rows - 1);
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ type: 'resize', cols: t.cols, rows: t.rows }));
+    }
+  }, []);
+
+  // Auto-refresh when view becomes visible again
+  const prevVisible = useRef(visible);
+  useEffect(() => {
+    const wasHidden = !prevVisible.current;
+    prevVisible.current = visible;
+    if (!visible || !wasHidden) return;
+    const timer = setTimeout(refreshTerminal, 100);
+    return () => clearTimeout(timer);
+  }, [visible, refreshTerminal]);
+
   return (
     <div className="tc-layout">
       <div className={`tc-sidebar ${sidebarOpen ? '' : 'collapsed'}`}>
@@ -188,6 +247,32 @@ export default function TerminalCompanionView({ toolId }: Props) {
             {connected ? 'Connected' : 'Disconnected'}
           </div>
           <div className="tc-sidebar-desc">{info.desc}</div>
+          {toolId === 'opencode' && (
+            <div className="tc-model-picker">
+              <label className="tc-model-label">Model</label>
+              {modelsLoading ? (
+                <span className="tc-model-loading">Loading models...</span>
+              ) : availableModels.length > 0 ? (
+                <>
+                  <select
+                    className="tc-model-select"
+                    value={selectedModel}
+                    onChange={(e) => {
+                      setSelectedModel(e.target.value);
+                      selectedModelRef.current = e.target.value;
+                    }}
+                  >
+                    {availableModels.map((m) => (
+                      <option key={m} value={m}>{m}</option>
+                    ))}
+                  </select>
+                  <div className="tc-model-hint">Change model and click &ldquo;New Session&rdquo; to apply</div>
+                </>
+              ) : (
+                <span className="tc-model-loading">No models available</span>
+              )}
+            </div>
+          )}
           {info.tips && (
             <div className="tc-sidebar-tips">
               <strong>Tips</strong><br />
@@ -205,6 +290,9 @@ export default function TerminalCompanionView({ toolId }: Props) {
           )}
           <span className="tc-header-title">{info.name}</span>
           <span className="tc-header-badge">Terminal</span>
+          <button className="tc-refresh-btn" onClick={refreshTerminal} title="Refresh terminal display">
+            <RefreshIcon />
+          </button>
         </div>
         <div className="tc-terminal-wrapper">
           <div className="tc-terminal-inner" ref={containerRef} />

@@ -1768,7 +1768,7 @@ export default function App() {
 
           {/* AI Companion — always mounted for chat persistence, hidden when not active */}
           <div style={{ display: currentView === 'ai' ? 'contents' : 'none' }}>
-            <AICompanionView selectedTool={selectedAiTool} onToolChange={setSelectedAiTool} />
+            <AICompanionView selectedTool={selectedAiTool} onToolChange={setSelectedAiTool} visible={currentView === 'ai'} />
           </div>
 
           {/* View content */}
