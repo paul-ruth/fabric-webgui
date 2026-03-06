@@ -25,20 +25,16 @@ COPY backend/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy backend code
-COPY backend/scripts/ scripts/
 COPY backend/app/ app/
-
-# Install Weave CLI as a command-line tool
-RUN pip install --no-cache-dir scripts/
 
 # Copy version file for update checks (read by backend)
 COPY frontend/src/version.ts /app/VERSION
 
-# Copy Weave system prompt
-COPY WEAVE.md /app/WEAVE.md
-
 # Copy builtin slice-libraries (slice templates, VM templates, recipes)
 COPY slice-libraries/ slice-libraries/
+
+# Copy AI tools config (skills, agents, shared context)
+COPY ai-tools/ ai-tools/
 
 # Copy built frontend
 COPY --from=frontend-build /app/dist /usr/share/nginx/html
